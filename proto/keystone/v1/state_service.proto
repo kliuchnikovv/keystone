@@ -1,0 +1,36 @@
+// StateService — live streaming of state changes and events.
+syntax = "proto3";
+
+package keystone.v1;
+
+option go_package = "github.com/keystone/keystone/gen/go/keystone/v1;keystonev1";
+
+import "keystone/v1/common.proto";
+
+service StateService {
+  // Subscribe streams StateSnapshots and Events from all devices matching the
+  // filter. Server closes the stream when the client disconnects.
+  rpc Subscribe(SubscribeRequest) returns (stream StateStreamMessage);
+}
+
+message SubscribeRequest {
+  // Filter: if empty, subscribe to all devices. Otherwise, only receive
+  // updates for listed device IDs.
+  repeated string device_ids = 1;
+
+  // If true, receive an initial snapshot of current state for each subscribed
+  // device before live updates begin.
+  bool include_initial = 2;
+}
+
+message StateStreamMessage {
+  oneof payload {
+    StateSnapshot state = 1;
+    Event event = 2;
+    // Sent once after the initial snapshot burst (if include_initial=true) so
+    // clients know they are now receiving live updates.
+    Ready ready = 3;
+  }
+}
+
+message Ready {}

@@ -1,0 +1,87 @@
+// DeviceService — CRUD-like operations on devices plus commissioning.
+syntax = "proto3";
+
+package keystone.v1;
+
+option go_package = "github.com/keystone/keystone/gen/go/keystone/v1;keystonev1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "keystone/v1/common.proto";
+
+service DeviceService {
+  rpc List(ListDevicesRequest) returns (ListDevicesResponse);
+  rpc Get(GetDeviceRequest) returns (Device);
+  rpc Remove(RemoveDeviceRequest) returns (google.protobuf.Empty);
+
+  // Commission asks a transport to add a new device and register it.
+  // Streams progress events during pairing.
+  rpc Commission(CommissionRequest) returns (stream CommissionEvent);
+
+  // InvokeAction runs a Feature action on a device.
+  rpc InvokeAction(InvokeActionRequest) returns (google.protobuf.Empty);
+
+  // WriteState changes a settable attribute on a device.
+  rpc WriteState(WriteStateRequest) returns (google.protobuf.Empty);
+
+  // ReadState fetches the current value of an attribute from the transport.
+  rpc ReadState(ReadStateRequest) returns (ReadStateResponse);
+}
+
+message ListDevicesRequest {
+  // Optional filter by transport kind (e.g. "matter", "zigbee"). Empty = all.
+  string transport = 1;
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+}
+
+message GetDeviceRequest {
+  string id = 1;
+}
+
+message RemoveDeviceRequest {
+  string id = 1;
+}
+
+message CommissionRequest {
+  string transport = 1;
+  string payload = 2;             // e.g. Matter setup code "MT:..."
+  string name = 3;
+  string type = 4;                // "light", "plug", ...
+  string wifi_ssid = 5;
+  string wifi_credential = 6;
+  map<string, string> extra = 7;
+}
+
+message CommissionEvent {
+  string stage = 1;               // "discovering", "pairing", "verifying", "done", "error"
+  string message = 2;
+  Device device = 3;              // populated when stage="done"
+  string error = 4;               // populated when stage="error"
+}
+
+message InvokeActionRequest {
+  string device_id = 1;
+  string feature = 2;
+  string action = 3;
+  google.protobuf.Struct params = 4;
+}
+
+message WriteStateRequest {
+  string device_id = 1;
+  string feature = 2;
+  string key = 3;
+  google.protobuf.Value value = 4;
+}
+
+message ReadStateRequest {
+  string device_id = 1;
+  string feature = 2;
+  string key = 3;
+}
+
+message ReadStateResponse {
+  google.protobuf.Value value = 1;
+}

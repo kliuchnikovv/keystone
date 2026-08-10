@@ -33,6 +33,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":7777", "HTTP admin listen address")
+	grpcAddr := flag.String("grpc-addr", "", "gRPC listen address (empty = disabled); requires binary built with -tags=grpc")
 	dataDir := flag.String("data", "./keystone-data", "data directory for persistence")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
 	flag.Parse()
@@ -147,6 +148,9 @@ func main() {
 	mux.HandleFunc("DELETE /rules/{id}", handleDeleteRule(engine))
 	mux.HandleFunc("GET /rules/runs", handleListRuns(engine))
 	mux.HandleFunc("GET /stream", ws.Handler(bus, log.With("component", "ws")))
+
+	// Optional gRPC server (compiled in only with -tags=grpc).
+	startGRPC(ctx, log, *grpcAddr, devSvc, reg, bus, engine)
 
 	srv := &http.Server{
 		Addr:              *addr,

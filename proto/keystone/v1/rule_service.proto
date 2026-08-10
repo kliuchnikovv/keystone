@@ -1,0 +1,81 @@
+// RuleService — automations CRUD, execution history, test-fire.
+syntax = "proto3";
+
+package keystone.v1;
+
+option go_package = "github.com/keystone/keystone/gen/go/keystone/v1;keystonev1";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service RuleService {
+  // Method names are prefixed "Rule..." to avoid Go-level collisions when a
+  // single struct implements multiple service servers.
+  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
+  rpc GetRule(GetRuleRequest) returns (Rule);
+  // UpsertRule creates or replaces a rule. If the rule has no id, one is assigned.
+  rpc UpsertRule(UpsertRuleRequest) returns (Rule);
+  rpc RemoveRule(RemoveRuleRequest) returns (google.protobuf.Empty);
+  rpc EnableRule(EnableRuleRequest) returns (google.protobuf.Empty);
+  rpc DisableRule(DisableRuleRequest) returns (google.protobuf.Empty);
+
+  // ListRuns returns the most recent invocations across all rules (or one).
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+
+  // TestFire simulates an invocation without touching real devices; returns
+  // the list of actions that would have executed.
+  rpc TestFire(TestFireRequest) returns (TestFireResponse);
+}
+
+// Rule carries a serialised JSON representation of the full rule so that the
+// polymorphic trigger/condition/action types don't need to be duplicated in
+// proto. The JSON schema matches the /rules HTTP endpoint.
+message Rule {
+  string id = 1;
+  string name = 2;
+  string human_readable = 3;
+  bool enabled = 4;
+  string mode = 5;                // "single" | "queued" | "parallel" | "restart"
+
+  // Canonical JSON of the rule (triggers/conditions/actions). This matches
+  // the on-disk / on-wire format. gRPC clients that don't care about
+  // structural inspection can pass this through.
+  string spec_json = 6;
+
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListRulesRequest {}
+message ListRulesResponse { repeated Rule rules = 1; }
+
+message GetRuleRequest { string id = 1; }
+
+message UpsertRuleRequest { Rule rule = 1; }
+
+message RemoveRuleRequest { string id = 1; }
+message EnableRuleRequest { string id = 1; }
+message DisableRuleRequest { string id = 1; }
+
+message ListRunsRequest {
+  string rule_id = 1;             // empty = all rules
+  int32 limit = 2;                // default 50, max 500
+}
+message ListRunsResponse { repeated RuleRun runs = 1; }
+
+message RuleRun {
+  string id = 1;
+  string rule_id = 2;
+  google.protobuf.Timestamp triggered_at = 3;
+  string status = 4;              // "success" | "failed" | "skipped"
+  string error = 5;
+  google.protobuf.Duration duration = 6;
+}
+
+message TestFireRequest {
+  string id = 1;
+}
+message TestFireResponse {
+  repeated string simulated_actions = 1;  // human-readable descriptions
+}

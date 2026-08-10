@@ -1,0 +1,53 @@
+// Common types shared by all Keystone gRPC services.
+syntax = "proto3";
+
+package keystone.v1;
+
+option go_package = "github.com/keystone/keystone/gen/go/keystone/v1;keystonev1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Device is a smart-home device as the user perceives it.
+message Device {
+  string id = 1;
+  string type = 2;                // "light", "plug", "sensor", ...
+  string name = 3;
+  string manufacturer = 4;
+  string model = 5;
+  string room_id = 6;
+  string transport = 7;           // "matter", "zigbee", "dirigera", ...
+  string transport_ref = 8;
+  repeated Feature features = 9;
+  map<string, string> metadata = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// Feature is a functional module of a Device.
+message Feature {
+  string key = 1;                 // "onoff", "brightness", "color_temp", ...
+  repeated string states = 2;
+  repeated string actions = 3;
+  repeated string events = 4;
+  google.protobuf.Struct config = 5;
+}
+
+// StateSnapshot is a point-in-time reading of one attribute.
+message StateSnapshot {
+  string device_id = 1;
+  string feature = 2;
+  string key = 3;
+  google.protobuf.Value value = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string origin = 6;              // "device_report", "user_command", "rule", "system"
+}
+
+// Event is a discrete emitted event (button pressed, motion, ...).
+message Event {
+  string device_id = 1;
+  string feature = 2;
+  string name = 3;
+  google.protobuf.Struct data = 4;
+  google.protobuf.Timestamp at = 5;
+}

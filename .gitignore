@@ -2,5 +2,8 @@ bin/
 coverage.out
 *.log
 .DS_Store
-alfid.db
-alfid.db-*
+keystone.db
+keystone.db-*
+keystone-data/
+# Generated protobuf/gRPC stubs — regenerate with `make proto`.
+gen/
