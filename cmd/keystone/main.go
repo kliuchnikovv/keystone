@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kliuchnikovv/keystone/internal/adapters/matter"
 	"github.com/kliuchnikovv/keystone/internal/adapters/virtual"
 	"github.com/kliuchnikovv/keystone/internal/api/ws"
 	"github.com/kliuchnikovv/keystone/internal/domain"
@@ -37,6 +38,7 @@ func main() {
 	dataDir := flag.String("data", "./keystone-data", "data directory for persistence")
 	uiDir := flag.String("ui-dir", "./site", "directory served at /ui/ (dashboard + landing); empty to disable")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
+	matterAddr := flag.String("matter-sidecar", "", "matter.js sidecar URL (e.g. ws://localhost:5580); empty = disabled")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -72,7 +74,6 @@ func main() {
 	log.Info("devices rehydrated", "count", len(stored))
 
 	// --- Adapters ---
-	// TODO(matter): add matter.js sidecar adapter here (see docs/matter-adapter-brief.md).
 	adapters := []ports.Adapter{}
 
 	virt := virtual.New(log.With("component", "virtual"))
@@ -82,6 +83,25 @@ func main() {
 	}
 	defer func() { _ = virt.Stop(context.Background()) }()
 	adapters = append(adapters, virt)
+
+	// Matter over a matter.js sidecar. Optional — if -matter-sidecar is empty
+	// or the sidecar is unreachable at boot, we log the reason and continue
+	// without Matter so keystone still starts on a bare host.
+	if *matterAddr != "" {
+		cfg, err := parseMatterURL(*matterAddr)
+		if err != nil {
+			log.Error("matter sidecar url", "value", *matterAddr, "err", err)
+			os.Exit(1)
+		}
+		wsc := matter.NewWSClient(cfg.URL(), log.With("component", "matter-ws"))
+		mad := matter.New(log.With("component", "matter"), cfg, wsc)
+		if err := mad.Start(ctx); err != nil {
+			log.Warn("matter adapter start failed, continuing without matter", "err", err)
+		} else {
+			defer func() { _ = mad.Stop(context.Background()) }()
+			adapters = append(adapters, mad)
+		}
+	}
 
 	devSvc := service.NewDeviceService(log, reg, bus, adapters)
 
@@ -406,4 +426,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// parseMatterURL accepts either a bare host:port or a full ws:// URL and
+// returns a matter.Config the adapter can dial.
+func parseMatterURL(raw string) (matter.Config, error) {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "ws://")
+	s = strings.TrimPrefix(s, "wss://")
+	host, portStr, ok := strings.Cut(s, ":")
+	if !ok || host == "" || portStr == "" {
+		return matter.Config{}, fmt.Errorf("expected host:port or ws://host:port, got %q", raw)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil || port <= 0 {
+		return matter.Config{}, fmt.Errorf("invalid port in %q", raw)
+	}
+	return matter.Config{Host: host, Port: port}, nil
 }
