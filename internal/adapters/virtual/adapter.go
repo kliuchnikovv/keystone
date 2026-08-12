@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/keystone/keystone/internal/domain"
-	"github.com/keystone/keystone/internal/ports"
+	"github.com/kliuchnikovv/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/ports"
 )
 
 // Adapter is a fully in-memory adapter with programmable virtual devices.
@@ -304,6 +304,7 @@ func featuresForType(t domain.DeviceType) []domain.Feature {
 		return []domain.Feature{
 			{Key: domain.FeatureOnOff, States: []domain.StateKey{domain.StateOnOff}, Actions: []domain.ActionKey{domain.ActionTurnOn, domain.ActionTurnOff, domain.ActionToggle}},
 			{Key: domain.FeatureBrightness, States: []domain.StateKey{domain.StateLevel}, Actions: []domain.ActionKey{domain.ActionSet}},
+			{Key: domain.FeatureColorTemp, States: []domain.StateKey{domain.StateColorTempK}, Actions: []domain.ActionKey{domain.ActionSet}},
 		}
 	case domain.DeviceTypePlug:
 		return []domain.Feature{
@@ -328,6 +329,8 @@ func seedDefaults(dev *virtualDevice) {
 				dev.state[stateKey{f.Key, s}] = false
 			case domain.StateLevel:
 				dev.state[stateKey{f.Key, s}] = 100
+			case domain.StateColorTempK:
+				dev.state[stateKey{f.Key, s}] = 2700 // warm default
 			case domain.StatePowerNow:
 				dev.state[stateKey{f.Key, s}] = float32(0)
 			case domain.StateEnergyTotal:
