@@ -1,0 +1,23 @@
+# Local dev compose. Currently defines only the Matter sidecar; the Go
+# keystone binary is expected to run on the host during development.
+#
+# network_mode: host is REQUIRED for Matter mDNS discovery and Thread
+# Border Router communication to work — do not switch to bridge.
+
+services:
+  matter-sidecar:
+    build:
+      context: ./sidecars/matter-server
+    image: keystone/matter-sidecar:dev
+    network_mode: host
+    environment:
+      KEYSTONE_MATTER_HOST: 0.0.0.0
+      KEYSTONE_MATTER_PORT: 5580
+      KEYSTONE_MATTER_STORAGE: /data
+      KEYSTONE_MATTER_LABEL: Keystone
+    volumes:
+      - matter-fabric:/data
+    restart: unless-stopped
+
+volumes:
+  matter-fabric:
