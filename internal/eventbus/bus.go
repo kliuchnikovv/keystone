@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/keystone/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/domain"
 )
 
 // defaultBufferSize is the buffer per subscriber channel. Sized to handle

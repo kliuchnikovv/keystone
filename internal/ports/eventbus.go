@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/keystone/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/domain"
 )
 
 // EventBus is the in-process pub/sub for state changes and events.

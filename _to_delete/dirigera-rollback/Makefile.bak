@@ -8,6 +8,7 @@ PROTO_OUT := gen/go/keystone/v1
 build:
 	@mkdir -p bin
 	go build -o $(BINARY) ./cmd/keystone
+	go build -o bin/keystone-dirigera-pair ./cmd/keystone-dirigera-pair
 
 # gRPC-enabled build.
 build-grpc: proto

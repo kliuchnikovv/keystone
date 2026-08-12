@@ -6,13 +6,13 @@ package ports
 import (
 	"context"
 
-	"github.com/keystone/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/domain"
 )
 
 // Adapter is the contract every transport must satisfy. It is the single
 // integration seam between the engine core and any protocol / cloud / bridge.
 type Adapter interface {
-	// Kind returns the transport identifier (matter, zigbee, dirigera, ...).
+	// Kind returns the transport identifier (matter, zigbee, ...).
 	Kind() domain.TransportKind
 
 	// Start opens connections to the underlying transport (sidecar, broker,

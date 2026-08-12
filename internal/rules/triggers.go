@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keystone/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/domain"
 )
 
 func init() {

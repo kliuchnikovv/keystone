@@ -6,10 +6,10 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/keystone/keystone/internal/ports"
-	"github.com/keystone/keystone/internal/registry"
-	"github.com/keystone/keystone/internal/rules"
-	"github.com/keystone/keystone/internal/service"
+	"github.com/kliuchnikovv/keystone/internal/ports"
+	"github.com/kliuchnikovv/keystone/internal/registry"
+	"github.com/kliuchnikovv/keystone/internal/rules"
+	"github.com/kliuchnikovv/keystone/internal/service"
 )
 
 // startGRPC is a no-op when the `grpc` build tag is not set.

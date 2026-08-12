@@ -20,21 +20,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/keystone/keystone/internal/adapters/virtual"
-	"github.com/keystone/keystone/internal/api/ws"
-	"github.com/keystone/keystone/internal/domain"
-	"github.com/keystone/keystone/internal/eventbus"
-	"github.com/keystone/keystone/internal/ports"
-	"github.com/keystone/keystone/internal/registry"
-	"github.com/keystone/keystone/internal/rules"
-	"github.com/keystone/keystone/internal/service"
-	"github.com/keystone/keystone/internal/storage/file"
+	"github.com/kliuchnikovv/keystone/internal/adapters/virtual"
+	"github.com/kliuchnikovv/keystone/internal/api/ws"
+	"github.com/kliuchnikovv/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/eventbus"
+	"github.com/kliuchnikovv/keystone/internal/ports"
+	"github.com/kliuchnikovv/keystone/internal/registry"
+	"github.com/kliuchnikovv/keystone/internal/rules"
+	"github.com/kliuchnikovv/keystone/internal/service"
+	"github.com/kliuchnikovv/keystone/internal/storage/file"
 )
 
 func main() {
 	addr := flag.String("addr", ":7777", "HTTP admin listen address")
 	grpcAddr := flag.String("grpc-addr", "", "gRPC listen address (empty = disabled); requires binary built with -tags=grpc")
 	dataDir := flag.String("data", "./keystone-data", "data directory for persistence")
+	uiDir := flag.String("ui-dir", "./site", "directory served at /ui/ (dashboard + landing); empty to disable")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
 	flag.Parse()
 
@@ -71,14 +72,18 @@ func main() {
 	log.Info("devices rehydrated", "count", len(stored))
 
 	// --- Adapters ---
+	// TODO(matter): add matter.js sidecar adapter here (see docs/matter-adapter-brief.md).
+	adapters := []ports.Adapter{}
+
 	virt := virtual.New(log.With("component", "virtual"))
 	if err := virt.Start(ctx); err != nil {
 		log.Error("virtual adapter start", "err", err)
 		os.Exit(1)
 	}
 	defer func() { _ = virt.Stop(context.Background()) }()
+	adapters = append(adapters, virt)
 
-	devSvc := service.NewDeviceService(log, reg, bus, []ports.Adapter{virt})
+	devSvc := service.NewDeviceService(log, reg, bus, adapters)
 
 	// Wrap device commissioning to also persist to disk.
 	persistOnAdd := func(d *domain.Device) {
@@ -87,12 +92,15 @@ func main() {
 		}
 	}
 
-	// Ingress: transport events -> event bus + registry.
-	go func() {
-		if err := devSvc.IngressLoop(ctx, virt); err != nil && !errors.Is(err, context.Canceled) {
-			log.Error("virtual ingress loop", "err", err)
-		}
-	}()
+	// Ingress: transport events -> event bus + registry. One goroutine per adapter.
+	for _, ad := range adapters {
+		ad := ad
+		go func() {
+			if err := devSvc.IngressLoop(ctx, ad); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("ingress loop", "transport", ad.Kind(), "err", err)
+			}
+		}()
+	}
 
 	// State logger: prints every state change.
 	go func() {
@@ -149,6 +157,18 @@ func main() {
 	mux.HandleFunc("GET /rules/runs", handleListRuns(engine))
 	mux.HandleFunc("GET /stream", ws.Handler(bus, log.With("component", "ws")))
 
+	// Static UI (dashboard for testing, landing page).
+	// Served from a directory on disk so it can be edited without rebuilding.
+	if *uiDir != "" {
+		if _, statErr := os.Stat(*uiDir); statErr == nil {
+			ui := http.StripPrefix("/ui/", http.FileServer(http.Dir(*uiDir)))
+			mux.Handle("GET /ui/", ui)
+			log.Info("ui served", "dir", *uiDir, "url", "http://"+*addr+"/ui/dashboard.html")
+		} else {
+			log.Warn("ui dir missing, /ui/ disabled", "dir", *uiDir)
+		}
+	}
+
 	// Optional gRPC server (compiled in only with -tags=grpc).
 	startGRPC(ctx, log, *grpcAddr, devSvc, reg, bus, engine)
 
@@ -182,6 +202,7 @@ func seedDemoScene(ctx context.Context, svc *service.DeviceService, eng *rules.E
 	}{
 		{"plug:Kitchen kettle (INSPELNING clone)", "Kitchen kettle", domain.DeviceTypePlug},
 		{"plug:Bedroom lamp (TRETAKT clone)", "Bedroom lamp", domain.DeviceTypePlug},
+		{"light:WARMBLIXT (Matter clone)", "WARMBLIXT", domain.DeviceTypeLight},
 	}
 	var kettleID, lampID domain.DeviceID
 	for _, s := range specs {
@@ -226,15 +247,27 @@ func seedDemoScene(ctx context.Context, svc *service.DeviceService, eng *rules.E
 	return eng.Upsert(ctx, demoRule)
 }
 
-// simulateInspelning generates a sawtooth power draw on the first plug so
-// the event bus and rules engine have something to react to.
+// simulateInspelning generates a sawtooth power draw on the kettle plug so
+// the event bus and rules engine have something to react to. It prefers the
+// device explicitly named "Kitchen kettle" (which is the target of the demo
+// rule); falls back to the first plug found otherwise.
 func simulateInspelning(ctx context.Context, svc *service.DeviceService, virt *virtual.Adapter, log *slog.Logger) {
 	var target domain.TransportRef
+	var firstPlug domain.TransportRef
 	for _, d := range svc.List() {
-		if d.Transport == domain.TransportVirtual && d.Type == domain.DeviceTypePlug {
+		if d.Transport != domain.TransportVirtual || d.Type != domain.DeviceTypePlug {
+			continue
+		}
+		if firstPlug == "" {
+			firstPlug = d.TransportRef
+		}
+		if strings.HasPrefix(d.Name, "Kitchen") {
 			target = d.TransportRef
 			break
 		}
+	}
+	if target == "" {
+		target = firstPlug
 	}
 	if target == "" {
 		return

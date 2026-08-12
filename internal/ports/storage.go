@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/keystone/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/domain"
 )
 
 // DeviceRepository persists devices and their features. Implementations live

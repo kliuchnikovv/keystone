@@ -34,16 +34,15 @@ const (
 type TransportKind string
 
 const (
-	TransportVirtual  TransportKind = "virtual"
-	TransportMatter   TransportKind = "matter"
-	TransportZigbee   TransportKind = "zigbee"
-	TransportDirigera TransportKind = "dirigera"
-	TransportLAN      TransportKind = "lan"
-	TransportCloud    TransportKind = "cloud"
+	TransportVirtual TransportKind = "virtual"
+	TransportMatter  TransportKind = "matter"
+	TransportZigbee  TransportKind = "zigbee"
+	TransportLAN     TransportKind = "lan"
+	TransportCloud   TransportKind = "cloud"
 )
 
 // TransportRef is the opaque identifier the transport uses for this device
-// (Matter nodeID, Zigbee IEEE, Dirigera UUID, etc.). Meaningless outside its
+// (Matter nodeID, Zigbee IEEE, etc.). Meaningless outside its
 // adapter, but persisted so the adapter can re-attach after restart.
 type TransportRef string
 

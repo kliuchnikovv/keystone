@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/keystone/keystone/internal/domain"
-	"github.com/keystone/keystone/internal/ports"
+	"github.com/kliuchnikovv/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/ports"
 )
 
 // Handler returns an http.HandlerFunc that streams state snapshots as

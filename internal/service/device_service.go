@@ -10,9 +10,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/keystone/keystone/internal/domain"
-	"github.com/keystone/keystone/internal/ports"
-	"github.com/keystone/keystone/internal/registry"
+	"github.com/kliuchnikovv/keystone/internal/domain"
+	"github.com/kliuchnikovv/keystone/internal/ports"
+	"github.com/kliuchnikovv/keystone/internal/registry"
 )
 
 // DeviceService coordinates commissioning, control, and lifecycle of devices
@@ -42,6 +42,16 @@ func NewDeviceService(log *slog.Logger, reg *registry.Registry, bus ports.EventB
 // List returns every device currently in the registry.
 func (s *DeviceService) List() []*domain.Device {
 	return s.registry.List()
+}
+
+// AddDiscovered registers a device that was discovered from an adapter
+// (as opposed to commissioned via user action). Used by transports that
+// pair devices via their own app or expose a pre-populated device list.
+func (s *DeviceService) AddDiscovered(d *domain.Device) error {
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = time.Now().UTC()
+	}
+	return s.registry.Add(d)
 }
 
 // Get returns one device by ID.

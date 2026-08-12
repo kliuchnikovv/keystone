@@ -3,7 +3,7 @@ syntax = "proto3";
 
 package keystone.v1;
 
-option go_package = "github.com/keystone/keystone/gen/go/keystone/v1;keystonev1";
+option go_package = "github.com/kliuchnikovv/keystone/gen/go/keystone/v1;keystonev1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
