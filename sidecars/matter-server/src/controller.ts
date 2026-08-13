@@ -106,11 +106,7 @@ export function createController(opts: ControllerOptions): MatterController {
                 out.push({
                     nodeId: nodeIdOf(client),
                     online: true,
-                    // Endpoint / cluster walking is done lazily by readAttribute
-                    // & friends. Returning the ids is enough for keystone to
-                    // register the device; full cluster enumeration lands with
-                    // the attribute wiring below.
-                    endpoints: [],
+                    endpoints: endpointsOf(client),
                 });
             }
             return out;
@@ -118,45 +114,43 @@ export function createController(opts: ControllerOptions): MatterController {
 
         async readAttribute(p: AttrRef): Promise<unknown> {
             const n = assertStarted(node);
-            const client = clientFor(n, p.nodeId);
-            // TODO(matter-attr): map (cluster, attribute) -> behavior factory
-            // from @matter/main/clusters, resolve the endpoint on the client
-            // tree, then:
-            //   return ep.stateOf(behavior.id)[camelCase(p.attribute)];
-            throw notImplemented(`readAttribute(${p.cluster}.${p.attribute}) on ${client.number}`);
+            const target = endpointFor(clientFor(n, p.nodeId), p.endpointId);
+            const cluster = camelCase(p.cluster);
+            const attribute = camelCase(p.attribute);
+            const state = (target as unknown as {
+                stateOf(id: string): Record<string, unknown>;
+            }).stateOf(cluster);
+            if (!(attribute in state)) {
+                throw new Error(`matter: attribute ${p.cluster}.${p.attribute} not present on endpoint ${p.endpointId}`);
+            }
+            return state[attribute];
         },
 
         async writeAttribute(p: WriteAttrParams): Promise<void> {
             const n = assertStarted(node);
-            const client = clientFor(n, p.nodeId);
-            // TODO(matter-attr): same mapping as readAttribute, then:
-            //   await ep.setStateOf(behavior.id, { [camelCase(p.attribute)]: p.value });
-            throw notImplemented(`writeAttribute(${p.cluster}.${p.attribute}) on ${client.number}`);
+            const target = endpointFor(clientFor(n, p.nodeId), p.endpointId);
+            const cluster = camelCase(p.cluster);
+            const attribute = camelCase(p.attribute);
+            await (target as unknown as {
+                setStateOf(id: string, values: Record<string, unknown>): Promise<void>;
+            }).setStateOf(cluster, { [attribute]: p.value });
         },
 
         async invokeCommand(p: InvokeParams): Promise<unknown> {
             const n = assertStarted(node);
-            const client = clientFor(n, p.nodeId);
+            const target = endpointFor(clientFor(n, p.nodeId), p.endpointId);
             const cluster = camelCase(p.cluster);
             const command = camelCase(p.command);
-            // ClientNode.act runs a callback inside an ActionContext. The
-            // agent exposes every behavior as a property, and each cluster
-            // behavior exposes its commands as methods.
-            //
-            // We route the whole call through act() so matter.js manages the
-            // context/transaction for us. If the cluster or command name is
-            // wrong, the agent lookup throws a descriptive error.
-            return await client.act(async (agent: Record<string, any>) => {
-                const beh = agent[cluster];
-                if (!beh) {
-                    throw new Error(`matter: cluster ${p.cluster} (${cluster}) not present on endpoint ${p.endpointId}`);
-                }
-                const fn = beh[command];
-                if (typeof fn !== "function") {
-                    throw new Error(`matter: command ${p.cluster}.${p.command} (${cluster}.${command}) not found`);
-                }
-                return await fn.call(beh, p.args ?? {});
-            });
+            // Endpoint.commandsOf gives direct access to cluster commands
+            // without having to activate a behavior on the client side.
+            const commands = (target as unknown as {
+                commandsOf(id: string): Record<string, (args?: unknown) => Promise<unknown>>;
+            }).commandsOf(cluster);
+            const fn = commands[command];
+            if (typeof fn !== "function") {
+                throw new Error(`matter: command ${p.cluster}.${p.command} (${cluster}.${command}) not found on endpoint ${p.endpointId}`);
+            }
+            return await fn(p.args ?? undefined);
         },
 
         async removeNode(p: RemoveNodeParams): Promise<void> {
@@ -175,12 +169,51 @@ export function createController(opts: ControllerOptions): MatterController {
 // --- helpers ---
 
 function clientFor(node: ServerNode, nodeId: string): ClientNode {
-    // ClientNodes.get accepts string | number | PeerAddress.
-    const client = node.peers.get(nodeId) as ClientNode | undefined;
-    if (!client) {
-        throw new Error(`matter: node ${nodeId} not found`);
+    // Peers.get looks up by internal endpoint id, not fabric nodeId. Match by
+    // walking peers and comparing the value nodeIdOf returned to keystone.
+    for (const client of node.peers) {
+        if (nodeIdOf(client) === nodeId) return client;
     }
-    return client;
+    throw new Error(`matter: node ${nodeId} not found`);
+}
+
+// endpointsOf walks the endpoint tree of a ClientNode and returns the shape
+// keystone shows in listNodes. Cluster names come from behaviors.supported —
+// keys are matter.js camelCase (onOff, levelControl); listing them raw is more
+// useful than trying to normalise here, since the RPC contract asks for the
+// canonical PascalCase and the mapping is imperfect anyway.
+function endpointsOf(client: ClientNode): Array<{ endpointId: number; clusters: string[] }> {
+    const out: Array<{ endpointId: number; clusters: string[] }> = [];
+    const collect = (ep: any) => {
+        let num: number | undefined;
+        try { num = ep.maybeNumber ?? ep.number; } catch { num = undefined; }
+        let clusters: string[] = [];
+        try {
+            const supported = ep.behaviors?.supported ?? {};
+            clusters = Object.keys(supported);
+        } catch { /* ignore */ }
+        if (num !== undefined) out.push({ endpointId: num, clusters });
+        try {
+            for (const child of ep.parts ?? []) collect(child);
+        } catch { /* ignore */ }
+    };
+    collect(client);
+    return out;
+}
+
+// endpointFor resolves the target endpoint on a ClientNode. endpointId 0 is
+// the root node itself; anything else is a child part. ClientNode extends
+// Endpoint, so both cases return an Endpoint compatible with .act().
+function endpointFor(client: ClientNode, endpointId: number): { act: ClientNode["act"] } {
+    if (endpointId === 0 || client.number === endpointId) {
+        return client as unknown as { act: ClientNode["act"] };
+    }
+    const parts = (client as unknown as { parts: { get(id: number): { act: ClientNode["act"] } | undefined } }).parts;
+    const child = parts.get(endpointId);
+    if (!child) {
+        throw new Error(`matter: endpoint ${endpointId} not found on node ${nodeIdOf(client)}`);
+    }
+    return child;
 }
 
 // nodeIdOf extracts the fabric-scoped node id from a ClientNode's peer
