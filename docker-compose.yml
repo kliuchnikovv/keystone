@@ -1,8 +1,10 @@
-# Local dev compose. Currently defines only the Matter sidecar; the Go
-# keystone binary is expected to run on the host during development.
+# One-command deployment: `docker compose up -d`.
 #
-# network_mode: host is REQUIRED for Matter mDNS discovery and Thread
-# Border Router communication to work — do not switch to bridge.
+# Both services run on the host network — Matter mDNS discovery and Thread
+# Border Router communication only work that way, and keystone talks to
+# the sidecar via ws://localhost:5580 which is only meaningful when both
+# share the host loopback. On macOS Docker Desktop `network_mode: host`
+# is available in Docker Desktop 4.34+ (Settings → Resources → Network).
 
 services:
   matter-sidecar:
@@ -19,5 +21,22 @@ services:
       - matter-fabric:/data
     restart: unless-stopped
 
+  keystone:
+    build:
+      context: .
+    image: keystone/keystone:dev
+    network_mode: host
+    depends_on:
+      - matter-sidecar
+    environment:
+      KEYSTONE_DATA: /data
+      KEYSTONE_ADDR: ":7777"
+      KEYSTONE_MATTER_SIDECAR: ws://localhost:5580
+      KEYSTONE_UI_DIR: /app/site
+    volumes:
+      - keystone-data:/data
+    restart: unless-stopped
+
 volumes:
   matter-fabric:
+  keystone-data:

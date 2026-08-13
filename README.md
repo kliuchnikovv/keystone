@@ -12,9 +12,32 @@ can be exercised without any hardware.
 
 ## Quick start
 
+**Docker (whole stack, one command):**
+
+```sh
+docker compose up -d
+```
+
+Brings up the matter.js sidecar and the Go daemon together — see
+`docker-compose.yml`. HTTP admin lives on `http://localhost:7777`, the
+sidecar's WebSocket on `ws://localhost:5580`. Both containers run on
+the host network (required for Matter mDNS + Thread Border Router
+communication). Named volumes `matter-fabric` and `keystone-data`
+persist the fabric and the device registry across restarts.
+
+**From source (for hacking on the Go side):**
+
 ```sh
 make build
 ./bin/keystone                        # persists to ./keystone-data
+```
+
+To also drive real Matter devices, start the sidecar separately:
+
+```sh
+cd sidecars/matter-server && ./scripts/sidecar-run.sh
+# then in another terminal:
+./bin/keystone -matter-sidecar ws://localhost:5580
 ```
 
 In a second terminal:
@@ -110,8 +133,14 @@ internal/api/grpcapi/       gRPC server (opt-in, build tag `grpc`)
 - [x] gRPC API (opt-in via `-tags=grpc`) — Device / State / Rule services
 - [ ] SQLite behind the same repo interface
 - [ ] Proper WebSocket (gorilla) with reconnect
-- [ ] DIRIGERA adapter (REST + SSE)
-- [ ] Matter adapter (via matter.js sidecar)
+- [x] Matter adapter (via matter.js sidecar) — commission over HTTP,
+      auto-sync at boot, invoke/read/write cluster commands
+- [ ] Live attribute-change events for peer clusters (partial today —
+      controller-side only; peer state pushes still need wiring on
+      matter.js 0.17 client cache)
+- [ ] Docker-compose deploy tested against a Raspberry Pi
+- [ ] SQLite behind the same repo interface
+- [ ] Web UI wired to the real backend
 
 ## Design notes
 

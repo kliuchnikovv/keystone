@@ -1,0 +1,15 @@
+.git
+.gitignore
+.DS_Store
+*.log
+bin/
+gen/
+keystone-data/
+matter-data/
+_to_delete/
+docs/
+apps/
+site/node_modules/
+sidecars/matter-server/node_modules/
+sidecars/matter-server/dist/
+sidecars/matter-server/matter-data/
