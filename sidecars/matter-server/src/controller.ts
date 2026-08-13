@@ -71,12 +71,20 @@ export function createController(opts: ControllerOptions): MatterController {
 
             node.peers.added.on((client: ClientNode) => {
                 emitter.emit("nodeOnline", { nodeId: nodeIdOf(client) });
+                bindSubscriptions(client, emitter);
             });
             node.peers.deleted.on((client: ClientNode) => {
                 emitter.emit("nodeOffline", { nodeId: nodeIdOf(client) });
             });
 
             await node.start();
+
+            // Bind attribute-change subscriptions for peers already restored
+            // from the persisted fabric — the `added` listener above only
+            // covers peers that appear after start.
+            for (const client of node.peers) {
+                bindSubscriptions(client, emitter);
+            }
         },
 
         async stop() {
@@ -177,6 +185,65 @@ function clientFor(node: ServerNode, nodeId: string): ClientNode {
     throw new Error(`matter: node ${nodeId} not found`);
 }
 
+// bindSubscriptions attempts to wire attribute-change Observables so peer
+// updates leave the sidecar as `attributeChanged` events on the WS.
+//
+// Works today for controller-side clusters (commissioning / network on
+// endpoint#0) — enough to surface things like peerAddress or subscription
+// state transitions if a caller cares.
+//
+// TODO(matter-live-events): does NOT yet fire for cluster attributes on
+// commissioned peer endpoints (OnOff / LevelControl / ColorControl on
+// endpoint#1). matter.js 0.17 updates the client-side state cache in place
+// when a subscription report arrives; per-attribute `$Changed` Observables
+// on client behaviors are not exposed via `eventsOf`. Next avenues:
+//   - Subscribe to the low-level ClientNodeInteraction / Datasource change
+//     stream directly, or
+//   - Fall back to polling `stateOf` with a diff loop.
+// See python-matter-server and matterbridge for reference controller
+// implementations of push updates.
+function bindSubscriptions(client: ClientNode, emitter: EventEmitter): void {
+    const nodeId = nodeIdOf(client);
+    const visit = (ep: any) => {
+        let endpointId: number | undefined;
+        try { endpointId = ep.maybeNumber ?? ep.number; } catch { /* ignore */ }
+        if (endpointId === undefined) return;
+
+        let supported: Record<string, unknown> = {};
+        try { supported = ep.behaviors?.supported ?? {}; } catch { /* ignore */ }
+
+        for (const clusterKey of Object.keys(supported)) {
+            let events: Record<string, unknown> | undefined;
+            try {
+                events = (ep as { eventsOf(id: string): Record<string, unknown> }).eventsOf(clusterKey);
+            } catch {
+                continue;
+            }
+            for (const evName of Object.keys(events ?? {})) {
+                if (!evName.endsWith("$Changed")) continue;
+                const attrName = evName.slice(0, -"$Changed".length);
+                const obs = events![evName] as { on?: (fn: (v: unknown) => void) => void } | undefined;
+                if (!obs?.on) continue;
+                try {
+                    obs.on((value: unknown) => {
+                        emitter.emit("attributeChanged", {
+                            nodeId,
+                            endpointId,
+                            cluster: pascalCase(clusterKey),
+                            attribute: pascalCase(attrName),
+                            value,
+                        });
+                    });
+                } catch { /* ignore */ }
+            }
+        }
+        try {
+            for (const child of ep.parts ?? []) visit(child);
+        } catch { /* ignore */ }
+    };
+    try { visit(client); } catch { /* ignore */ }
+}
+
 // endpointsOf walks the endpoint tree of a ClientNode and returns the shape
 // keystone shows in listNodes. Cluster names come from behaviors.supported —
 // keys are matter.js camelCase (onOff, levelControl); listing them raw is more
@@ -249,6 +316,13 @@ function fabricIndexOf(client: ClientNode): number {
 function camelCase(name: string): string {
     if (!name) return name;
     return name.charAt(0).toLowerCase() + name.slice(1);
+}
+
+// pascalCase is the inverse — used on the outbound wire so events match the
+// Go-side (Cluster, Attribute) tables that key on PascalCase.
+function pascalCase(name: string): string {
+    if (!name) return name;
+    return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 function assertStarted(node: ServerNode | undefined): ServerNode {
