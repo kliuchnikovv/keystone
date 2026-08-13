@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keystone — Devices Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #141210;
+    --bg-2: #0e0c0b;
+    --surface: #1E1B18;
+    --surface-2: #262220;
+    --line: #322D28;
+    --line-strong: #4A403A;
+    --text: #F4EFE7;
+    --text-2: #A69F94;
+    --text-3: #6D655C;
+    --accent: #F4A860;
+    --accent-2: #D96B4A;
+    --success: #7FB069;
+    --warn: #E4A649;
+    --danger: #D45D5D;
+    --radius: 20px;
+    --radius-sm: 12px;
+
+    --f-display: 'Fraunces', ui-serif, Georgia, serif;
+    --f-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --f-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--f-sans);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'tnum' 1;
+    line-height: 1.5;
+  }
+
+  /* -------- Header -------- */
+  header {
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--bg), var(--bg-2));
+  }
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--f-display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .brand .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 6px 20px rgba(244,168,96,0.25);
+  }
+  .brand .tag {
+    font-family: var(--f-sans);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-3);
+    padding: 3px 8px;
+    background: var(--surface);
+    border-radius: 6px;
+    margin-left: 6px;
+  }
+  .host-bar {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--f-mono);
+    font-size: 13px;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+  }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+  .status.ok .dot { background: var(--success); box-shadow: 0 0 10px rgba(127,176,105,0.6); }
+  .status.err .dot { background: var(--danger); box-shadow: 0 0 10px rgba(212,93,93,0.6); }
+  input.host {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-family: var(--f-mono);
+    font-size: 12px;
+    width: 220px;
+  }
+  input.host:focus { outline: none; border-color: var(--accent); }
+
+  /* -------- Main layout -------- */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 24px;
+    padding: 24px 32px;
+    min-height: calc(100vh - 66px);
+  }
+  @media (max-width: 960px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .panel { display: flex; flex-direction: column; gap: 20px; }
+  .section-h {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 0 0 6px;
+  }
+  .section-h h2 {
+    font-family: var(--f-display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+  .section-h .count { color: var(--text-3); font-size: 13px; font-family: var(--f-mono); }
+  .section-h .btn-add {
+    margin-left: auto;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--line-strong);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font: 500 13px/1 var(--f-sans);
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .section-h .btn-add:hover { background: var(--surface-2); border-color: var(--accent); }
+
+  /* -------- Modal -------- */
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal[hidden] { display: none; }
+  .modal-body {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    padding: 24px;
+    width: 380px; max-width: 92vw;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .modal-body h3 { margin: 0; font: 600 20px/1.2 var(--f-display); }
+  .modal-hint { margin: 0; color: var(--text-2); font-size: 13px; }
+  .lbl {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .lbl input, .lbl select {
+    padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+    font: 400 14px/1 var(--f-sans);
+    text-transform: none; letter-spacing: 0;
+  }
+  .lbl input:focus, .lbl select:focus { outline: none; border-color: var(--accent); }
+  .modal-error {
+    color: var(--danger); font-size: 13px; background: rgba(212,93,93,0.08);
+    padding: 8px 12px; border-radius: var(--radius-sm);
+  }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  .btn-primary, .btn-secondary {
+    padding: 10px 16px; border-radius: var(--radius-sm); border: 0; cursor: pointer;
+    font: 500 14px/1 var(--f-sans);
+    transition: opacity .15s, background .15s;
+  }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:disabled { opacity: 0.5; cursor: wait; }
+  .btn-secondary { background: transparent; color: var(--text-2); border: 1px solid var(--line); }
+  .btn-secondary:hover { color: var(--text); }
+
+  /* -------- Device delete -------- */
+  .btn-delete {
+    position: absolute; top: 12px; right: 12px;
+    background: transparent; border: 1px solid transparent; color: var(--text-3);
+    width: 26px; height: 26px; border-radius: 50%;
+    font: 500 16px/1 var(--f-sans);
+    cursor: pointer; padding: 0;
+    transition: color .15s, border-color .15s;
+  }
+  .btn-delete:hover { color: var(--danger); border-color: var(--danger); }
+
+  /* -------- Device grid -------- */
+  .devices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .device {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .2s ease, transform .2s ease;
+  }
+  .device:hover { border-color: var(--line-strong); }
+  .device.active {
+    background:
+      radial-gradient(120% 80% at 20% 100%, rgba(244,168,96,0.18), transparent 60%),
+      var(--surface);
+    border-color: rgba(244,168,96,0.4);
+  }
+  .device.offline { opacity: 0.55; }
+  .device .top {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .device .icon {
+    font-size: 24px;
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .device.active .icon {
+    background: linear-gradient(135deg, rgba(244,168,96,0.28), rgba(217,107,74,0.18));
+  }
+  .device .id-line { font-family: var(--f-mono); font-size: 10px; color: var(--text-3); margin-top: 4px; letter-spacing: 0; word-break: break-all; }
+  .device .name { font-size: 16px; font-weight: 500; line-height: 1.2; }
+  .device .meta {
+    font-size: 12px; color: var(--text-2); margin-top: 3px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .device .meta .pill {
+    background: var(--surface-2);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-2);
+  }
+
+  /* Feature controls */
+  .feature { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .feature:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+  .f-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .f-name { font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.08em; }
+  .f-val { font-family: var(--f-mono); font-size: 13px; color: var(--text); }
+
+  /* Toggle */
+  .toggle {
+    width: 52px; height: 30px;
+    background: var(--surface-2);
+    border-radius: 999px;
+    position: relative;
+    cursor: pointer;
+    transition: background .2s ease;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content:''; position: absolute; top: 3px; left: 3px;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--text-3);
+    transition: transform .2s ease, background .2s ease;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { transform: translateX(22px); background: var(--text); }
+  .toggle.pending { opacity: 0.5; pointer-events: none; }
+
+  /* Slider (brightness) */
+  .slider-wrap {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .slider {
+    flex: 1;
+    height: 28px;
+    background: var(--surface-2);
+    border-radius: 14px;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .slider .fill {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    background: linear-gradient(90deg, #d38846, var(--accent));
+    border-radius: 14px;
+    transition: width .18s ease-out;
+  }
+
+  /* Power meter */
+  .power {
+    font-family: var(--f-display);
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .power .unit { font-size: 14px; color: var(--text-2); margin-left: 4px; font-family: var(--f-mono); font-weight: 400; }
+  .power-bar {
+    margin-top: 10px;
+    height: 4px;
+    background: var(--surface-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .power-bar > i {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .18s ease-out;
+  }
+
+  /* Sensor read-only */
+  .sensor { font-family: var(--f-mono); font-size: 13px; color: var(--text); }
+
+  /* -------- Sidebar -------- */
+  .aside {
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .rule {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .rule:last-child { border-bottom: none; }
+  .rule .rh {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .rule .rh .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 8px rgba(127,176,105,0.5);
+    margin-left: auto;
+  }
+  .rule .rh .status-dot.off { background: var(--text-3); box-shadow: none; }
+  .rule .rb { font-size: 12px; color: var(--text-2); line-height: 1.45; }
+  .rule .rf { font-size: 11px; color: var(--text-3); margin-top: 6px; font-family: var(--f-mono); }
+
+  /* Event log */
+  .log {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+  .log::-webkit-scrollbar { width: 6px; }
+  .log::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+  .log-entry {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 55px 1fr;
+    gap: 8px;
+    line-height: 1.35;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry .ts { color: var(--text-3); }
+  .log-entry .msg strong { color: var(--accent); font-weight: 500; }
+  .log-entry.event .msg strong { color: var(--accent-2); }
+
+  /* Empty states */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .empty .glyph { font-size: 42px; margin-bottom: 12px; opacity: 0.5; }
+  .empty code {
+    display: inline-block;
+    font-family: var(--f-mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark"></div>
+    Keystone <span class="tag">Dashboard</span>
+  </div>
+  <div class="host-bar">
+    <span id="status" class="status"><span class="dot"></span><span id="status-text">disconnected</span></span>
+    <input id="host" class="host" type="text" spellcheck="false">
+  </div>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="section-h">
+      <h2>Устройства</h2>
+      <span id="dev-count" class="count">0</span>
+      <button id="btn-add" class="btn-add" title="Add a Matter device (pair from Apple Home)">+ Add device</button>
+    </div>
+    <div id="devices" class="devices"></div>
+  </div>
+
+  <div id="add-dialog" class="modal" hidden>
+    <div class="modal-body">
+      <h3>Добавить Matter-устройство</h3>
+      <p class="modal-hint">В Apple Home открой устройство → Turn On Pairing Mode → скопируй 11-значный код.</p>
+      <label class="lbl">Имя<input id="add-name" type="text" placeholder="Kitchen light"></label>
+      <label class="lbl">Тип
+        <select id="add-type">
+          <option value="light">light</option>
+          <option value="plug">plug</option>
+          <option value="sensor">sensor</option>
+          <option value="switch">switch</option>
+        </select>
+      </label>
+      <label class="lbl">Setup code<input id="add-code" type="text" placeholder="1234-567-8901" autocomplete="off"></label>
+      <div id="add-error" class="modal-error" hidden></div>
+      <div class="modal-actions">
+        <button id="btn-cancel" class="btn-secondary">Отмена</button>
+        <button id="btn-commit" class="btn-primary">Commission</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="aside">
+    <div class="card">
+      <div class="section-h" style="margin-bottom:8px;">
+        <h2 style="font-size:18px;">Правила</h2>
+        <span id="rule-count" class="count">0</span>
+      </div>
+      <div id="rules"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-h" style="margin-bottom:8px;">
+        <h2 style="font-size:18px;">События</h2>
+        <span id="log-count" class="count">0</span>
+      </div>
+      <div id="log" class="log"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+// ==================================================================
+// Keystone Dashboard — vanilla JS client
+// ==================================================================
+
+// Configurable host. On first load — same origin (if served from keystone),
+// else localhost:7777. Persisted to localStorage.
+const DEFAULT_HOST = (location.origin && location.origin.startsWith('http'))
+  ? location.origin
+  : 'http://localhost:7777';
+
+let host = localStorage.getItem('keystoneHost') || DEFAULT_HOST;
+document.getElementById('host').value = host;
+
+document.getElementById('host').addEventListener('change', (e) => {
+  host = e.target.value.replace(/\/+$/, '');
+  localStorage.setItem('keystoneHost', host);
+  reconnect();
+});
+
+// ---- State ----
+const state = {
+  devices: new Map(),      // deviceId -> Device
+  liveState: new Map(),    // "deviceId|feature|key" -> value
+  rules: [],
+  log: [],
+  streamAbort: null,
+};
+
+// ---- API helpers ----
+async function api(path, opts = {}) {
+  const r = await fetch(host + path, {
+    headers: { 'content-type': 'application/json' },
+    ...opts,
+  });
+  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  return r.json();
+}
+
+async function loadDevices() {
+  const r = await api('/devices');
+  state.devices.clear();
+  (r.devices || []).forEach(d => state.devices.set(d.ID, d));
+}
+
+async function loadRules() {
+  try {
+    const r = await api('/rules');
+    state.rules = r.rules || [];
+  } catch (e) { state.rules = []; }
+}
+
+async function invoke(id, feature, action) {
+  return api(`/devices/${id}/actions`, {
+    method: 'POST',
+    body: JSON.stringify({ feature, action }),
+  });
+}
+
+async function writeState(id, feature, key, value) {
+  return api(`/devices/${id}/state`, {
+    method: 'POST',
+    body: JSON.stringify({ feature, key, value }),
+  });
+}
+
+// ---- Live stream (NDJSON over long-lived HTTP) ----
+async function streamStates() {
+  if (state.streamAbort) state.streamAbort.abort();
+  const ctrl = new AbortController();
+  state.streamAbort = ctrl;
+
+  try {
+    const r = await fetch(host + '/stream', { signal: ctrl.signal });
+    if (!r.ok) throw new Error('stream ' + r.status);
+    setStatus('ok', `${new URL(host).host} · live`);
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          handleStreamMessage(msg);
+        } catch (e) { console.warn('parse', line); }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      console.warn('stream ended:', e.message);
+      setStatus('err', 'reconnecting…');
+      setTimeout(streamStates, 1500);
+    }
+  }
+}
+
+function handleStreamMessage(msg) {
+  if (msg.type === 'state') {
+    const p = msg.payload;
+    const key = `${p.DeviceID}|${p.Feature}|${p.Key}`;
+    state.liveState.set(key, p.Value);
+    pushLog('state', p);
+    renderDevices();
+  } else if (msg.type === 'event') {
+    pushLog('event', msg.payload);
+  }
+}
+
+function pushLog(kind, p) {
+  state.log.unshift({ kind, ...p, at: new Date() });
+  if (state.log.length > 60) state.log.length = 60;
+  renderLog();
+}
+
+// ---- Rendering ----
+const devicesEl = document.getElementById('devices');
+const rulesEl = document.getElementById('rules');
+const logEl = document.getElementById('log');
+const devCountEl = document.getElementById('dev-count');
+const ruleCountEl = document.getElementById('rule-count');
+const logCountEl = document.getElementById('log-count');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('status-text');
+
+function setStatus(kind, text) {
+  statusEl.className = 'status ' + (kind || '');
+  statusText.textContent = text;
+}
+
+function iconFor(type) {
+  return {
+    light: '💡',
+    plug: '🔌',
+    switch: '⏻',
+    sensor: '🌡',
+    motion_sensor: '👁',
+    contact_sensor: '🚪',
+    thermostat: '🌡',
+    cover: '🪟',
+    lock: '🔒',
+    media_player: '🎵',
+  }[type] || '⚙️';
+}
+
+function getLive(id, feature, key) {
+  return state.liveState.get(`${id}|${feature}|${key}`);
+}
+
+function renderDevices() {
+  devCountEl.textContent = state.devices.size;
+  const html = [];
+  const list = Array.from(state.devices.values())
+    .sort((a, b) => (a.Name || '').localeCompare(b.Name || ''));
+
+  if (list.length === 0) {
+    devicesEl.innerHTML = `
+      <div class="empty" style="grid-column: 1 / -1;">
+        <div class="glyph">🕸️</div>
+        <div>Ни одного устройства ещё нет.</div>
+        <div style="margin-top:8px;">Запусти <code>./bin/keystone</code> с <code>-demo</code> — виртуальные розетки появятся здесь автоматически.</div>
+      </div>`;
+    return;
+  }
+
+  for (const d of list) {
+    const isOn = getLive(d.ID, 'onoff', 'value');
+    const isActive = isOn === true;
+    html.push(`
+      <div class="device ${isActive ? 'active' : ''}" data-id="${d.ID}">
+        <button class="btn-delete" title="Remove device" data-action="delete">×</button>
+        <div class="top">
+          <div class="icon">${iconFor(d.Type)}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="name">${escapeHtml(d.Name || 'Untitled')}</div>
+            <div class="meta">
+              <span class="pill">${d.Type || '?'}</span>
+              <span class="pill">${d.Transport || '?'}</span>
+              ${d.Manufacturer ? `<span style="font-size:11px;color:var(--text-3);">${escapeHtml(d.Manufacturer)}</span>` : ''}
+            </div>
+            <div class="id-line">${d.ID}</div>
+          </div>
+        </div>
+        ${renderFeatures(d)}
+      </div>
+    `);
+  }
+  devicesEl.innerHTML = html.join('');
+  attachDeviceHandlers();
+}
+
+function renderFeatures(d) {
+  const parts = [];
+  for (const f of (d.Features || [])) {
+    if (f.Key === 'onoff') {
+      const on = getLive(d.ID, 'onoff', 'value') === true;
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Питание</div>
+            <div class="f-val">${on ? 'on' : 'off'}</div>
+          </div>
+          <div class="toggle ${on ? 'on' : ''}" data-action="toggle" data-feature="onoff"></div>
+        </div>
+      `);
+    } else if (f.Key === 'brightness') {
+      const level = getLive(d.ID, 'brightness', 'level');
+      const pct = level != null ? Math.max(0, Math.min(100, Number(level))) : 0;
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Яркость</div>
+            <div class="f-val">${pct}%</div>
+          </div>
+          <div class="slider-wrap">
+            <div class="slider" data-action="brightness" data-feature="brightness">
+              <div class="fill" style="width:${pct}%;"></div>
+            </div>
+          </div>
+        </div>
+      `);
+    } else if (f.Key === 'power_meter') {
+      const w = getLive(d.ID, 'power_meter', 'watts');
+      const kwh = getLive(d.ID, 'power_meter', 'kwh_total');
+      const watts = w != null ? Number(w) : 0;
+      const pctOfKettle = Math.max(0, Math.min(100, watts / 20)); // 2000W == 100%
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Энергия</div>
+            <div class="f-val">${kwh != null ? Number(kwh).toFixed(3) + ' kWh' : ''}</div>
+          </div>
+          <div class="power">${watts.toFixed(0)}<span class="unit">W</span></div>
+          <div class="power-bar"><i style="width:${pctOfKettle}%;"></i></div>
+        </div>
+      `);
+    } else if (f.Key === 'temperature') {
+      const t = getLive(d.ID, 'temperature', 'celsius');
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Температура</div>
+            <div class="sensor">${t != null ? Number(t).toFixed(1) + '°C' : '—'}</div>
+          </div>
+        </div>
+      `);
+    } else if (f.Key === 'motion') {
+      const m = getLive(d.ID, 'motion', 'occupied');
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Движение</div>
+            <div class="sensor">${m === true ? 'обнаружено' : 'нет'}</div>
+          </div>
+        </div>
+      `);
+    } else if (f.Key === 'battery') {
+      const b = getLive(d.ID, 'battery', 'percent');
+      parts.push(`
+        <div class="feature">
+          <div class="f-head">
+            <div class="f-name">Батарея</div>
+            <div class="sensor">${b != null ? b + '%' : '—'}</div>
+          </div>
+        </div>
+      `);
+    }
+  }
+  return parts.join('');
+}
+
+function attachDeviceHandlers() {
+  document.querySelectorAll('.device').forEach(el => {
+    const id = el.dataset.id;
+
+    el.querySelectorAll('[data-action="delete"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const d = state.devices.get(id);
+        const label = d?.Name || id;
+        if (!confirm(`Remove device "${label}"?`)) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch(host + '/devices/' + id, { method: 'DELETE' });
+          if (!r.ok) throw new Error('delete → ' + r.status);
+          state.devices.delete(id);
+          renderDevices();
+        } catch (e) {
+          console.error(e);
+          alert('Delete failed: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+
+    el.querySelectorAll('.toggle').forEach(t => {
+      t.addEventListener('click', async () => {
+        const on = t.classList.contains('on');
+        const action = on ? 'turn_off' : 'turn_on';
+        t.classList.add('pending');
+        try {
+          await invoke(id, 'onoff', action);
+          // Optimistic: flip class; real update arrives via stream.
+          t.classList.toggle('on');
+          t.closest('.device').classList.toggle('active');
+        } catch (e) {
+          console.error(e);
+        } finally {
+          t.classList.remove('pending');
+        }
+      });
+    });
+
+    el.querySelectorAll('.slider[data-action="brightness"]').forEach(s => {
+      s.addEventListener('click', async (ev) => {
+        const rect = s.getBoundingClientRect();
+        const pct = Math.round(Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100)));
+        s.querySelector('.fill').style.width = pct + '%';
+        try {
+          await writeState(id, 'brightness', 'level', pct);
+        } catch (e) { console.error(e); }
+      });
+    });
+  });
+}
+
+function renderRules() {
+  ruleCountEl.textContent = state.rules.length;
+  if (!state.rules.length) {
+    rulesEl.innerHTML = `<div style="color:var(--text-3); font-size:13px; text-align:center; padding:20px 0;">Правил нет</div>`;
+    return;
+  }
+  rulesEl.innerHTML = state.rules.map(r => `
+    <div class="rule">
+      <div class="rh">
+        ${escapeHtml(r.name)}
+        <span class="status-dot ${r.enabled ? '' : 'off'}"></span>
+      </div>
+      <div class="rb">${escapeHtml(r.human_readable || 'без описания')}</div>
+      <div class="rf">mode: ${r.mode} · ${r.enabled ? 'active' : 'disabled'}</div>
+    </div>
+  `).join('');
+}
+
+function renderLog() {
+  logCountEl.textContent = state.log.length;
+  if (!state.log.length) {
+    logEl.innerHTML = `<div style="color:var(--text-3); font-size:12px; text-align:center; padding:20px 0;">Пусто. Жду события…</div>`;
+    return;
+  }
+  logEl.innerHTML = state.log.slice(0, 40).map(e => {
+    const t = e.at.toTimeString().slice(0, 8);
+    const d = state.devices.get(e.DeviceID);
+    const dname = d ? d.Name : e.DeviceID.slice(-8);
+    if (e.kind === 'state') {
+      return `<div class="log-entry"><div class="ts">${t}</div><div class="msg"><strong>${escapeHtml(dname)}</strong> · ${escapeHtml(e.Feature)}.${escapeHtml(e.Key)} = ${formatValue(e.Value)}</div></div>`;
+    } else {
+      return `<div class="log-entry event"><div class="ts">${t}</div><div class="msg"><strong>${escapeHtml(dname)}</strong> · event: ${escapeHtml(e.Name || '?')}</div></div>`;
+    }
+  }).join('');
+}
+
+function formatValue(v) {
+  if (typeof v === 'number') return v.toFixed(v % 1 === 0 ? 0 : 2);
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  return String(v);
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+// ---- Bootstrap / reconnect ----
+async function reconnect() {
+  setStatus('', 'connecting…');
+  if (state.streamAbort) state.streamAbort.abort();
+  try {
+    await loadDevices();
+    await loadRules();
+    renderDevices();
+    renderRules();
+    renderLog();
+    streamStates();
+    setStatus('ok', `${new URL(host).host} · live`);
+  } catch (e) {
+    console.warn(e);
+    setStatus('err', `${new URL(host).host} · offline`);
+    setTimeout(reconnect, 3000);
+  }
+}
+
+// ---- Add-device dialog ----
+const addDialog = document.getElementById('add-dialog');
+const addName = document.getElementById('add-name');
+const addType = document.getElementById('add-type');
+const addCode = document.getElementById('add-code');
+const addError = document.getElementById('add-error');
+const btnCommit = document.getElementById('btn-commit');
+
+function openAddDialog() {
+  addName.value = '';
+  addType.value = 'light';
+  addCode.value = '';
+  addError.hidden = true;
+  addDialog.hidden = false;
+  addCode.focus();
+}
+function closeAddDialog() {
+  addDialog.hidden = true;
+  btnCommit.disabled = false;
+  btnCommit.textContent = 'Commission';
+}
+document.getElementById('btn-add').addEventListener('click', openAddDialog);
+document.getElementById('btn-cancel').addEventListener('click', closeAddDialog);
+addDialog.addEventListener('click', (e) => { if (e.target === addDialog) closeAddDialog(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !addDialog.hidden) closeAddDialog(); });
+
+btnCommit.addEventListener('click', async () => {
+  const rawCode = addCode.value.replace(/[^0-9]/g, '');
+  if (rawCode.length < 11) {
+    addError.textContent = 'Setup code must be 11 digits (dashes optional).';
+    addError.hidden = false;
+    return;
+  }
+  addError.hidden = true;
+  btnCommit.disabled = true;
+  btnCommit.textContent = 'Commissioning… (up to 3 min)';
+  try {
+    const r = await fetch(host + '/devices/commission', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        transport: 'matter',
+        payload: rawCode,
+        name: addName.value || 'New device',
+        type: addType.value,
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `commission → ${r.status}`);
+    }
+    const d = await r.json();
+    state.devices.set(d.ID, d);
+    renderDevices();
+    closeAddDialog();
+  } catch (e) {
+    addError.textContent = String(e.message || e);
+    addError.hidden = false;
+    btnCommit.disabled = false;
+    btnCommit.textContent = 'Retry';
+  }
+});
+
+// Refresh rules periodically (they change less often; stream doesn't push them).
+setInterval(loadRules, 15000);
+setInterval(() => { renderRules(); }, 15000);
+
+reconnect();
+</script>
+
+</body>
+</html>
