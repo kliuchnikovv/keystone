@@ -9,12 +9,17 @@
 //   KEYSTONE_MATTER_STORAGE   default ./matter-data
 //   KEYSTONE_MATTER_LABEL     fabric label, default "Keystone"
 
-import { createController } from "./controller.js";
-import { startWsServer } from "./wsServer.js";
+// The storage path must be set BEFORE any @matter/* import: NodeJsEnvironment
+// resolves storage.path when Environment.default is first constructed, which
+// happens as a side-effect of the very first matter.js import.
+const STORAGE = process.env.KEYSTONE_MATTER_STORAGE ?? "./matter-data";
+if (!process.env.MATTER_STORAGE_PATH) process.env.MATTER_STORAGE_PATH = STORAGE;
+
+const { createController } = await import("./controller.js");
+const { startWsServer } = await import("./wsServer.js");
 
 const HOST = process.env.KEYSTONE_MATTER_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.KEYSTONE_MATTER_PORT ?? 5580);
-const STORAGE = process.env.KEYSTONE_MATTER_STORAGE ?? "./matter-data";
 const LABEL = process.env.KEYSTONE_MATTER_LABEL ?? "Keystone";
 
 const log = (
@@ -56,3 +61,5 @@ main().catch((err) => {
     log("error", "fatal", { err: String(err) });
     process.exit(1);
 });
+
+export {};
