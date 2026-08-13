@@ -162,13 +162,32 @@ func main() {
 	// Always start the INSPELNING simulator (nice for testing thresholds).
 	go simulateInspelning(ctx, devSvc, virt, log)
 
+	// Sync devices already present in transports (e.g. Matter peers persisted
+	// in the matter.js fabric across restarts) into the domain registry so
+	// they show up in GET /devices without user intervention. Persist newly
+	// synced devices to disk so subsequent boots see them from storage.
+	go func() {
+		syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer syncCancel()
+		added, err := devSvc.SyncFromAdapters(syncCtx)
+		if err != nil {
+			log.Warn("adapter sync had errors", "err", err)
+		}
+		for _, d := range added {
+			persistOnAdd(d)
+		}
+	}()
+
 	// --- HTTP API ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 	mux.HandleFunc("GET /devices", handleListDevices(devSvc))
+	mux.HandleFunc("POST /devices/commission", handleCommission(devSvc, persistOnAdd))
+	mux.HandleFunc("POST /devices/sync", handleSyncFromAdapters(devSvc, persistOnAdd))
 	mux.HandleFunc("GET /devices/{id}", handleGetDevice(devSvc))
+	mux.HandleFunc("DELETE /devices/{id}", handleDeleteDevice(devSvc, repo))
 	mux.HandleFunc("POST /devices/{id}/actions", handleInvokeAction(devSvc))
 	mux.HandleFunc("POST /devices/{id}/state", handleWriteState(devSvc))
 	mux.HandleFunc("GET /rules", handleListRules(engine))
@@ -315,6 +334,96 @@ func simulateInspelning(ctx context.Context, svc *service.DeviceService, virt *v
 func handleListDevices(svc *service.DeviceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"devices": svc.List()})
+	}
+}
+
+type commissionRequest struct {
+	Transport string            `json:"transport"`         // e.g. "matter", "virtual"
+	Payload   string            `json:"payload"`           // Matter setup code, virtual spec, …
+	Name      string            `json:"name"`              // user-visible label
+	Type      string            `json:"type,omitempty"`    // domain.DeviceType override; falls back to what the adapter reports
+	WifiSSID  string            `json:"wifi_ssid,omitempty"`
+	WifiCred  string            `json:"wifi_cred,omitempty"`
+	Extra     map[string]string `json:"extra,omitempty"`
+}
+
+func handleCommission(svc *service.DeviceService, persist func(*domain.Device)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req commissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if req.Transport == "" || req.Payload == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "transport and payload are required"})
+			return
+		}
+		if req.Name == "" {
+			req.Name = "New device"
+		}
+		// Give the adapter generous time — matter commissioning through Thread
+		// Border Router can take 30-90 seconds under normal conditions.
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+		defer cancel()
+
+		d, err := svc.Commission(ctx,
+			domain.TransportKind(req.Transport),
+			ports.CommissionRequest{
+				Payload:  req.Payload,
+				WifiSSID: req.WifiSSID,
+				WifiCred: req.WifiCred,
+				Extra:    req.Extra,
+			},
+			req.Name,
+			domain.DeviceType(req.Type),
+		)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		persist(d)
+		writeJSON(w, http.StatusOK, d)
+	}
+}
+
+func handleSyncFromAdapters(svc *service.DeviceService, persist func(*domain.Device)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		added, err := svc.SyncFromAdapters(ctx)
+		for _, d := range added {
+			persist(d)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"added": added, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"added": added})
+	}
+}
+
+// deviceDeleter is the narrow slice of the storage repo the delete handler
+// needs. Declared here (not in ports) so the handler avoids a broader
+// dependency, and so tests can inject a stub.
+type deviceDeleter interface {
+	DeleteDevice(ctx context.Context, id domain.DeviceID) error
+}
+
+func handleDeleteDevice(svc *service.DeviceService, repo deviceDeleter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := domain.DeviceID(r.PathValue("id"))
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := svc.Decommission(ctx, id); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := repo.DeleteDevice(r.Context(), id); err != nil {
+			// Registry already dropped it — worth logging but not a client error.
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "persist_warning": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}
 }
 

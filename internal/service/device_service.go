@@ -109,6 +109,84 @@ func (s *DeviceService) Commission(ctx context.Context, transport domain.Transpo
 	return d, nil
 }
 
+// Decommission removes a device: asks the adapter to unpair it from the
+// transport, then evicts it from the registry. Errors from the adapter are
+// returned to the caller but the registry entry is dropped regardless — a
+// user asking to remove a device expects it to be gone from the UI even if
+// the peer has already vanished from the network.
+func (s *DeviceService) Decommission(ctx context.Context, id domain.DeviceID) error {
+	release := s.registry.Lock(id)
+	defer release()
+
+	d, err := s.registry.Get(id)
+	if err != nil {
+		return err
+	}
+	adapter, ok := s.adapters[d.Transport]
+	if !ok {
+		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
+	}
+
+	adapterErr := adapter.Decommission(ctx, d.TransportRef)
+	if removeErr := s.registry.Remove(id); removeErr != nil && adapterErr == nil {
+		return removeErr
+	}
+	s.log.Info("device decommissioned", "id", id, "transport", d.Transport, "adapter_err", adapterErr)
+	return adapterErr
+}
+
+// SyncFromAdapters walks every registered adapter, calls Discover, and
+// registers any peer the adapter reports but the registry does not know
+// about yet. Intended to run once at boot so a matter.js sidecar with
+// pre-commissioned devices (typical case: keystone restarted, fabric on
+// disk survived) rehydrates the domain registry automatically. Returns the
+// list of newly added devices so callers can persist them.
+func (s *DeviceService) SyncFromAdapters(ctx context.Context) ([]*domain.Device, error) {
+	known := make(map[string]bool)
+	for _, d := range s.registry.List() {
+		known[string(d.Transport)+":"+string(d.TransportRef)] = true
+	}
+
+	var added []*domain.Device
+	var firstErr error
+	for kind, adapter := range s.adapters {
+		ch, err := adapter.Discover(ctx)
+		if err != nil {
+			s.log.Warn("adapter discover failed", "transport", kind, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for disc := range ch {
+			key := string(kind) + ":" + string(disc.TransportRef)
+			if known[key] {
+				continue
+			}
+			d := &domain.Device{
+				ID:           domain.DeviceID(domain.NewID()),
+				Type:         disc.Type,
+				Name:         disc.Name,
+				Manufacturer: disc.Manufacturer,
+				Model:        disc.Model,
+				Transport:    kind,
+				TransportRef: disc.TransportRef,
+				Features:     disc.Features,
+				Metadata:     disc.Metadata,
+				CreatedAt:    time.Now().UTC(),
+			}
+			if err := s.registry.Add(d); err != nil {
+				s.log.Warn("sync: registry add failed", "transport", kind, "ref", disc.TransportRef, "err", err)
+				continue
+			}
+			s.log.Info("device synced from adapter", "id", d.ID, "transport", kind, "name", d.Name)
+			known[key] = true
+			added = append(added, d)
+		}
+	}
+	return added, firstErr
+}
+
 // InvokeAction executes an action on a device, holding the per-device lock
 // so concurrent writers to the same device serialise.
 func (s *DeviceService) InvokeAction(ctx context.Context, id domain.DeviceID, feature domain.FeatureKey, action domain.ActionKey, params map[string]any) error {
