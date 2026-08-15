@@ -1,0 +1,29 @@
+.root {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 var(--s-xs);
+  margin: var(--s-lg) 0 var(--s-sm);
+}
+
+.title {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  font-weight: 500;
+}
+
+.right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-sm);
+  color: var(--c-text-3);
+  font-size: 12px;
+  font-feature-settings: 'tnum' 1;
+}
+
+.count {
+  min-width: 12px;
+  text-align: right;
+}

@@ -1,0 +1,56 @@
+.root {
+  --w: 48px;
+  --h: 28px;
+  --thumb: 22px;
+  position: relative;
+  width: var(--w);
+  height: var(--h);
+  border-radius: var(--r-pill);
+  background: var(--c-surface-2);
+  transition:
+    background var(--motion-fast) var(--easing-out),
+    opacity var(--motion-fast) var(--easing-out);
+  flex-shrink: 0;
+}
+
+.size-lg {
+  --w: 56px;
+  --h: 32px;
+  --thumb: 26px;
+}
+
+.thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: var(--thumb);
+  height: var(--thumb);
+  border-radius: 50%;
+  background: var(--c-text);
+  transition: transform var(--motion-base) var(--easing-spring);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.on {
+  background: var(--c-accent);
+}
+
+.on .thumb {
+  transform: translateX(calc(var(--w) - var(--thumb) - 6px));
+}
+
+.pending {
+  background: color-mix(in srgb, var(--c-accent) 45%, var(--c-surface-2));
+  animation: toggle-pulse 1.2s ease-in-out infinite;
+}
+
+.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes toggle-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}

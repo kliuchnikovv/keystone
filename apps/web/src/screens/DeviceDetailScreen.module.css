@@ -1,0 +1,199 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: env(safe-area-inset-top, 0px) 20px 32px;
+  gap: var(--s-md);
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 4px;
+  color: var(--c-text-2);
+  font-size: 14px;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.back:hover {
+  color: var(--c-text);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 28px;
+  color: var(--c-text);
+}
+
+.meta {
+  margin: 0;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.main {
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mainRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.mainLabel {
+  margin: 0;
+  color: var(--c-text-3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mainValue {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--c-text);
+}
+
+.unit {
+  font-size: 20px;
+  color: var(--c-text-2);
+  margin-left: 4px;
+}
+
+.sliderBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sliderLabel {
+  margin: 0;
+  color: var(--c-text-3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.emptyHint {
+  margin: 8px 0 0;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.historyList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.historyItem {
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  border-bottom: 1px solid var(--c-line);
+}
+
+.historyItem:last-child {
+  border-bottom: none;
+}
+
+.historyTime {
+  color: var(--c-text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.historyLabel {
+  color: var(--c-text-2);
+}
+
+.historyDetail {
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.settings {
+  margin: 8px 0 0;
+  padding: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--c-line);
+  font-size: 13px;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row dt {
+  color: var(--c-text-3);
+  margin: 0;
+}
+
+.row dd {
+  color: var(--c-text);
+  margin: 0;
+  text-align: right;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.deleteBlock {
+  margin-top: var(--s-md);
+}
+
+.confirmRow {
+  display: flex;
+  gap: 8px;
+}
+
+.confirmRow > * {
+  flex: 1;
+}

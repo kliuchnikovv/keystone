@@ -1,0 +1,153 @@
+.root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 10px;
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  transition:
+    background var(--motion-base) var(--easing-out),
+    border-color var(--motion-base) var(--easing-out);
+  overflow: hidden;
+}
+
+.size-compact {
+  padding: 12px;
+  gap: 6px;
+  border-radius: var(--r-md);
+  min-height: 96px;
+}
+
+.size-hero {
+  padding: 18px;
+  gap: 14px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.icon {
+  color: var(--c-text-2);
+  display: inline-flex;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.name {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--c-text);
+  letter-spacing: -0.005em;
+}
+
+.size-compact .name {
+  font-size: 13px;
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--c-text-3);
+  min-height: 14px;
+}
+
+.slider {
+  margin-top: 4px;
+}
+
+.kelvin {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.kelvinDot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.big {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 34px;
+  line-height: 1;
+  color: var(--c-text);
+  font-feature-settings: 'tnum' 1;
+  margin-top: 4px;
+}
+
+.bigUnit {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text-3);
+  margin-left: 4px;
+}
+
+/* ---- Type accents ---- */
+.type-light .icon {
+  color: var(--c-warn);
+}
+
+.type-plug .icon {
+  color: var(--c-text-2);
+}
+
+.type-sensor .icon {
+  color: color-mix(in srgb, var(--c-accent) 60%, white);
+}
+
+.type-motion .icon {
+  color: var(--c-accent-2);
+}
+
+/* ---- States ---- */
+.state-active {
+  background: color-mix(in srgb, var(--c-accent) 8%, var(--c-surface));
+  border-color: color-mix(in srgb, var(--c-accent) 22%, var(--c-line));
+}
+
+.state-active.type-light {
+  box-shadow: inset 0 0 32px color-mix(in srgb, var(--c-accent) 18%, transparent);
+}
+
+.state-active.type-motion .big,
+.state-active.type-motion .name {
+  color: var(--c-accent-2);
+}
+
+.state-pending {
+  border-color: color-mix(in srgb, var(--c-accent) 35%, transparent);
+}
+
+.state-offline {
+  opacity: 0.55;
+}
+
+.state-offline .name,
+.state-offline .meta {
+  color: var(--c-text-3);
+}
+
+.state-error {
+  border-color: color-mix(in srgb, var(--c-danger) 50%, transparent);
+  background: color-mix(in srgb, var(--c-danger) 6%, var(--c-surface));
+}
+
+.state-error .meta {
+  color: var(--c-danger);
+}

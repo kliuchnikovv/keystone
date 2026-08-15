@@ -1,0 +1,80 @@
+.root {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+  align-items: center;
+  border-radius: var(--r-md);
+  transition: background var(--motion-base) var(--easing-out);
+}
+
+.status-active {
+  background: color-mix(in srgb, var(--c-accent) 12%, transparent);
+}
+
+.icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: var(--c-surface-2);
+  color: var(--c-text-3);
+  transition:
+    background var(--motion-base) var(--easing-out),
+    color var(--motion-base) var(--easing-out);
+}
+
+.status-done .icon {
+  background: color-mix(in srgb, var(--c-success) 22%, transparent);
+  color: var(--c-success);
+}
+
+.status-active .icon {
+  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
+  color: var(--c-accent);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--c-text);
+  transition: color var(--motion-base) var(--easing-out);
+}
+
+.status-idle .title {
+  color: var(--c-text-3);
+}
+
+.detail {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+
+.status-active .detail {
+  color: var(--c-accent);
+}
+
+.spin {
+  animation: cs-spin 1.4s linear infinite;
+}
+
+@keyframes cs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

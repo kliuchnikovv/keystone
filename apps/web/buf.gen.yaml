@@ -1,0 +1,12 @@
+version: v2
+plugins:
+  - local: ["node", "node_modules/ts-proto/protoc-gen-ts_proto.js"]
+    out: src/proto/gen
+    opt:
+      - esModuleInterop=true
+      - outputServices=false
+      - useOptionals=messages
+      - snakeToCamel=true
+      - unrecognizedEnum=false
+inputs:
+  - directory: ../../proto

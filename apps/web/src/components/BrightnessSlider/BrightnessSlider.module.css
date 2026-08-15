@@ -1,0 +1,47 @@
+.root {
+  --h: 14px;
+  position: relative;
+  width: 100%;
+  height: var(--h);
+}
+
+.size-sm {
+  --h: 8px;
+}
+
+.size-md {
+  --h: 14px;
+}
+
+.size-lg {
+  --h: 44px;
+}
+
+.track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--c-accent-2), var(--c-accent));
+  border-radius: var(--r-pill);
+  transition: width var(--motion-base) var(--easing-out);
+}
+
+.input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
+}
+
+.input:disabled {
+  cursor: not-allowed;
+}

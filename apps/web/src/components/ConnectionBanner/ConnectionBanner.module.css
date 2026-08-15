@@ -1,0 +1,35 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 0 20px 8px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--c-warn) 16%, var(--c-surface));
+  border: 1px solid color-mix(in srgb, var(--c-warn) 35%, transparent);
+  color: var(--c-warn);
+  font-size: 12px;
+  align-self: flex-start;
+  animation: bnr-in var(--motion-base) var(--easing-out);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: bnr-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes bnr-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes bnr-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}

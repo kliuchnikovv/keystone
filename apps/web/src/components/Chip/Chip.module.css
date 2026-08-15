@@ -1,0 +1,63 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-pill);
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 500;
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  border: 1px solid var(--c-line);
+  white-space: nowrap;
+}
+
+.size-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.clickable {
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--easing-out),
+    color var(--motion-fast) var(--easing-out);
+}
+
+.clickable:hover {
+  color: var(--c-text);
+}
+
+.tone-neutral {
+}
+
+.tone-muted {
+  background: transparent;
+  color: var(--c-text-3);
+}
+
+.tone-accent,
+.selected {
+  background: color-mix(in srgb, var(--c-accent) 24%, transparent);
+  color: var(--c-text);
+  border-color: color-mix(in srgb, var(--c-accent) 40%, transparent);
+}
+
+.tone-success {
+  background: color-mix(in srgb, var(--c-success) 22%, transparent);
+  color: var(--c-success);
+  border-color: color-mix(in srgb, var(--c-success) 40%, transparent);
+}
+
+.tone-warn {
+  background: color-mix(in srgb, var(--c-warn) 22%, transparent);
+  color: var(--c-warn);
+  border-color: color-mix(in srgb, var(--c-warn) 40%, transparent);
+}
+
+.tone-danger {
+  background: color-mix(in srgb, var(--c-danger) 22%, transparent);
+  color: var(--c-danger);
+  border-color: color-mix(in srgb, var(--c-danger) 40%, transparent);
+}

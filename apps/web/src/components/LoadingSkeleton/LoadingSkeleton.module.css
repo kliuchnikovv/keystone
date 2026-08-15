@@ -1,0 +1,63 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-lg);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-sm);
+}
+
+.row {
+  display: flex;
+  gap: var(--s-md);
+}
+
+.pill,
+.tile {
+  background: linear-gradient(
+    100deg,
+    var(--c-surface) 0%,
+    var(--c-surface-2) 40%,
+    var(--c-surface) 80%
+  );
+  background-size: 220% 100%;
+  animation: shimmer 1.8s linear infinite;
+  border-radius: var(--r-lg);
+}
+
+.pill {
+  height: 12px;
+  border-radius: var(--r-pill);
+  width: 40%;
+}
+
+.headerPill {
+  width: 30%;
+  opacity: 0.6;
+}
+
+.tile {
+  flex: 1;
+  height: 96px;
+}
+
+.tall {
+  height: 168px;
+}
+
+.compact {
+  height: 92px;
+  border-radius: var(--r-md);
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -20% 0;
+  }
+}
