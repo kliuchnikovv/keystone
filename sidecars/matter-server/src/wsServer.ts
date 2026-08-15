@@ -67,7 +67,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
             let replayed = 0;
             for (const frame of buffer) {
                 if (frame.seq <= sinceSeq) continue;
-                sendFrame(ws, frame);
+                sendFrame(ws, opts.log, frame);
                 replayed++;
             }
             opts.log("info", "client resubscribed with replay", { sinceSeq, replayed, seq: seqBefore });
@@ -111,7 +111,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
         ws.on("message", async (buf) => {
             const req = parseRequest(buf.toString(), opts.log);
             if (!req) {
-                sendFrame(ws, {
+                sendFrame(ws, opts.log, {
                     id: "",
                     error: {
                         code: RpcErrorCode.BadRequest,
@@ -125,13 +125,13 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
             // subscribe is the one method whose reply depends on which socket
             // asked, so it can't go through the params-only handler table.
             if (req.method === Methods.Subscribe) {
-                sendFrame(ws, { id: req.id, result: subscribe(req.params, ws) });
+                sendFrame(ws, opts.log, { id: req.id, result: subscribe(req.params, ws) });
                 return;
             }
 
             const handler = handlers[req.method];
             if (!handler) {
-                sendFrame(ws, {
+                sendFrame(ws, opts.log, {
                     id: req.id,
                     error: {
                         code: RpcErrorCode.MethodNotFound,
@@ -144,7 +144,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
             }
             try {
                 const result = await handler(req.params);
-                sendFrame(ws, { id: req.id, result: result ?? null });
+                sendFrame(ws, opts.log, { id: req.id, result: result ?? null });
             } catch (err) {
                 const body = toRpcErrorBody(err);
                 opts.log("warn", "rpc handler failed", {
@@ -153,7 +153,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
                     retryable: body.retryable,
                     err: body.message,
                 });
-                sendFrame(ws, { id: req.id, error: body });
+                sendFrame(ws, opts.log, { id: req.id, error: body });
             }
         });
 
@@ -166,7 +166,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
     // Fan out matter.js events to every connected WS client, numbering and
     // buffering each one on the way out.
     const forward = (event: string) => (data: unknown) => {
-        broadcast(clients, record(event, data));
+        broadcast(clients, record(event, data), opts.log);
     };
     opts.controller.on(Events.AttributeChanged, forward(Events.AttributeChanged));
     opts.controller.on(Events.NodeOnline, forward(Events.NodeOnline));
@@ -200,14 +200,46 @@ function parseRequest(raw: string, log: ServerOptions["log"]): RpcRequest | null
     }
 }
 
-function sendFrame(ws: WebSocket, frame: OutboundFrame): void {
-    if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(frame));
+/**
+ * Matter attribute values routinely contain BigInt — node ids, EUI64 addresses,
+ * 64-bit counters — and JSON.stringify throws on them outright. Unhandled, that
+ * single throw travelled up through the emitter into the StateStream consumer
+ * and killed the whole realtime path on its first event, over and over.
+ *
+ * Values inside the safe-integer range become numbers so the Go side keeps
+ * parsing them as numbers; anything larger becomes a string, because silently
+ * rounding a 64-bit id is worse than changing its type.
+ */
+function jsonReplacer(_key: string, value: unknown): unknown {
+    if (typeof value !== "bigint") return value;
+    return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(value)
+        : value.toString();
+}
+
+/**
+ * encodeFrame never throws. A frame that cannot be serialised is dropped with a
+ * log line: losing one update is bad, but taking down the connection that
+ * carries every other device's state is far worse.
+ */
+function encodeFrame(frame: unknown, log: ServerOptions["log"]): string | undefined {
+    try {
+        return JSON.stringify(frame, jsonReplacer);
+    } catch (err) {
+        log("error", "dropping unserialisable frame", { err: String(err) });
+        return undefined;
     }
 }
 
-function broadcast(clients: Set<WebSocket>, event: ServerEvent): void {
-    const payload = JSON.stringify(event);
+function sendFrame(ws: WebSocket, log: ServerOptions["log"], frame: OutboundFrame): void {
+    if (ws.readyState !== ws.OPEN) return;
+    const payload = encodeFrame(frame, log);
+    if (payload !== undefined) ws.send(payload);
+}
+
+function broadcast(clients: Set<WebSocket>, event: ServerEvent, log: ServerOptions["log"]): void {
+    const payload = encodeFrame(event, log);
+    if (payload === undefined) return;
     for (const ws of clients) {
         if (ws.readyState === ws.OPEN) ws.send(payload);
     }

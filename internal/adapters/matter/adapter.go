@@ -49,8 +49,9 @@ type Adapter struct {
 
 	// foundMu guards the sink that receives commissionableFound events while a
 	// scan is running. One scan at a time, like commissioning.
-	foundMu sync.Mutex
-	found   chan<- ports.CommissionableDevice
+	foundMu   sync.Mutex
+	found     chan<- ports.CommissionableDevice
+	foundSeen map[string]struct{}
 
 	// signalsMu guards the set of viewers waiting on camera WebRTC signalling.
 	signalsMu sync.RWMutex
@@ -541,6 +542,9 @@ func (a *Adapter) DiscoverCommissionable(ctx context.Context, window time.Durati
 	}
 
 	out := make(chan ports.CommissionableDevice, 16)
+	// Refs already delivered live, so the reconciliation below does not repeat
+	// them. Guarded by foundMu together with the sink itself.
+	seen := make(map[string]struct{})
 
 	a.foundMu.Lock()
 	if a.found != nil {
@@ -548,12 +552,14 @@ func (a *Adapter) DiscoverCommissionable(ctx context.Context, window time.Durati
 		return nil, errors.New("matter: a commissionable scan is already running")
 	}
 	a.found = out
+	a.foundSeen = seen
 	a.foundMu.Unlock()
 
 	go func() {
 		defer func() {
 			a.foundMu.Lock()
 			a.found = nil
+			a.foundSeen = nil
 			a.foundMu.Unlock()
 			close(out)
 		}()
@@ -568,6 +574,29 @@ func (a *Adapter) DiscoverCommissionable(ctx context.Context, window time.Durati
 			a.log.Warn("matter: commissionable scan failed", "err", err, "kind", KindOf(err))
 			return
 		}
+		// Reconcile against the scan's own result. A device the sidecar found but
+		// whose live event went missing would otherwise never reach the caller —
+		// the list would look empty while the log said "found 1", which is
+		// exactly the confusing combination this guards against.
+		a.foundMu.Lock()
+		var missed int
+		for _, d := range devices {
+			if _, ok := seen[d.Ref]; ok {
+				continue
+			}
+			seen[d.Ref] = struct{}{}
+			missed++
+			select {
+			case out <- commissionableFrom(d):
+			default:
+			}
+		}
+		a.foundMu.Unlock()
+		if missed > 0 {
+			a.log.Warn("matter: commissionable devices arrived only in the scan result",
+				"count", missed, "of", len(devices))
+		}
+
 		a.log.Info("matter commissionable scan finished", "window", window.String(), "found", len(devices))
 	}()
 
@@ -588,6 +617,17 @@ func (a *Adapter) reportCommissionable(ev Event) {
 		a.log.Warn("matter: bad commissionableFound payload", "err", err)
 		return
 	}
+	a.foundMu.Lock()
+	if a.foundSeen != nil {
+		if _, dup := a.foundSeen[d.Ref]; dup {
+			a.foundMu.Unlock()
+			return
+		}
+		a.foundSeen[d.Ref] = struct{}{}
+	}
+	a.foundMu.Unlock()
+	a.log.Info("matter commissionable device found", "ref", d.Ref, "name", d.Name,
+		"deviceType", d.DeviceType, "discriminator", d.Discriminator)
 	select {
 	case sink <- commissionableFrom(d):
 	default:
