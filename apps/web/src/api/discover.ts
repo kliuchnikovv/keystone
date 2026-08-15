@@ -225,7 +225,10 @@ export function openCommissionWithCode(
         body: JSON.stringify({
           transport: 'matter',
           payload: setupCode,
-          name: opts.name ?? 'Новое устройство',
+          // Имя не выдумываем: «Matter device 493» — это наша же заглушка для
+          // безымянного анонса, и она затирала бы настоящее имя устройства из
+          // BasicInformation. Пустое имя означает «возьми у устройства».
+          name: opts.name ?? '',
           ecosystem_hint: ecosystemHint,
           // Устройство, выбранное в списке найденных. Код всё равно обязателен:
           // passcode не анонсируется, без него PASE не стартует.

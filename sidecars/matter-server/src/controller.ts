@@ -322,6 +322,24 @@ export function createController(opts: ControllerOptions): MatterController {
             const timeoutMs = Math.min(Math.max(Number(p?.timeoutMs) || DISCOVERY_DEFAULT_MS, 1_000), DISCOVERY_MAX_MS);
 
             const found = new Map<string, CommissionableDevice>();
+
+            // Devices matter.js already knows about are reported immediately.
+            // A scan only forwards what arrives inside its window, so a device
+            // discovered by an earlier scan stayed invisible until it happened
+            // to re-announce — which is why the first scan came up empty and
+            // the second one found it.
+            for (const client of n.peers) {
+                if (isCommissioned(client)) continue;
+                const device = commissionableFrom(client);
+                if (device === undefined) continue;
+                commissionableByRef.set(device.ref, client);
+                found.set(device.ref, device);
+                emitter.emit("commissionableFound", device);
+            }
+            if (found.size > 0) {
+                log("info", "reporting already-known commissionable devices", { count: found.size });
+            }
+
             const discovery = n.peers.discover({ timeout: Millis(timeoutMs) });
 
             discovery.discovered.on((client: ClientNode) => {

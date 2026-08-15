@@ -89,6 +89,18 @@ func (s *DeviceService) Commission(ctx context.Context, transport domain.Transpo
 		return nil, errors.New("commissioned device not found in discovery")
 	}
 
+	// The caller's name and type win when it actually has them — the user may
+	// have typed a name, or the UI may know better than the device does. When
+	// it doesn't, use what the device reports about itself rather than storing
+	// a blank: an empty type leaves the UI with no controls at all, which is
+	// how a fully working lamp ended up as "управление не реализовано".
+	if deviceType == "" {
+		deviceType = discovered.Type
+	}
+	if name == "" {
+		name = discovered.Name
+	}
+
 	// Materialise the domain.Device.
 	d := &domain.Device{
 		ID:           domain.DeviceID(domain.NewID()),
