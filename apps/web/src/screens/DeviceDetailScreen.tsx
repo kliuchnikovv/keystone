@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Trash2 } from 'lucide-react';
@@ -6,6 +6,7 @@ import styles from './DeviceDetailScreen.module.css';
 import { CameraView } from '../components/CameraView/CameraView';
 import { ButtonActivity } from '../components/ButtonActivity/ButtonActivity';
 import { useDevicesStore, liveKey } from '../state/devicesStore';
+import { useDevices } from '../hooks/useDevices';
 import { useEventsStore } from '../state/eventsStore';
 import { Toggle } from '../components/Toggle/Toggle';
 import { BrightnessSlider } from '../components/BrightnessSlider/BrightnessSlider';
@@ -17,12 +18,47 @@ import { invokeAction, writeState, deleteDevice } from '../api/devices';
 import { kelvinTone, minutesAgo } from '../lib/format';
 import type { Device } from '../api/types';
 
+/** Сколько ждём список, прежде чем признать сервер недоступным. */
+const LOAD_GRACE_MS = 4000;
+
+/**
+ * useStalled сообщает, что ожидание затянулось. Нужен, потому что «загружаем»
+ * без конца — худшее из состояний: пользователь не понимает, сломано ли всё
+ * или просто медленно.
+ */
+function useStalled(waiting: boolean): boolean {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (!waiting) {
+      setStalled(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setStalled(true), LOAD_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [waiting]);
+  return stalled;
+}
+
 export function DeviceDetailScreen() {
   const { id: rawId } = useParams<{ id: string }>();
   const id = rawId ? decodeURIComponent(rawId) : '';
   const nav = useNavigate();
   const qc = useQueryClient();
 
+  // Экран может открыться первым — по ссылке, из закладки или после
+  // перезагрузки, — а не только переходом с домашнего. Тогда список устройств
+  // ещё никто не запрашивал, и без этого вызова экран навсегда оставался бы
+  // «устройство не найдено». react-query дедуплицирует по ключу, так что при
+  // переходе изнутри приложения второго запроса не будет.
+  // Состояние выводится из наличия данных и времени ожидания, а не из флагов
+  // react-query: isLoading гаснет в паузах между ретраями, failureCount не
+  // сбрасывается после удачного повтора, а до статуса error запрос при
+  // недоступном сервере не доходит вовсе. «Данные есть» и «ждём слишком долго»
+  // — признаки, которые видно снаружи и которые не зависят от версии
+  // библиотеки.
+  const devicesQuery = useDevices();
+  const loaded = devicesQuery.data !== undefined;
+  const stalled = useStalled(!loaded);
   const device = useDevicesStore((s) => (id ? s.devices.get(id) : undefined));
 
   if (!device) {
@@ -32,7 +68,32 @@ export function DeviceDetailScreen() {
           <ChevronLeft size={18} />
           <span>Дом</span>
         </button>
-        <EmptyState emoji="🔎" title="Устройство не найдено" body="Возможно, оно было удалено." />
+        {loaded ? (
+          <EmptyState emoji="🔎" title="Устройство не найдено" body="Возможно, оно было удалено." />
+        ) : stalled ? (
+          <EmptyState
+            emoji="📡"
+            title="Нет связи с keystone"
+            body="Проверь, что сервер запущен."
+            primary={
+              <Button
+                variant="primary"
+                size="md"
+                // Полная перезагрузка, а не refetch/invalidate: запрос,
+                // умерший на недоступном сервере, ни тем ни другим не
+                // оживает — проверено. Кнопка, которая молча ничего не делает,
+                // хуже её отсутствия, а перезагрузка сработает всегда.
+                onClick={() => window.location.reload()}
+              >
+                Повторить
+              </Button>
+            }
+          />
+        ) : (
+          // Список ещё едет. Говорить «не найдено» в этот момент — враньё:
+          // устройство может быть на месте.
+          <EmptyState emoji="⏳" title="Загружаем устройство" body="Секунду." />
+        )}
       </div>
     );
   }
