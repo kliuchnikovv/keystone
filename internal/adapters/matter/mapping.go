@@ -53,6 +53,8 @@ const (
 	ClusterWaterHeaterMode     = "WaterHeaterMode"                                 // 0x009E
 	ClusterEvseMode            = "EnergyEvseMode"                                  // 0x009D
 	ClusterTemperatureControl  = "TemperatureControl"                              // 0x0056
+	ClusterModeSelect          = "ModeSelect"                                      // 0x0050
+	ClusterValve               = "ValveConfigurationAndControl"                    // 0x0081
 
 	ClusterMediaPlayback = "MediaPlayback" // 0x0506
 
@@ -111,8 +113,13 @@ const (
 	AttrCurrentState = "CurrentState"
 
 	AttrCumulativeEnergyImported = "CumulativeEnergyImported"
-	AttrEvseState                = "State"
-	AttrEvseSupplyState          = "SupplyState"
+	AttrValveCurrentState        = "CurrentState"
+	AttrValveCurrentLevel        = "CurrentLevel"
+	AttrValveRemainingDuration   = "RemainingDuration"
+	AttrTemperatureSetpoint      = "TemperatureSetpoint"
+
+	AttrEvseState       = "State"
+	AttrEvseSupplyState = "SupplyState"
 
 	CmdOn                    = "On"
 	CmdOff                   = "Off"
@@ -150,6 +157,11 @@ const (
 
 	CmdEnableCharging = "EnableCharging"
 	CmdEvseDisable    = "Disable"
+
+	CmdValveOpen      = "Open"
+	CmdValveClose     = "Close"
+	CmdSetTemperature = "SetTemperature"
+	CmdChangeToMode   = "ChangeToMode"
 )
 
 // FeatureBinding tells the adapter how to translate one keystone (Feature,
@@ -273,6 +285,9 @@ var featureBindings = map[domain.FeatureKey]map[domain.StateKey][]FeatureBinding
 			{Cluster: ClusterRefrigeratorMode, Attribute: AttrCurrentMode},
 			{Cluster: ClusterWaterHeaterMode, Attribute: AttrCurrentMode},
 			{Cluster: ClusterEvseMode, Attribute: AttrCurrentMode},
+			// Generic last: a device with a specific mode cluster should use it,
+			// and ModeSelect is what everything else falls back to.
+			{Cluster: ClusterModeSelect, Attribute: AttrCurrentMode},
 		},
 	},
 	domain.FeatureRunState: {
@@ -292,6 +307,15 @@ var featureBindings = map[domain.FeatureKey]map[domain.StateKey][]FeatureBinding
 
 	domain.FeatureMedia: {
 		domain.StatePlayback: {{Cluster: ClusterMediaPlayback, Attribute: AttrCurrentState}},
+	},
+
+	domain.FeatureValve: {
+		domain.StateValveOpen:      {{Cluster: ClusterValve, Attribute: AttrValveCurrentState}},
+		domain.StateValveLevel:     {{Cluster: ClusterValve, Attribute: AttrValveCurrentLevel}},
+		domain.StateValveRemaining: {{Cluster: ClusterValve, Attribute: AttrValveRemainingDuration}},
+	},
+	domain.FeatureTempControl: {
+		domain.StateSetpoint: {{Cluster: ClusterTemperatureControl, Attribute: AttrTemperatureSetpoint}},
 	},
 
 	domain.FeatureEVSE: {
@@ -927,8 +951,23 @@ func featuresForCluster(cluster string) []domain.Feature {
 			Actions: []domain.ActionKey{domain.ActionSet},
 		}}
 
+	case ClusterValve:
+		return []domain.Feature{{
+			Key:    domain.FeatureValve,
+			States: []domain.StateKey{domain.StateValveOpen, domain.StateValveLevel, domain.StateValveRemaining},
+			Actions: []domain.ActionKey{
+				domain.ActionOpen, domain.ActionClose, domain.ActionSet,
+			},
+		}}
+	case ClusterTemperatureControl:
+		return []domain.Feature{{
+			Key:     domain.FeatureTempControl,
+			States:  []domain.StateKey{domain.StateSetpoint},
+			Actions: []domain.ActionKey{domain.ActionSet},
+		}}
+
 	case ClusterRvcRunMode, ClusterLaundryWasherMode, ClusterDishwasherMode,
-		ClusterRefrigeratorMode, ClusterWaterHeaterMode, ClusterEvseMode:
+		ClusterRefrigeratorMode, ClusterWaterHeaterMode, ClusterEvseMode, ClusterModeSelect:
 		return []domain.Feature{{
 			Key:     domain.FeatureMode,
 			States:  []domain.StateKey{domain.StateMode},
@@ -1083,6 +1122,9 @@ var matterEvents = map[string]map[string]domain.EventKey{
 	ClusterOccupancySensing: {
 		"OccupancyChanged": domain.EventMotionDetected,
 	},
+	ClusterValve: {
+		"ValveStateChanged": domain.EventValveChanged,
+	},
 }
 
 // eventFeatures says which feature owns each cluster's events, so a published
@@ -1093,6 +1135,7 @@ var eventFeatures = map[string]domain.FeatureKey{
 	ClusterRvcOperationalState: domain.FeatureRunState,
 	ClusterEnergyEvse:          domain.FeatureEVSE,
 	ClusterOccupancySensing:    domain.FeatureMotion,
+	ClusterValve:               domain.FeatureValve,
 }
 
 // EventForCluster resolves a Matter event to its keystone (feature, event)
@@ -1285,6 +1328,22 @@ func decodeAttributeAny(feature domain.FeatureKey, key domain.StateKey, v any) (
 		return asInt(v)
 	case feature == domain.FeatureMode && key == domain.StateMode:
 		return asInt(v)
+	case feature == domain.FeatureValve && key == domain.StateValveOpen:
+		state, err := enumValue(v, map[int]string{0: "closed", 1: "open", 2: "transitioning"})
+		if err != nil {
+			return nil, err
+		}
+		return state == "open", nil
+	case feature == domain.FeatureValve && key == domain.StateValveLevel:
+		return asInt(v)
+	case feature == domain.FeatureValve && key == domain.StateValveRemaining:
+		return asInt(v)
+	case feature == domain.FeatureTempControl && key == domain.StateSetpoint:
+		n, err := asInt(v)
+		if err != nil {
+			return nil, err
+		}
+		return CentiCelsius(n), nil
 
 	// --- media / EV ---
 	case feature == domain.FeatureMedia && key == domain.StatePlayback:
@@ -1557,7 +1616,71 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 		if action != domain.ActionSet {
 			return base, fmt.Errorf("matter: mode has no action %s", action)
 		}
-		return base, fmt.Errorf("matter: mode is an attribute — write %s instead", domain.StateMode)
+		n, err := asInt(params["mode"])
+		if err != nil {
+			return base, fmt.Errorf("matter: mode set: params.mode: %w", err)
+		}
+		// CurrentMode is read-only on every mode cluster; the change goes
+		// through ChangeToMode, which all of them share.
+		base.Cluster = pickCluster(clusters,
+			ClusterRvcRunMode, ClusterLaundryWasherMode, ClusterDishwasherMode,
+			ClusterRefrigeratorMode, ClusterWaterHeaterMode, ClusterEvseMode, ClusterModeSelect)
+		base.Command = CmdChangeToMode
+		base.Args = map[string]any{"newMode": n}
+		return base, nil
+
+	case domain.FeatureValve:
+		base.Cluster = ClusterValve
+		switch action {
+		case domain.ActionOpen:
+			base.Command = CmdValveOpen
+			args := map[string]any{}
+			// Both arguments are optional; passing them only when asked keeps
+			// simple on/off valves working.
+			if d, ok := params["duration_s"]; ok {
+				n, err := asInt(d)
+				if err != nil {
+					return base, fmt.Errorf("matter: valve open: params.duration_s: %w", err)
+				}
+				args["openDuration"] = n
+			}
+			if l, ok := params["level"]; ok {
+				n, err := asInt(l)
+				if err != nil {
+					return base, fmt.Errorf("matter: valve open: params.level: %w", err)
+				}
+				args["targetLevel"] = clampPercent(n)
+			}
+			if len(args) > 0 {
+				base.Args = args
+			}
+		case domain.ActionClose:
+			base.Command = CmdValveClose
+		case domain.ActionSet:
+			n, err := asInt(params["level"])
+			if err != nil {
+				return base, fmt.Errorf("matter: valve set: params.level: %w", err)
+			}
+			// A proportional valve is opened *to* a level.
+			base.Command = CmdValveOpen
+			base.Args = map[string]any{"targetLevel": clampPercent(n)}
+		default:
+			return base, fmt.Errorf("matter: valve has no action %s", action)
+		}
+		return base, nil
+
+	case domain.FeatureTempControl:
+		if action != domain.ActionSet {
+			return base, fmt.Errorf("matter: temp_control has no action %s", action)
+		}
+		f, err := asFloat(params["celsius"])
+		if err != nil {
+			return base, fmt.Errorf("matter: temp_control set: params.celsius: %w", err)
+		}
+		base.Cluster = ClusterTemperatureControl
+		base.Command = CmdSetTemperature
+		base.Args = map[string]any{"targetTemperature": int(f * 100)}
+		return base, nil
 
 	case domain.FeatureRunState:
 		// OperationalState and its RVC twin share command names; the endpoint's

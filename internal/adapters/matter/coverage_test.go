@@ -23,6 +23,10 @@ func TestBindingResolvesByEndpointClusters(t *testing.T) {
 			[]string{ClusterLaundryWasherMode}, ClusterLaundryWasherMode},
 		{"dishwasher mode", domain.FeatureMode, domain.StateMode,
 			[]string{ClusterDishwasherMode}, ClusterDishwasherMode},
+		{"generic mode falls back to ModeSelect", domain.FeatureMode, domain.StateMode,
+			[]string{ClusterModeSelect}, ClusterModeSelect},
+		{"specific mode cluster beats the generic one", domain.FeatureMode, domain.StateMode,
+			[]string{ClusterModeSelect, ClusterRvcRunMode}, ClusterRvcRunMode},
 		{"legacy plug power", domain.FeaturePowerMeter, domain.StatePowerNow,
 			[]string{ClusterElectricalMeas}, ClusterElectricalMeas},
 		{"matter 1.3 power", domain.FeaturePowerMeter, domain.StatePowerNow,
@@ -159,6 +163,24 @@ func TestCoverageByDeviceClass(t *testing.T) {
 			[]domain.FeatureKey{domain.FeatureEVSE, domain.FeaturePowerMeter},
 		},
 		{
+			"water valve", "WaterValve",
+			[]string{ClusterValve},
+			domain.DeviceTypeValve,
+			[]domain.FeatureKey{domain.FeatureValve},
+		},
+		{
+			"oven with a temperature dial", "Oven",
+			[]string{ClusterTemperatureControl, ClusterOperationalState},
+			domain.DeviceTypeAppliance,
+			[]domain.FeatureKey{domain.FeatureTempControl, domain.FeatureRunState},
+		},
+		{
+			"generic multi-mode device", "AirPurifier",
+			[]string{ClusterModeSelect, ClusterFanControl},
+			domain.DeviceTypeAirPurifier,
+			[]domain.FeatureKey{domain.FeatureMode, domain.FeatureFan},
+		},
+		{
 			"camera", "Camera",
 			[]string{ClusterCameraAvStream, ClusterCameraPTZ},
 			domain.DeviceTypeCamera,
@@ -263,6 +285,12 @@ func TestCommandsForControllableFeatures(t *testing.T) {
 		{domain.FeatureCamera, domain.ActionSnapshot, nil, nil, ClusterCameraAvStream, CmdCaptureSnapshot},
 		{domain.FeatureCamera, domain.ActionMove, map[string]any{"pan": 10}, nil, ClusterCameraPTZ, CmdMptzSetPosition},
 		{domain.FeatureChime, domain.ActionRing, nil, nil, ClusterChime, CmdPlayChimeSound},
+		{domain.FeatureValve, domain.ActionOpen, nil, nil, ClusterValve, CmdValveOpen},
+		{domain.FeatureValve, domain.ActionClose, nil, nil, ClusterValve, CmdValveClose},
+		{domain.FeatureValve, domain.ActionSet, map[string]any{"level": 50}, nil, ClusterValve, CmdValveOpen},
+		{domain.FeatureTempControl, domain.ActionSet, map[string]any{"celsius": 180.0}, nil, ClusterTemperatureControl, CmdSetTemperature},
+		{domain.FeatureMode, domain.ActionSet, map[string]any{"mode": 2}, []string{ClusterRvcRunMode}, ClusterRvcRunMode, CmdChangeToMode},
+		{domain.FeatureMode, domain.ActionSet, map[string]any{"mode": 1}, []string{ClusterModeSelect}, ClusterModeSelect, CmdChangeToMode},
 	}
 
 	for _, tc := range cases {

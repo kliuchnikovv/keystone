@@ -112,6 +112,38 @@ type CommissionableDiscoverer interface {
 	DiscoverCommissionable(ctx context.Context, window time.Duration) (<-chan CommissionableDevice, error)
 }
 
+// CameraSignal is one WebRTC signalling message from a camera.
+//
+// Matter carries only the handshake: the video itself flows over a WebRTC peer
+// connection between the camera and whoever is watching. Nothing in keystone
+// ever sees a frame, which is what keeps a media stack out of the engine.
+type CameraSignal struct {
+	Kind       string // answer | offer | ice | end
+	SessionID  int
+	SDP        string
+	Candidates []string
+	Reason     string
+}
+
+// CameraStreamer is implemented by transports that can broker a live video
+// session. Like CommissionableDiscoverer it is optional: most transports have
+// no such concept.
+type CameraStreamer interface {
+	// StartStream passes the viewer's SDP offer to the camera and returns the
+	// session id the camera allocated.
+	StartStream(ctx context.Context, ref domain.TransportRef, sdp string) (int, error)
+
+	// AddCandidates forwards the viewer's ICE candidates to the camera.
+	AddCandidates(ctx context.Context, sessionID int, candidates []string) error
+
+	// StopStream ends a session.
+	StopStream(ctx context.Context, sessionID int) error
+
+	// Signals streams what the camera sends back. The channel is closed when
+	// ctx is done.
+	Signals(ctx context.Context) (<-chan CameraSignal, error)
+}
+
 // TransportEventKind classifies what happened in a TransportEvent.
 type TransportEventKind string
 

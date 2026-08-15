@@ -25,6 +25,11 @@ import type {
     CommissioningProgress,
     DeviceEvent,
     DiscoverCommissionableParams,
+    WebRtcSignal,
+    WebrtcIceParams,
+    WebrtcOfferParams,
+    WebrtcOfferResult,
+    WebrtcStopParams,
     InvokeParams,
     Node,
     NodeLifecycle,
@@ -34,6 +39,13 @@ import type {
 import { RpcError } from "./protocol.js";
 import { ControllerCommissioningFlow } from "@matter/protocol";
 import { ChangeNotificationService } from "@matter/node";
+import {
+    bindSignals,
+    ProviderCluster,
+    ProviderCommands,
+    SessionRegistry,
+    WebRtcRequestorBehavior,
+} from "./webrtc.js";
 import { ManualPairingCodeCodec, QrPairingCodeCodec } from "@matter/types";
 import { Millis } from "@matter/general";
 
@@ -53,6 +65,12 @@ export interface MatterController {
     // a UI can fill its list while the scan is still running.
     discoverCommissionable(p: DiscoverCommissionableParams): Promise<CommissionableDevice[]>;
 
+    // WebRTC signalling for cameras. The sidecar brokers the handshake; the
+    // media never passes through it — see webrtc.ts.
+    webrtcOffer(p: WebrtcOfferParams): Promise<WebrtcOfferResult>;
+    webrtcIce(p: WebrtcIceParams): Promise<void>;
+    webrtcStop(p: WebrtcStopParams): Promise<void>;
+
     // publishSnapshot re-emits the current cached state of every known cluster
     // as `attributeChanged` events. StateStream only delivers *changes* for
     // peers, so without this a freshly connected (or reconnected) keystone has
@@ -64,6 +82,7 @@ export interface MatterController {
     on(event: "commissioningProgress", listener: (v: CommissioningProgress) => void): this;
     on(event: "commissionableFound", listener: (v: CommissionableDevice) => void): this;
     on(event: "deviceEvent", listener: (v: DeviceEvent) => void): this;
+    on(event: "webrtcSignal", listener: (v: WebRtcSignal) => void): this;
 }
 
 export type ControllerLog = (
@@ -100,10 +119,16 @@ export function createController(opts: ControllerOptions): MatterController {
 
             // ServerNode.RootEndpoint bakes in ControllerBehavior in 0.15 —
             // no explicit `.with(ControllerBehavior)` needed.
+            // The camera calls Answer/IceCandidates/End on *us*, so the
+            // controller has to host the requestor cluster as a server.
+            // Without it a camera has nowhere to send its half of the
+            // handshake and video never starts.
             node = await ServerNode.create({
                 id: "keystone-controller",
                 environment: Environment.default,
+                type: ServerNode.RootEndpoint.with(WebRtcRequestorBehavior),
             });
+            bindSignals(emitter, webrtcSessions);
 
             node.peers.added.on((client: ClientNode) => {
                 emitter.emit("nodeOnline", { nodeId: nodeIdOf(client) });
@@ -321,6 +346,65 @@ export function createController(opts: ControllerOptions): MatterController {
             return [...found.values()];
         },
 
+        async webrtcOffer(p: WebrtcOfferParams): Promise<WebrtcOfferResult> {
+            const n = assertStarted(node);
+            const target = endpointFor(clientFor(n, p.nodeId), p.endpointId);
+
+            // ProvideOffer hands the viewer's SDP to the camera and gets back
+            // the session id everything else is keyed by.
+            const args: Record<string, unknown> = {
+                webRtcSessionId: null, // null asks the camera to allocate one
+                sdp: p.sdp,
+                streamUsage: 1, // LiveView
+                originatingEndpointId: 0,
+            };
+            if (p.videoStreamId !== undefined) args.videoStreamId = p.videoStreamId;
+            if (p.audioStreamId !== undefined) args.audioStreamId = p.audioStreamId;
+
+            const res = (await invokeOn(target, ProviderCluster, ProviderCommands.ProvideOffer, args)) as {
+                webRtcSessionId?: number;
+                videoStreamId?: number;
+                audioStreamId?: number;
+            };
+            const sessionId = res?.webRtcSessionId;
+            if (typeof sessionId !== "number") {
+                throw new RpcError("internal", "matter: camera did not return a webrtc session id");
+            }
+            webrtcSessions.remember(sessionId, p.nodeId, p.endpointId);
+            log("info", "webrtc session opened", { nodeId: p.nodeId, sessionId });
+            return {
+                sessionId,
+                videoStreamId: res.videoStreamId,
+                audioStreamId: res.audioStreamId,
+            };
+        },
+
+        async webrtcIce(p: WebrtcIceParams): Promise<void> {
+            const n = assertStarted(node);
+            const { nodeId, endpointId } = webrtcSessions.lookup(p.sessionId);
+            const target = endpointFor(clientFor(n, nodeId), endpointId);
+            await invokeOn(target, ProviderCluster, ProviderCommands.ProvideIceCandidates, {
+                webRtcSessionId: p.sessionId,
+                iceCandidates: p.candidates.map((candidate) => ({ candidate })),
+            });
+        },
+
+        async webrtcStop(p: WebrtcStopParams): Promise<void> {
+            const n = assertStarted(node);
+            const { nodeId, endpointId } = webrtcSessions.lookup(p.sessionId);
+            const target = endpointFor(clientFor(n, nodeId), endpointId);
+            try {
+                await invokeOn(target, ProviderCluster, ProviderCommands.EndSession, {
+                    webRtcSessionId: p.sessionId,
+                    reason: 2, // UserHangup
+                });
+            } finally {
+                // Forget locally even if the camera is unreachable — the viewer
+                // has gone either way.
+                webrtcSessions.forget(p.sessionId);
+            }
+        },
+
         publishSnapshot(nodeId?: string): void {
             const n = assertStarted(node);
             for (const client of n.peers) {
@@ -394,6 +478,31 @@ function nodeOfEndpoint(endpoint: unknown): unknown {
         current = owner as { owner?: unknown };
     }
     return current;
+}
+
+// webrtcSessions maps a session id back to the camera that owns it, so ICE and
+// teardown reach the right device.
+const webrtcSessions = new SessionRegistry();
+
+// invokeOn runs a cluster command on an endpoint. Shared by the WebRTC calls
+// and the generic invokeCommand RPC.
+async function invokeOn(
+    target: unknown,
+    cluster: string,
+    command: string,
+    args: Record<string, unknown>,
+): Promise<unknown> {
+    const commands = (target as {
+        commandsOf(id: string): Record<string, (a?: unknown) => Promise<unknown>>;
+    }).commandsOf(cluster);
+    const fn = commands?.[command];
+    if (typeof fn !== "function") {
+        throw new RpcError(
+            "unsupported",
+            `matter: command ${cluster}.${command} not available on this device`,
+        );
+    }
+    return await fn(args);
 }
 
 // --- commissionable discovery ---

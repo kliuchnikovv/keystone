@@ -28,6 +28,12 @@ const (
 	// MethodDiscoverCommissionable scans for devices advertising themselves as
 	// ready to pair. Blocks for the requested window.
 	MethodDiscoverCommissionable = "discoverCommissionable"
+
+	// Camera WebRTC signalling. Matter carries the handshake only; media flows
+	// directly between the camera and the viewer.
+	MethodWebrtcOffer = "webrtcOffer"
+	MethodWebrtcIce   = "webrtcIce"
+	MethodWebrtcStop  = "webrtcStop"
 )
 
 // Server-pushed event names.
@@ -38,6 +44,7 @@ const (
 	EventCommissioningStage  = "commissioningProgress"
 	EventCommissionableFound = "commissionableFound"
 	EventDeviceEvent         = "deviceEvent"
+	EventWebrtcSignal        = "webrtcSignal"
 )
 
 // Request is the client-to-server frame.
@@ -336,6 +343,41 @@ type DeviceEvent struct {
 	Cluster    string `json:"cluster"`
 	Event      string `json:"event"`
 	Data       any    `json:"data,omitempty"`
+}
+
+// WebrtcOfferParams hands a viewer's SDP offer to a camera.
+type WebrtcOfferParams struct {
+	NodeID     string `json:"nodeId"`
+	EndpointID int    `json:"endpointId"`
+	SDP        string `json:"sdp"`
+}
+
+// WebrtcOfferResult identifies the session the camera opened.
+type WebrtcOfferResult struct {
+	SessionID     int `json:"sessionId"`
+	VideoStreamID int `json:"videoStreamId,omitempty"`
+	AudioStreamID int `json:"audioStreamId,omitempty"`
+}
+
+// WebrtcIceParams forwards viewer ICE candidates to the camera.
+type WebrtcIceParams struct {
+	SessionID  int      `json:"sessionId"`
+	Candidates []string `json:"candidates"`
+}
+
+// WebrtcStopParams tears a session down.
+type WebrtcStopParams struct {
+	SessionID int `json:"sessionId"`
+}
+
+// WebrtcSignal is what the camera sends back: its answer, its ICE candidates,
+// or the end of the session.
+type WebrtcSignal struct {
+	Kind       string   `json:"kind"` // offer | answer | ice | end
+	SessionID  int      `json:"sessionId"`
+	SDP        string   `json:"sdp,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 }
 
 // NodeLifecycle is the payload of nodeOnline / nodeOffline.

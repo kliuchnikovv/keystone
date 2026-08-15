@@ -157,6 +157,28 @@ func (s *DeviceService) DiscoverCommissionable(
 	return scanner.DiscoverCommissionable(ctx, window)
 }
 
+// CameraStreamer returns the transport behind a device if it can broker a live
+// video session. The device id is resolved here so callers never have to know
+// which transport a camera is on.
+func (s *DeviceService) CameraStreamer(id domain.DeviceID) (ports.CameraStreamer, *domain.Device, error) {
+	d, err := s.registry.Get(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	adapter, ok := s.adapters[d.Transport]
+	if !ok {
+		return nil, nil, fmt.Errorf("no adapter registered for transport %q", d.Transport)
+	}
+	streamer, ok := adapter.(ports.CameraStreamer)
+	if !ok {
+		return nil, nil, fmt.Errorf("transport %q cannot stream video", d.Transport)
+	}
+	if !d.HasFeature(domain.FeatureCamera) {
+		return nil, nil, fmt.Errorf("device %s is not a camera", id)
+	}
+	return streamer, d, nil
+}
+
 // SyncFromAdapters walks every registered adapter, calls Discover, and
 // registers any peer the adapter reports but the registry does not know
 // about yet. Intended to run once at boot so a matter.js sidecar with

@@ -44,6 +44,9 @@ export const Methods = {
     RemoveNode: "removeNode",
     Subscribe: "subscribe",
     DiscoverCommissionable: "discoverCommissionable",
+    WebrtcOffer: "webrtcOffer",
+    WebrtcIce: "webrtcIce",
+    WebrtcStop: "webrtcStop",
 } as const;
 
 // --- event names ---
@@ -54,6 +57,7 @@ export const Events = {
     CommissioningProgress: "commissioningProgress",
     CommissionableFound: "commissionableFound",
     DeviceEvent: "deviceEvent",
+    WebrtcSignal: "webrtcSignal",
 } as const;
 
 // --- method payloads ---
@@ -192,6 +196,42 @@ export interface SubscribeResult {
      * instead — the events follow this response's own frame order.
      */
     gap: boolean;
+}
+
+/**
+ * Signalling relayed from a camera. Matter carries only this handshake — the
+ * video itself flows over a WebRTC peer connection between the camera and
+ * whoever holds the browser session, never through this sidecar.
+ */
+export type WebRtcSignal =
+    | { kind: "offer"; sessionId: number; sdp: string }
+    | { kind: "answer"; sessionId: number; sdp: string }
+    | { kind: "ice"; sessionId: number; candidates: string[] }
+    | { kind: "end"; sessionId: number; reason?: string };
+
+export interface WebrtcOfferParams {
+    nodeId: string;
+    endpointId: number;
+    /** SDP offer produced by the viewer's RTCPeerConnection. */
+    sdp: string;
+    /** Existing stream ids to reuse; omit to let the camera allocate. */
+    videoStreamId?: number;
+    audioStreamId?: number;
+}
+
+export interface WebrtcOfferResult {
+    sessionId: number;
+    videoStreamId?: number;
+    audioStreamId?: number;
+}
+
+export interface WebrtcIceParams {
+    sessionId: number;
+    candidates: string[];
+}
+
+export interface WebrtcStopParams {
+    sessionId: number;
 }
 
 export interface CommissioningProgress {

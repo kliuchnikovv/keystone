@@ -99,6 +99,9 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
         [Methods.InvokeCommand]: (p) => opts.controller.invokeCommand(p as never),
         [Methods.RemoveNode]: (p) => opts.controller.removeNode(p as never).then(() => null),
         [Methods.DiscoverCommissionable]: (p) => opts.controller.discoverCommissionable((p ?? {}) as never),
+        [Methods.WebrtcOffer]: (p) => opts.controller.webrtcOffer(p as never),
+        [Methods.WebrtcIce]: (p) => opts.controller.webrtcIce(p as never).then(() => null),
+        [Methods.WebrtcStop]: (p) => opts.controller.webrtcStop(p as never).then(() => null),
     };
 
     wss.on("connection", (ws) => {
@@ -171,6 +174,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
     opts.controller.on(Events.CommissioningProgress, forward(Events.CommissioningProgress));
     opts.controller.on(Events.CommissionableFound, forward(Events.CommissionableFound));
     opts.controller.on(Events.DeviceEvent, forward(Events.DeviceEvent));
+    opts.controller.on(Events.WebrtcSignal, forward(Events.WebrtcSignal));
 
     opts.log("info", "ws server listening", { host: opts.host, port: opts.port });
 

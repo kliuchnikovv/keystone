@@ -52,6 +52,10 @@ type Adapter struct {
 	foundMu sync.Mutex
 	found   chan<- ports.CommissionableDevice
 
+	// signalsMu guards the set of viewers waiting on camera WebRTC signalling.
+	signalsMu sync.RWMutex
+	signals   map[chan ports.CameraSignal]struct{}
+
 	// lastSeq is the highest sidecar event sequence we have processed. Sent
 	// back on resubscribe so the sidecar can replay exactly what we missed.
 	lastSeq atomic.Int64
@@ -78,11 +82,12 @@ func New(log *slog.Logger, cfg Config, client Client) *Adapter {
 		log = slog.Default()
 	}
 	return &Adapter{
-		log:    log,
-		cfg:    cfg,
-		client: client,
-		subs:   make(map[chan ports.TransportEvent]struct{}),
-		routes: make(map[domain.TransportRef]nodeRoutes),
+		log:     log,
+		cfg:     cfg,
+		client:  client,
+		subs:    make(map[chan ports.TransportEvent]struct{}),
+		routes:  make(map[domain.TransportRef]nodeRoutes),
+		signals: make(map[chan ports.CameraSignal]struct{}),
 	}
 }
 
@@ -458,6 +463,10 @@ func (a *Adapter) pumpEvents(ctx context.Context) {
 				a.reportCommissionable(ev)
 				continue
 			}
+			if ev.Name == EventWebrtcSignal {
+				a.broadcastSignal(ev)
+				continue
+			}
 			te, ok := transportEventFrom(ev, a.log)
 			if !ok {
 				continue
@@ -698,5 +707,98 @@ func transportEventFrom(ev Event, log *slog.Logger) (ports.TransportEvent, bool)
 		return ports.TransportEvent{Ref: domain.TransportRef(n.NodeID), Kind: ports.TransportEventOffline}, true
 	default:
 		return ports.TransportEvent{}, false
+	}
+}
+
+// --- camera streaming (ports.CameraStreamer) ---
+
+// StartStream implements ports.CameraStreamer. The SDP comes from the viewer's
+// browser; keystone only relays it. Nothing here touches media.
+func (a *Adapter) StartStream(ctx context.Context, ref domain.TransportRef, sdp string) (int, error) {
+	if !a.connected.Load() {
+		return 0, ErrSidecarUnavailable
+	}
+	endpoint := a.endpointFor(ctx, ref, domain.FeatureCamera)
+	var res WebrtcOfferResult
+	params := WebrtcOfferParams{NodeID: string(ref), EndpointID: endpoint, SDP: sdp}
+	if err := a.client.Call(ctx, MethodWebrtcOffer, params, &res); err != nil {
+		return 0, fmt.Errorf("matter: webrtc offer: %w", err)
+	}
+	a.log.Info("camera stream opened", "ref", ref, "session", res.SessionID)
+	return res.SessionID, nil
+}
+
+// AddCandidates implements ports.CameraStreamer.
+func (a *Adapter) AddCandidates(ctx context.Context, sessionID int, candidates []string) error {
+	if !a.connected.Load() {
+		return ErrSidecarUnavailable
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	params := WebrtcIceParams{SessionID: sessionID, Candidates: candidates}
+	if err := a.client.Call(ctx, MethodWebrtcIce, params, nil); err != nil {
+		return fmt.Errorf("matter: webrtc ice: %w", err)
+	}
+	return nil
+}
+
+// StopStream implements ports.CameraStreamer.
+func (a *Adapter) StopStream(ctx context.Context, sessionID int) error {
+	if !a.connected.Load() {
+		return ErrSidecarUnavailable
+	}
+	if err := a.client.Call(ctx, MethodWebrtcStop, WebrtcStopParams{SessionID: sessionID}, nil); err != nil {
+		return fmt.Errorf("matter: webrtc stop: %w", err)
+	}
+	return nil
+}
+
+// Signals implements ports.CameraStreamer. Every subscriber sees every signal;
+// callers filter by session id, which is cheap and avoids a registry that would
+// have to be cleaned up when a viewer disappears mid-handshake.
+func (a *Adapter) Signals(ctx context.Context) (<-chan ports.CameraSignal, error) {
+	ch := make(chan ports.CameraSignal, 16)
+
+	a.signalsMu.Lock()
+	a.signals[ch] = struct{}{}
+	a.signalsMu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		a.signalsMu.Lock()
+		if _, ok := a.signals[ch]; ok {
+			delete(a.signals, ch)
+			close(ch)
+		}
+		a.signalsMu.Unlock()
+	}()
+	return ch, nil
+}
+
+// broadcastSignal fans one camera signal out to every viewer.
+func (a *Adapter) broadcastSignal(ev Event) {
+	var sig WebrtcSignal
+	if err := json.Unmarshal(ev.Data, &sig); err != nil {
+		a.log.Warn("matter: bad webrtcSignal payload", "err", err)
+		return
+	}
+	out := ports.CameraSignal{
+		Kind:       sig.Kind,
+		SessionID:  sig.SessionID,
+		SDP:        sig.SDP,
+		Candidates: sig.Candidates,
+		Reason:     sig.Reason,
+	}
+	a.signalsMu.RLock()
+	defer a.signalsMu.RUnlock()
+	for ch := range a.signals {
+		select {
+		case ch <- out:
+		default:
+			// Dropping a signalling message breaks the handshake, so this is a
+			// warning rather than a debug line.
+			a.log.Warn("camera signal dropped, viewer too slow", "session", sig.SessionID, "kind", sig.Kind)
+		}
 	}
 }

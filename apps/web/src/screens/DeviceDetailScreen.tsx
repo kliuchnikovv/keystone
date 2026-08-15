@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Trash2 } from 'lucide-react';
 import styles from './DeviceDetailScreen.module.css';
+import { CameraView } from '../components/CameraView/CameraView';
 import { useDevicesStore, liveKey } from '../state/devicesStore';
 import { useEventsStore } from '../state/eventsStore';
 import { Toggle } from '../components/Toggle/Toggle';
@@ -125,6 +126,16 @@ function DeviceMainControl({ device }: { device: Device }) {
     void writeState(device.id, { feature: 'color_temp', key: 'kelvin', value: v }).catch(
       console.warn,
     );
+
+  // Камера — своя раскладка: видео занимает верх экрана, остальные фичи
+  // (звонок, PTZ) идут под ним.
+  if (hasFeature(device, 'camera')) {
+    return (
+      <section className={styles.main}>
+        <CameraView deviceId={device.id} name={device.name} />
+      </section>
+    );
+  }
 
   if (device.type === 'light') {
     return (

@@ -64,6 +64,13 @@ const (
 
 	// EV charging.
 	FeatureEVSE FeatureKey = "evse"
+
+	// Water valves and irrigation.
+	FeatureValve FeatureKey = "valve"
+
+	// Target temperature of an appliance compartment (oven, fridge, kettle) —
+	// distinct from a thermostat, which regulates a room.
+	FeatureTempControl FeatureKey = "temp_control"
 )
 
 // StateKey identifies a readable attribute within a Feature.
@@ -128,6 +135,14 @@ const (
 	// EV charging.
 	StateEVSEState  StateKey = "evse_state"  // plug/charge state
 	StateEVSESupply StateKey = "evse_supply" // supply enable state
+
+	// Valves.
+	StateValveOpen      StateKey = "open"      // bool, current state
+	StateValveLevel     StateKey = "level"     // 0..100 for proportional valves
+	StateValveRemaining StateKey = "remaining" // seconds left before auto-close
+
+	// Appliance compartment temperature.
+	StateSetpoint StateKey = "setpoint" // float32 °C
 )
 
 // ActionKey identifies an imperative operation within a Feature.
@@ -166,6 +181,8 @@ const (
 
 	// Self-test (smoke/CO alarms).
 	ActionSelfTest ActionKey = "self_test"
+
+	// Valves reuse open/close/set above; nothing extra needed.
 )
 
 // EventKey identifies an emitted event. Distinct from state changes — e.g. a
@@ -192,4 +209,7 @@ const (
 	// EV.
 	EventEVConnected    EventKey = "ev_connected"
 	EventEVDisconnected EventKey = "ev_disconnected"
+
+	// Valves.
+	EventValveChanged EventKey = "valve_changed"
 )

@@ -190,6 +190,9 @@ func main() {
 	mux.HandleFunc("POST /devices/commission", handleCommission(devSvc, persistOnAdd))
 	mux.HandleFunc("POST /devices/sync", handleSyncFromAdapters(devSvc, persistOnAdd))
 	mux.HandleFunc("GET /discover", handleDiscoverCommissionable(devSvc))
+	mux.HandleFunc("POST /devices/{id}/camera/session", handleCameraSession(devSvc))
+	mux.HandleFunc("POST /devices/{id}/camera/ice", handleCameraICE(devSvc))
+	mux.HandleFunc("POST /devices/{id}/camera/stop", handleCameraStop(devSvc))
 	mux.HandleFunc("GET /devices/{id}", handleGetDevice(devSvc))
 	mux.HandleFunc("DELETE /devices/{id}", handleDeleteDevice(devSvc, repo))
 	mux.HandleFunc("POST /devices/{id}/actions", handleInvokeAction(devSvc))
@@ -518,6 +521,157 @@ func handleDiscoverCommissionable(svc *service.DeviceService) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// handleCameraSession opens a WebRTC session with a camera and then streams the
+// camera's side of the handshake back as NDJSON.
+//
+// Only signalling passes through keystone. The video itself flows directly from
+// the camera to the browser's RTCPeerConnection — both are on the same LAN,
+// which is the case ICE is best at, and it keeps a media stack out of the
+// engine entirely.
+func handleCameraSession(svc *service.DeviceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := domain.DeviceID(r.PathValue("id"))
+		var req struct {
+			SDP string `json:"sdp"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SDP == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "sdp offer is required"})
+			return
+		}
+
+		streamer, _, err := svc.CameraStreamer(id)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+
+		// Subscribe before offering: the camera may answer immediately, and a
+		// late subscription would miss it.
+		ctx := r.Context()
+		signals, err := streamer.Signals(ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+
+		session, err := streamer.StartStream(ctx, deviceRef(svc, id), req.SDP)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		flusher, _ := w.(http.Flusher)
+		enc := json.NewEncoder(w)
+		emit := func(v any) bool {
+			if err := enc.Encode(v); err != nil {
+				return false
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return true
+		}
+
+		if !emit(map[string]any{"kind": "session", "session_id": session}) {
+			return
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				// The viewer navigated away; tell the camera so it stops
+				// encoding for nobody.
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = streamer.StopStream(stopCtx, session)
+				cancel()
+				return
+			case sig, ok := <-signals:
+				if !ok {
+					return
+				}
+				if sig.SessionID != session {
+					continue // another viewer's session
+				}
+				frame := map[string]any{"kind": sig.Kind, "session_id": sig.SessionID}
+				if sig.SDP != "" {
+					frame["sdp"] = sig.SDP
+				}
+				if len(sig.Candidates) > 0 {
+					frame["candidates"] = sig.Candidates
+				}
+				if sig.Reason != "" {
+					frame["reason"] = sig.Reason
+				}
+				if !emit(frame) || sig.Kind == "end" {
+					return
+				}
+			}
+		}
+	}
+}
+
+func handleCameraICE(svc *service.DeviceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := domain.DeviceID(r.PathValue("id"))
+		var req struct {
+			SessionID  int      `json:"session_id"`
+			Candidates []string `json:"candidates"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		streamer, _, err := svc.CameraStreamer(id)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := streamer.AddCandidates(ctx, req.SessionID, req.Candidates); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func handleCameraStop(svc *service.DeviceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := domain.DeviceID(r.PathValue("id"))
+		var req struct {
+			SessionID int `json:"session_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		streamer, _, err := svc.CameraStreamer(id)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := streamer.StopStream(ctx, req.SessionID); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// deviceRef resolves a device id to its transport ref; the camera handlers have
+// already validated the device, so a miss here is impossible in practice.
+func deviceRef(svc *service.DeviceService, id domain.DeviceID) domain.TransportRef {
+	if d, err := svc.Get(id); err == nil {
+		return d.TransportRef
+	}
+	return ""
 }
 
 func handleSyncFromAdapters(svc *service.DeviceService, persist func(*domain.Device)) http.HandlerFunc {
