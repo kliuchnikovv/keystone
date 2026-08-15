@@ -28,6 +28,19 @@ const (
 	DeviceTypeCover       DeviceType = "cover"
 	DeviceTypeLock        DeviceType = "lock"
 	DeviceTypeMediaPlayer DeviceType = "media_player"
+
+	DeviceTypeFan         DeviceType = "fan"
+	DeviceTypeAirPurifier DeviceType = "air_purifier"
+	DeviceTypeButton      DeviceType = "button"
+	DeviceTypeAlarm       DeviceType = "alarm"     // smoke / CO detectors
+	DeviceTypeAppliance   DeviceType = "appliance" // washer, dishwasher, oven, fridge
+	DeviceTypeVacuum      DeviceType = "vacuum"
+	DeviceTypeCamera      DeviceType = "camera"
+	DeviceTypeDoorbell    DeviceType = "doorbell"
+	DeviceTypeEVCharger   DeviceType = "ev_charger"
+	DeviceTypeWaterHeater DeviceType = "water_heater"
+	DeviceTypeValve       DeviceType = "valve"
+	DeviceTypeEnergyMeter DeviceType = "energy_meter"
 )
 
 // TransportKind identifies the wire protocol / integration source of a device.

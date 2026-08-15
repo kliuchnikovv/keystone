@@ -37,6 +37,7 @@ const (
 	EventNodeOffline         = "nodeOffline"
 	EventCommissioningStage  = "commissioningProgress"
 	EventCommissionableFound = "commissionableFound"
+	EventDeviceEvent         = "deviceEvent"
 )
 
 // Request is the client-to-server frame.
@@ -325,6 +326,16 @@ type AttributeChanged struct {
 	Cluster    string `json:"cluster"`
 	Attribute  string `json:"attribute"`
 	Value      any    `json:"value"`
+}
+
+// DeviceEvent is the payload of the deviceEvent server event: a Matter event
+// rather than an attribute change (button press, alarm, cycle completion).
+type DeviceEvent struct {
+	NodeID     string `json:"nodeId"`
+	EndpointID int    `json:"endpointId"`
+	Cluster    string `json:"cluster"`
+	Event      string `json:"event"`
+	Data       any    `json:"data,omitempty"`
 }
 
 // NodeLifecycle is the payload of nodeOnline / nodeOffline.

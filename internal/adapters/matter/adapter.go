@@ -59,7 +59,7 @@ type Adapter struct {
 	// routesMu guards routes: per-node, which endpoint each Feature lives on.
 	// Built during Discover and refreshed on demand; see endpointFor.
 	routesMu sync.RWMutex
-	routes   map[domain.TransportRef]featureRoutes
+	routes   map[domain.TransportRef]nodeRoutes
 
 	// cancelIngress stops the goroutines that pump client.Events() into
 	// subscribers and retry connections. Set on Start, called on Stop.
@@ -82,7 +82,7 @@ func New(log *slog.Logger, cfg Config, client Client) *Adapter {
 		cfg:    cfg,
 		client: client,
 		subs:   make(map[chan ports.TransportEvent]struct{}),
-		routes: make(map[domain.TransportRef]featureRoutes),
+		routes: make(map[domain.TransportRef]nodeRoutes),
 	}
 }
 
@@ -191,20 +191,39 @@ func (a *Adapter) Discover(ctx context.Context) (<-chan ports.DiscoveredDevice, 
 	out := make(chan ports.DiscoveredDevice, len(nodes))
 	for _, n := range nodes {
 		disc, routes := nodeToDiscovered(n)
-		a.storeRoutes(disc.TransportRef, routes)
+		a.storeRoutes(disc.TransportRef, nodeRoutes{features: routes, clusters: clustersFromNode(n)})
 		out <- disc
 	}
 	close(out)
 	return out, nil
 }
 
-func (a *Adapter) storeRoutes(ref domain.TransportRef, routes featureRoutes) {
-	if len(routes) == 0 {
+func (a *Adapter) storeRoutes(ref domain.TransportRef, routes nodeRoutes) {
+	if len(routes.features) == 0 {
 		return
 	}
 	a.routesMu.Lock()
 	a.routes[ref] = routes
 	a.routesMu.Unlock()
+}
+
+// clustersOn reports the clusters the node exposes on one endpoint. Empty when
+// the layout is unknown, which BindingFor treats as "use the first candidate".
+func (a *Adapter) clustersOn(ref domain.TransportRef, endpoint int) []string {
+	a.routesMu.RLock()
+	defer a.routesMu.RUnlock()
+	return a.routes[ref].clusters[endpoint]
+}
+
+// bindingFor resolves the Matter address for a (feature, state) pair on the
+// endpoint that feature actually lives on.
+func (a *Adapter) bindingFor(ctx context.Context, ref domain.TransportRef, feature domain.FeatureKey, key domain.StateKey) (FeatureBinding, int, error) {
+	endpoint := a.endpointFor(ctx, ref, feature)
+	binding, err := BindingFor(feature, key, a.clustersOn(ref, endpoint))
+	if err != nil {
+		return FeatureBinding{}, endpoint, err
+	}
+	return binding, endpoint, nil
 }
 
 // endpointFor resolves which endpoint a feature lives on for a given node.
@@ -232,7 +251,7 @@ func (a *Adapter) endpointFor(ctx context.Context, ref domain.TransportRef, feat
 func (a *Adapter) lookupRoute(ref domain.TransportRef, feature domain.FeatureKey) (int, bool) {
 	a.routesMu.RLock()
 	defer a.routesMu.RUnlock()
-	ep, ok := a.routes[ref][feature]
+	ep, ok := a.routes[ref].features[feature]
 	return ep, ok
 }
 
@@ -245,7 +264,7 @@ func (a *Adapter) refreshRoutes(ctx context.Context) error {
 	}
 	for _, n := range nodes {
 		_, routes := featuresFromNode(n)
-		a.storeRoutes(domain.TransportRef(n.NodeID), routes)
+		a.storeRoutes(domain.TransportRef(n.NodeID), nodeRoutes{features: routes, clusters: clustersFromNode(n)})
 	}
 	return nil
 }
@@ -294,13 +313,13 @@ func (a *Adapter) ReadState(ctx context.Context, ref domain.TransportRef, featur
 	if !a.connected.Load() {
 		return nil, ErrSidecarUnavailable
 	}
-	binding, err := BindingFor(feature, key)
+	binding, endpoint, err := a.bindingFor(ctx, ref, feature, key)
 	if err != nil {
 		return nil, err
 	}
 	params := AttrRef{
 		NodeID:     string(ref),
-		EndpointID: a.endpointFor(ctx, ref, feature),
+		EndpointID: endpoint,
 		Cluster:    binding.Cluster,
 		Attribute:  binding.Attribute,
 	}
@@ -316,7 +335,7 @@ func (a *Adapter) WriteState(ctx context.Context, ref domain.TransportRef, featu
 	if !a.connected.Load() {
 		return ErrSidecarUnavailable
 	}
-	binding, err := BindingFor(feature, key)
+	binding, endpoint, err := a.bindingFor(ctx, ref, feature, key)
 	if err != nil {
 		return err
 	}
@@ -327,7 +346,7 @@ func (a *Adapter) WriteState(ctx context.Context, ref domain.TransportRef, featu
 	params := WriteAttrParams{
 		AttrRef: AttrRef{
 			NodeID:     string(ref),
-			EndpointID: a.endpointFor(ctx, ref, feature),
+			EndpointID: endpoint,
 			Cluster:    binding.Cluster,
 			Attribute:  binding.Attribute,
 		},
@@ -345,7 +364,8 @@ func (a *Adapter) InvokeAction(ctx context.Context, ref domain.TransportRef, fea
 	if !a.connected.Load() {
 		return ErrSidecarUnavailable
 	}
-	invoke, err := actionToInvoke(ref, a.endpointFor(ctx, ref, feature), feature, action, params)
+	endpoint := a.endpointFor(ctx, ref, feature)
+	invoke, err := actionToInvoke(ref, endpoint, a.clustersOn(ref, endpoint), feature, action, params)
 	if err != nil {
 		return err
 	}
@@ -646,6 +666,23 @@ func transportEventFrom(ev Event, log *slog.Logger) (ports.TransportEvent, bool)
 			Feature: feature,
 			Key:     string(key),
 			Value:   value,
+		}, true
+	case EventDeviceEvent:
+		var d DeviceEvent
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			log.Warn("matter: bad deviceEvent payload", "err", err)
+			return ports.TransportEvent{}, false
+		}
+		feature, key, ok := EventForCluster(d.Cluster, d.Event)
+		if !ok {
+			return ports.TransportEvent{}, false
+		}
+		return ports.TransportEvent{
+			Ref:     domain.TransportRef(d.NodeID),
+			Kind:    ports.TransportEventFired,
+			Feature: feature,
+			Key:     string(key),
+			Value:   d.Data,
 		}, true
 	case EventNodeOnline:
 		var n NodeLifecycle

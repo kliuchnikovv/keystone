@@ -170,6 +170,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
     opts.controller.on(Events.NodeOffline, forward(Events.NodeOffline));
     opts.controller.on(Events.CommissioningProgress, forward(Events.CommissioningProgress));
     opts.controller.on(Events.CommissionableFound, forward(Events.CommissionableFound));
+    opts.controller.on(Events.DeviceEvent, forward(Events.DeviceEvent));
 
     opts.log("info", "ws server listening", { host: opts.host, port: opts.port });
 

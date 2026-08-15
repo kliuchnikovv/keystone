@@ -53,6 +53,7 @@ export const Events = {
     NodeOffline: "nodeOffline",
     CommissioningProgress: "commissioningProgress",
     CommissionableFound: "commissionableFound",
+    DeviceEvent: "deviceEvent",
 } as const;
 
 // --- method payloads ---
@@ -151,6 +152,18 @@ export interface AttributeChanged {
 
 export interface NodeLifecycle {
     nodeId: string;
+}
+
+/**
+ * A Matter event (as opposed to an attribute change): a button press, an alarm
+ * firing, a wash cycle finishing. Carries the cluster's own payload untouched.
+ */
+export interface DeviceEvent {
+    nodeId: string;
+    endpointId: number;
+    cluster: string;
+    event: string;
+    data: unknown;
 }
 
 export interface SubscribeParams {

@@ -27,14 +27,14 @@ func TestMiredsKelvinRoundTrip(t *testing.T) {
 }
 
 func TestBindingFor(t *testing.T) {
-	b, err := BindingFor(domain.FeatureOnOff, domain.StateOnOff)
+	b, err := BindingFor(domain.FeatureOnOff, domain.StateOnOff, nil)
 	if err != nil {
 		t.Fatalf("BindingFor OnOff: %v", err)
 	}
 	if b.Cluster != ClusterOnOff || b.Attribute != AttrOnOff {
 		t.Errorf("wrong binding: %+v", b)
 	}
-	if _, err := BindingFor("nope", "nope"); err == nil {
+	if _, err := BindingFor("nope", "nope", nil); err == nil {
 		t.Error("expected error for unknown pair")
 	}
 }
@@ -52,12 +52,12 @@ func TestFeatureForClusterReverse(t *testing.T) {
 func TestActionToInvoke(t *testing.T) {
 	ref := domain.TransportRef("node-42")
 
-	on, err := actionToInvoke(ref, 1, domain.FeatureOnOff, domain.ActionTurnOn, nil)
+	on, err := actionToInvoke(ref, 1, nil, domain.FeatureOnOff, domain.ActionTurnOn, nil)
 	if err != nil || on.Cluster != ClusterOnOff || on.Command != CmdOn || on.NodeID != "node-42" {
 		t.Errorf("turn_on: %+v err=%v", on, err)
 	}
 
-	bright, err := actionToInvoke(ref, 1, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": 50})
+	bright, err := actionToInvoke(ref, 1, nil, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": 50})
 	if err != nil {
 		t.Fatalf("brightness set: %v", err)
 	}
@@ -68,10 +68,10 @@ func TestActionToInvoke(t *testing.T) {
 		t.Errorf("brightness level scaled: got %d want 127", got)
 	}
 
-	if _, err := actionToInvoke(ref, 1, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": "oops"}); err == nil {
+	if _, err := actionToInvoke(ref, 1, nil, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": "oops"}); err == nil {
 		t.Error("expected error for non-numeric level")
 	}
-	if _, err := actionToInvoke(ref, 1, domain.FeatureOnOff, domain.ActionSet, nil); err == nil {
+	if _, err := actionToInvoke(ref, 1, nil, domain.FeatureOnOff, domain.ActionSet, nil); err == nil {
 		t.Error("expected error for onoff.set")
 	}
 }
@@ -122,8 +122,23 @@ func TestNodeToDiscoveredLight(t *testing.T) {
 	if d.Manufacturer != "IKEA" || d.Model != "WARMBLIXT" {
 		t.Errorf("labels: %+v", d)
 	}
-	if len(d.Features) != 3 {
-		t.Errorf("features count = %d want 3", len(d.Features))
+	// ColorControl yields two features: colour temperature and full colour are
+	// separate controls, and many lamps support only the former.
+	want := map[domain.FeatureKey]bool{
+		domain.FeatureOnOff: true, domain.FeatureBrightness: true,
+		domain.FeatureColorTemp: true, domain.FeatureColor: true,
+	}
+	if len(d.Features) != len(want) {
+		t.Errorf("features = %d want %d: %+v", len(d.Features), len(want), d.Features)
+	}
+	for _, f := range d.Features {
+		if !want[f.Key] {
+			t.Errorf("unexpected feature %s", f.Key)
+		}
+		delete(want, f.Key)
+	}
+	for k := range want {
+		t.Errorf("missing feature %s", k)
 	}
 	if d.TransportRef != "abc" {
 		t.Errorf("transport ref = %s", d.TransportRef)
@@ -218,7 +233,7 @@ func TestFeatureRoutesAcrossEndpoints(t *testing.T) {
 	}
 
 	// The routed endpoint must reach the invoke params, not defaultEndpoint.
-	inv, err := actionToInvoke(d.TransportRef, routes[domain.FeatureColorTemp],
+	inv, err := actionToInvoke(d.TransportRef, routes[domain.FeatureColorTemp], nil,
 		domain.FeatureColorTemp, domain.ActionSet, map[string]any{"kelvin": 2700})
 	if err != nil {
 		t.Fatalf("color_temp invoke: %v", err)

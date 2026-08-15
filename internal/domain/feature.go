@@ -29,6 +29,41 @@ const (
 	FeatureBattery       FeatureKey = "battery"
 	FeatureLock          FeatureKey = "lock"
 	FeatureCoverPosition FeatureKey = "cover_position"
+
+	// Environment sensing beyond temperature/humidity.
+	FeatureIlluminance FeatureKey = "illuminance"
+	FeaturePressure    FeatureKey = "pressure"
+	FeatureFlow        FeatureKey = "flow"
+	FeatureAirQuality  FeatureKey = "air_quality"
+	FeatureSmoke       FeatureKey = "smoke"
+	FeatureCO          FeatureKey = "co"
+
+	// Input devices. A button reports events, not a persistent state.
+	FeatureButton FeatureKey = "button"
+
+	// Climate.
+	FeatureThermostat FeatureKey = "thermostat"
+	FeatureFan        FeatureKey = "fan"
+
+	// Appliances. Mode and RunState are deliberately generic: a washer, a
+	// dishwasher and a robot vacuum each expose their own Matter mode cluster,
+	// but from keystone's side they are the same capability — "which program is
+	// selected" and "is it running". The adapter picks the right cluster from
+	// what the endpoint actually has.
+	FeatureMode     FeatureKey = "mode"
+	FeatureRunState FeatureKey = "run_state"
+
+	// Media playback (TV, speaker).
+	FeatureMedia FeatureKey = "media"
+
+	// Camera control. Live video is NOT here: Matter carries only the WebRTC
+	// signalling, the media itself flows over a separate peer connection.
+	// Snapshots, pan/tilt/zoom and the doorbell chime are in scope.
+	FeatureCamera FeatureKey = "camera"
+	FeatureChime  FeatureKey = "chime"
+
+	// EV charging.
+	FeatureEVSE FeatureKey = "evse"
 )
 
 // StateKey identifies a readable attribute within a Feature.
@@ -46,6 +81,53 @@ const (
 	StatePowerNow    StateKey = "watts"     // float32 for FeaturePowerMeter
 	StateEnergyTotal StateKey = "kwh_total" // float64, monotonic
 	StateBatteryLvl  StateKey = "percent"   // int for FeatureBattery
+
+	// Colour. Matter reports colour either as CIE xy or as hue/saturation,
+	// depending on the lamp's ColorMode; both are exposed rather than forcing a
+	// lossy conversion on read.
+	StateColorHue  StateKey = "hue"        // 0..360 for FeatureColor
+	StateColorSat  StateKey = "saturation" // 0..100 for FeatureColor
+	StateColorMode StateKey = "color_mode" // "xy" | "hue_sat" | "color_temp"
+
+	// Environment.
+	StateIlluminance     StateKey = "lux"          // float32 for FeatureIlluminance
+	StatePressure        StateKey = "hpa"          // float32 for FeaturePressure
+	StateFlow            StateKey = "m3h"          // float32 for FeatureFlow
+	StateAirQualityIndex StateKey = "index"        // string enum for FeatureAirQuality
+	StatePM25            StateKey = "pm25"         // float32 µg/m³
+	StatePM10            StateKey = "pm10"         // float32 µg/m³
+	StateCO2             StateKey = "co2"          // float32 ppm
+	StateTVOC            StateKey = "tvoc"         // float32 µg/m³
+	StateFormaldehyde    StateKey = "formaldehyde" // float32 µg/m³
+	StateAlarm           StateKey = "alarm"        // bool for FeatureSmoke / FeatureCO
+
+	// Input.
+	StateButtonPos StateKey = "position" // int, current pressed position
+
+	// Locks.
+	StateLocked StateKey = "locked" // bool for FeatureLock
+
+	// Climate.
+	StateTargetHeat  StateKey = "target_heat" // float32 °C
+	StateTargetCool  StateKey = "target_cool" // float32 °C
+	StateHVACMode    StateKey = "hvac_mode"   // "off"|"heat"|"cool"|"auto"|…
+	StateHVACRunning StateKey = "running"     // string, what the unit is doing now
+	StateFanMode     StateKey = "fan_mode"    // "off"|"low"|"medium"|"high"|"auto"|…
+	StateFanPercent  StateKey = "fan_percent" // 0..100
+
+	// Appliances.
+	StateMode      StateKey = "mode"       // int, current mode id
+	StateModeLabel StateKey = "mode_label" // string, human label when known
+	StateRunState  StateKey = "run_state"  // "stopped"|"running"|"paused"|"error"
+	StatePhase     StateKey = "phase"      // string, current phase label
+	StateCountdown StateKey = "countdown"  // seconds remaining
+
+	// Media.
+	StatePlayback StateKey = "playback" // "playing"|"paused"|"not_playing"|"buffering"
+
+	// EV charging.
+	StateEVSEState  StateKey = "evse_state"  // plug/charge state
+	StateEVSESupply StateKey = "evse_supply" // supply enable state
 )
 
 // ActionKey identifies an imperative operation within a Feature.
@@ -56,6 +138,34 @@ const (
 	ActionTurnOff ActionKey = "turn_off"
 	ActionToggle  ActionKey = "toggle"
 	ActionSet     ActionKey = "set" // generic; params carry payload
+
+	// Locks.
+	ActionLock   ActionKey = "lock"
+	ActionUnlock ActionKey = "unlock"
+
+	// Covers.
+	ActionOpen  ActionKey = "open"
+	ActionClose ActionKey = "close"
+	ActionStop  ActionKey = "stop"
+
+	// Appliances and media transport.
+	ActionStart  ActionKey = "start"
+	ActionPause  ActionKey = "pause"
+	ActionResume ActionKey = "resume"
+	ActionNext   ActionKey = "next"
+	ActionPrev   ActionKey = "previous"
+
+	// Camera.
+	ActionSnapshot ActionKey = "snapshot"
+	ActionMove     ActionKey = "move" // pan/tilt/zoom; params carry the axes
+	ActionRing     ActionKey = "ring"
+
+	// EV charging.
+	ActionChargeEnable  ActionKey = "charge_enable"
+	ActionChargeDisable ActionKey = "charge_disable"
+
+	// Self-test (smoke/CO alarms).
+	ActionSelfTest ActionKey = "self_test"
 )
 
 // EventKey identifies an emitted event. Distinct from state changes — e.g. a
@@ -66,4 +176,20 @@ const (
 	EventButtonPressed  EventKey = "button_pressed"
 	EventMotionDetected EventKey = "motion_detected"
 	EventBatteryLow     EventKey = "battery_low"
+
+	// Buttons distinguish gestures; a controller remote is useless without them.
+	EventButtonLongPress  EventKey = "button_long_press"
+	EventButtonMultiPress EventKey = "button_multi_press"
+	EventButtonReleased   EventKey = "button_released"
+
+	// Alarms.
+	EventSmokeAlarm EventKey = "smoke_alarm"
+	EventCOAlarm    EventKey = "co_alarm"
+
+	// Appliances.
+	EventCycleComplete EventKey = "cycle_complete"
+
+	// EV.
+	EventEVConnected    EventKey = "ev_connected"
+	EventEVDisconnected EventKey = "ev_disconnected"
 )

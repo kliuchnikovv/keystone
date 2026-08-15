@@ -23,6 +23,7 @@ import type {
     CommissionParams,
     CommissionResult,
     CommissioningProgress,
+    DeviceEvent,
     DiscoverCommissionableParams,
     InvokeParams,
     Node,
@@ -32,6 +33,7 @@ import type {
 } from "./protocol.js";
 import { RpcError } from "./protocol.js";
 import { ControllerCommissioningFlow } from "@matter/protocol";
+import { ChangeNotificationService } from "@matter/node";
 import { ManualPairingCodeCodec, QrPairingCodeCodec } from "@matter/types";
 import { Millis } from "@matter/general";
 
@@ -61,6 +63,7 @@ export interface MatterController {
     on(event: "nodeOnline" | "nodeOffline", listener: (v: NodeLifecycle) => void): this;
     on(event: "commissioningProgress", listener: (v: CommissioningProgress) => void): this;
     on(event: "commissionableFound", listener: (v: CommissionableDevice) => void): this;
+    on(event: "deviceEvent", listener: (v: DeviceEvent) => void): this;
 }
 
 export type ControllerLog = (
@@ -123,6 +126,7 @@ export function createController(opts: ControllerOptions): MatterController {
             // healthy — exactly the failure we just spent a day diagnosing.
             streamAbort = new AbortController();
             void superviseStateStream(node, emitter, streamAbort.signal, log);
+            bindDeviceEvents(node, emitter, log);
 
             for (const client of node.peers) {
                 await ensureAutoSubscribe(client, log);
@@ -330,6 +334,66 @@ export function createController(opts: ControllerOptions): MatterController {
             return this as unknown as MatterController;
         },
     } as MatterController;
+}
+
+// bindDeviceEvents forwards Matter *events* — as opposed to attribute changes.
+// A button is nothing but its events: CurrentPosition tells you a rocker is
+// held, but single/double/long press only exist as events, so without this a
+// remote control is undetectable no matter how many attributes we read.
+//
+// StateStream deliberately ignores them (its change listener handles only
+// "update" and "delete"), so we subscribe to the same underlying service
+// directly.
+function bindDeviceEvents(node: ServerNode, emitter: EventEmitter, log: ControllerLog): void {
+    let changes;
+    try {
+        changes = node.env.get(ChangeNotificationService);
+    } catch (err) {
+        log("warn", "matter event path unavailable", { err: String(err) });
+        return;
+    }
+
+    changes.change.on((raw) => {
+        if (raw?.kind !== "event") return;
+        const change = raw as unknown as Record<string, unknown>;
+        try {
+            const endpoint = change.endpoint as {
+                maybeNumber?: number;
+                number?: number;
+                owner?: unknown;
+            };
+            const endpointId = endpoint?.maybeNumber ?? endpoint?.number;
+            if (endpointId === undefined) return;
+
+            const peer = nodeOfEndpoint(endpoint);
+            if (peer === undefined || peer === node) return; // our own controller
+
+            const clusterKey = (change.behavior as { id?: string } | undefined)?.id;
+            const eventName = (change.event as { name?: string } | undefined)?.name;
+            if (!clusterKey || !eventName) return;
+
+            emitter.emit("deviceEvent", {
+                nodeId: nodeIdOf(peer as ClientNode),
+                endpointId,
+                cluster: canonicalClusterName(clusterKey),
+                event: pascalCase(eventName),
+                data: change.value ?? null,
+            });
+        } catch (err) {
+            log("warn", "matter event decode failed", { err: String(err) });
+        }
+    });
+}
+
+// nodeOfEndpoint walks up the endpoint tree to the node that owns it.
+function nodeOfEndpoint(endpoint: unknown): unknown {
+    let current = endpoint as { owner?: unknown } | undefined;
+    for (let i = 0; current !== undefined && i < 16; i++) {
+        const owner = (current as { owner?: unknown }).owner;
+        if (owner === undefined) return current;
+        current = owner as { owner?: unknown };
+    }
+    return current;
 }
 
 // --- commissionable discovery ---
@@ -765,14 +829,50 @@ function canonicalClusterName(behaviorId: string): string {
 // actual values — walking AccessControl or OperationalCredentials would push
 // ACL entries and fabric descriptors across the wire for nothing.
 const SNAPSHOT_CLUSTERS = new Set([
+    // Lighting and power
     "OnOff",
     "LevelControl",
     "ColorControl",
+    // Environment
     "TemperatureMeasurement",
     "RelativeHumidityMeasurement",
     "OccupancySensing",
     "BooleanState",
+    "IlluminanceMeasurement",
+    "PressureMeasurement",
+    "FlowMeasurement",
+    "AirQuality",
+    "Pm25ConcentrationMeasurement",
+    "Pm10ConcentrationMeasurement",
+    "CarbonDioxideConcentrationMeasurement",
+    "TotalVolatileOrganicCompoundsConcentrationMeasurement",
+    "FormaldehydeConcentrationMeasurement",
+    "SmokeCoAlarm",
+    // Input
+    "Switch",
+    // Closures
+    "DoorLock",
+    "WindowCovering",
+    // Climate
+    "Thermostat",
+    "FanControl",
+    // Appliances
+    "OperationalState",
+    "RvcOperationalState",
+    "RvcRunMode",
+    "LaundryWasherMode",
+    "DishwasherMode",
+    "RefrigeratorAndTemperatureControlledCabinetMode",
+    "WaterHeaterMode",
+    "EnergyEvseMode",
+    "TemperatureControl",
+    // Media
+    "MediaPlayback",
+    // Energy
     "ElectricalMeasurement",
+    "ElectricalPowerMeasurement",
+    "ElectricalEnergyMeasurement",
+    "EnergyEvse",
     "PowerSource",
 ]);
 
