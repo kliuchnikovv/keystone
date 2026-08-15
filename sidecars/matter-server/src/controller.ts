@@ -334,53 +334,75 @@ export function createController(opts: ControllerOptions): MatterController {
             const n = assertStarted(node);
             const client = clientFor(n, p.nodeId);
 
-            // What matters is whether the device still carries our fabric.
-            // ClientNode.decommission() gates the fabric removal on
-            // lifecycle.isCommissioned and silently degrades to a local delete
-            // when that flag is false — reporting success while the accessory
-            // goes on listing us under Apple Home's Connected Services. Read
-            // both signals and log them, so a failure is diagnosable instead of
-            // being another silent no-op.
-            const commissioned = isCommissioned(client);
+            // Two signals, and they can disagree. `peerAddress` says we hold a
+            // fabric on the device; `lifecycle.isCommissioned` is what
+            // ClientNode.decommission() checks before asking the device to drop
+            // it — and it is derived from lifecycle events, so a node restored
+            // from storage can carry a stale value. When it is stale the
+            // library quietly degrades to a local delete and the accessory goes
+            // on listing us under Apple Home's Connected Services.
+            const hasFabric = isCommissioned(client);
             const flagged = Boolean((client as unknown as {
                 lifecycle?: { isCommissioned?: boolean };
             }).lifecycle?.isCommissioned);
-            log("info", "removing matter node", { nodeId: p.nodeId, hasPeerAddress: commissioned, lifecycleFlag: flagged });
+            log("info", "removing matter node", {
+                nodeId: p.nodeId,
+                hasPeerAddress: hasFabric,
+                lifecycleFlag: flagged,
+            });
 
-            if (commissioned) {
-                try {
-                    // Invoked directly rather than through ClientNode
-                    // .decommission(): this is the call that tells the device to
-                    // drop our fabric, and it must not depend on a flag that can
-                    // be stale after a restart.
+            if (!hasFabric) {
+                // We never held a fabric on it; there is nothing to hand back.
+                await client.delete();
+                log("info", "matter node removed locally (no fabric held)", { nodeId: p.nodeId });
+                return { removed: "decommissioned" };
+            }
+
+            try {
+                // Bounded: talking to the device means MRP retries, and an
+                // accessory that is unplugged would otherwise keep the delete
+                // request hanging until the HTTP timeout. The user asked for it
+                // gone — waiting a minute to find that out is not acceptable.
+                await withTimeout(DECOMMISSION_TIMEOUT_MS, async () => {
+                if (flagged) {
+                    // The library path: it handles the lifecycle transition and
+                    // the local cleanup around the fabric removal, so prefer it
+                    // whenever its own precondition holds.
+                    await client.decommission();
+                } else {
+                    // Stale flag: ask the device directly, then clean up
+                    // locally the way decommission() would have.
                     await (client as unknown as {
                         act(purpose: string, actor: (agent: {
                             commissioning: { decommission(): Promise<void> };
                         }) => Promise<void>): Promise<void>;
                     }).act("decommission", (agent) => agent.commissioning.decommission());
-
-                    // The node is out of the fabric; drop what is left locally.
                     await client.delete();
-                    log("info", "matter node decommissioned", { nodeId: p.nodeId });
-                    return { removed: "decommissioned" };
-                } catch (err) {
-                    log("warn", "matter node did not accept decommissioning", {
-                        nodeId: p.nodeId,
-                        err: String(err),
-                    });
-                    await client.delete();
-                    return {
-                        removed: "forced",
-                        message: `device refused or did not answer decommissioning: ${String(err)}`,
-                    };
                 }
+                });
+                log("info", "matter node decommissioned", { nodeId: p.nodeId, viaLibrary: flagged });
+                return { removed: "decommissioned" };
+            } catch (err) {
+                log("warn", "matter node did not accept decommissioning", {
+                    nodeId: p.nodeId,
+                    err: String(err),
+                });
+                // The user asked for it gone; it must disappear from keystone
+                // whatever the device says. Removing it twice is harmless —
+                // delete() on an already-deleted node is a no-op.
+                try {
+                    await client.delete();
+                } catch (deleteErr) {
+                    log("warn", "matter node local delete also failed", {
+                        nodeId: p.nodeId,
+                        err: String(deleteErr),
+                    });
+                }
+                return {
+                    removed: "forced",
+                    message: `device refused or did not answer decommissioning: ${String(err)}`,
+                };
             }
-
-            // No peer address means we never held a fabric on it — nothing to
-            // give back, only local bookkeeping.
-            await client.delete();
-            log("info", "matter node removed locally (was not commissioned)", { nodeId: p.nodeId });
-            return { removed: "decommissioned" };
         },
 
         async discoverCommissionable(p: DiscoverCommissionableParams): Promise<CommissionableDevice[]> {
@@ -587,6 +609,25 @@ async function invokeOn(
         );
     }
     return await fn(args);
+}
+
+// How long the device gets to accept decommissioning before we give up and
+// remove it locally. Long enough for a couple of MRP retries on a healthy
+// network, short enough that a user deleting an unplugged device is not left
+// staring at a spinner.
+const DECOMMISSION_TIMEOUT_MS = 12_000;
+
+/** Runs work with a deadline; rejects with a readable error when it expires. */
+async function withTimeout<T>(ms: number, work: () => Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const expiry = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    });
+    try {
+        return await Promise.race([work(), expiry]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 }
 
 // --- commissionable discovery ---
