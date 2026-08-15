@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import styles from './ColorTempSlider.module.css';
+import { useDragValue } from '../../hooks/useDragValue';
 import { kelvinToCss } from '../../lib/colorTemp';
 import { kelvinTone } from '../../lib/format';
 
@@ -21,7 +22,8 @@ export function ColorTempSlider({
   onCommit,
 }: ColorTempSliderProps) {
   const id = useId();
-  const v = Math.max(min, Math.min(max, value));
+  const drag = useDragValue(value);
+  const v = Math.max(min, Math.min(max, drag.current));
   const pct = ((v - min) / (max - min)) * 100;
   const gradient = `linear-gradient(90deg, ${kelvinToCss(min)}, ${kelvinToCss((min + max) / 2)}, ${kelvinToCss(max)})`;
 
@@ -40,9 +42,13 @@ export function ColorTempSlider({
         disabled={disabled}
         aria-label="Цветовая температура"
         className={styles.input}
-        onChange={(e) => onChange?.(Number(e.currentTarget.value))}
-        onMouseUp={(e) => onCommit?.(Number(e.currentTarget.value))}
-        onTouchEnd={(e) => onCommit?.(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const next = Number(e.currentTarget.value);
+          drag.onInput(next);
+          onChange?.(next);
+        }}
+        onMouseUp={(e) => drag.onRelease(Number(e.currentTarget.value), onCommit)}
+        onTouchEnd={(e) => drag.onRelease(Number(e.currentTarget.value), onCommit)}
       />
       <div className={styles.readout}>
         <span className={styles.label}>тёплый</span>

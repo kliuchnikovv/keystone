@@ -702,3 +702,49 @@ func TestWriteStateUsesCommandsForReadOnlyAttributes(t *testing.T) {
 		}
 	}
 }
+
+// Удаление обязано снять наш fabric с самого устройства. Раньше вызывался
+// force-delete: keystone забывал устройство, а лампа продолжала числить нас
+// среди подключённых сервисов в Apple Home — убрать это можно было только
+// сбросом к заводским.
+func TestDecommissionReportsForcedRemoval(t *testing.T) {
+	cases := []struct {
+		name       string
+		result     RemoveNodeResult
+		wantForced bool
+	}{
+		{"устройство ответило", RemoveNodeResult{Removed: "decommissioned"}, false},
+		{"устройство недоступно", RemoveNodeResult{Removed: "forced", Message: "no response"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := newFakeSidecar(t, func(req Request) any {
+				if req.Method == MethodRemoveNode {
+					return tc.result
+				}
+				return []Node{}
+			})
+			defer sc.Close()
+
+			a := New(testLogger(), DefaultConfig(), NewWSClient(sc.URL(), testLogger()))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := a.Start(ctx); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			defer func() { _ = a.Stop(context.Background()) }()
+
+			err := a.Decommission(ctx, "lamp")
+			if tc.wantForced {
+				if !errors.Is(err, ErrForcedRemoval) {
+					t.Errorf("err = %v, а пользователь должен узнать, что устройство ещё держит наш fabric", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("успешный decommission не должен возвращать ошибку: %v", err)
+			}
+		})
+	}
+}

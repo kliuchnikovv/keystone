@@ -431,10 +431,28 @@ func (a *Adapter) Decommission(ctx context.Context, ref domain.TransportRef) err
 	if !a.connected.Load() {
 		return ErrSidecarUnavailable
 	}
-	if err := a.client.Call(ctx, MethodRemoveNode, RemoveNodeParams{NodeID: string(ref)}, nil); err != nil {
+	var res RemoveNodeResult
+	if err := a.client.Call(ctx, MethodRemoveNode, RemoveNodeParams{NodeID: string(ref)}, &res); err != nil {
 		return fmt.Errorf("matter: removeNode %s: %w", ref, err)
 	}
+	a.forgetNode(ref)
+	if res.Removed == "forced" {
+		// Surfaced as an error so the delete handler reports it: the device is
+		// gone from keystone, but it still lists us as a connected service and
+		// the user is the only one who can fix that.
+		a.log.Warn("matter device removed without decommissioning", "ref", ref, "detail", res.Message)
+		return ErrForcedRemoval
+	}
+	a.log.Info("matter device decommissioned", "ref", ref)
 	return nil
+}
+
+// forgetNode drops cached routing for a device that is no longer ours, so a
+// later device reusing the same ref cannot inherit stale endpoints.
+func (a *Adapter) forgetNode(ref domain.TransportRef) {
+	a.routesMu.Lock()
+	delete(a.routes, ref)
+	a.routesMu.Unlock()
 }
 
 // --- internals ---

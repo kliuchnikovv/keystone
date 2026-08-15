@@ -144,6 +144,19 @@ export interface RemoveNodeParams {
     nodeId: string;
 }
 
+/**
+ * How the node actually left.
+ *
+ * `decommissioned` — the device dropped our fabric and no longer lists us among
+ * its connected services. `forced` — the device was unreachable, so it was only
+ * forgotten locally and still carries our fabric; the user has to factory-reset
+ * it to clean that up.
+ */
+export interface RemoveNodeResult {
+    removed: "decommissioned" | "forced";
+    message?: string;
+}
+
 // --- event payloads ---
 
 export interface AttributeChanged {

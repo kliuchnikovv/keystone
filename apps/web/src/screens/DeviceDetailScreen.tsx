@@ -11,6 +11,7 @@ import { useEventsStore } from '../state/eventsStore';
 import { Toggle } from '../components/Toggle/Toggle';
 import { BrightnessSlider } from '../components/BrightnessSlider/BrightnessSlider';
 import { ColorTempSlider } from '../components/ColorTempSlider/ColorTempSlider';
+import { ColorSlider } from '../components/ColorSlider/ColorSlider';
 import { Button } from '../components/Button/Button';
 import { SectionHeader } from '../components/SectionHeader/SectionHeader';
 import { EmptyState } from '../components/EmptyState/EmptyState';
@@ -102,8 +103,18 @@ export function DeviceDetailScreen() {
     if (!confirm(`Удалить «${device.name}»?`)) return;
     try {
       const res = await deleteDevice(device.id);
-      if (res.adapter_warning) console.warn('adapter decommission warning:', res.adapter_warning);
       if (res.persist_warning) console.warn('persist warning:', res.persist_warning);
+      if (res.adapter_warning) {
+        // Устройство удалено из keystone, но транспорт не смог договориться с
+        // ним самим — оно продолжит показывать нас среди своих подключённых
+        // сервисов. Молчать об этом нельзя: убрать нас оттуда сможет только
+        // пользователь.
+        console.warn('adapter decommission warning:', res.adapter_warning);
+        alert(
+          `«${device.name}» удалено из Keystone, но устройство не ответило и всё ещё считает нас подключённым сервисом.\n\n` +
+            'Убери нас вручную в приложении производителя или сбрось устройство к заводским настройкам.',
+        );
+      }
     } catch (e) {
       console.warn('delete failed', e);
       alert('Не удалось удалить устройство. Проверь, что keystone запущен.');
@@ -147,6 +158,12 @@ function DeviceMainControl({ device }: { device: Device }) {
   const brightness = useDevicesStore(
     (s) => s.liveState.get(liveKey(device.id, 'brightness', 'level')) as number | undefined,
   );
+  const hue = useDevicesStore(
+    (s) => s.liveState.get(liveKey(device.id, 'color', 'hue')) as number | undefined,
+  );
+  const saturation = useDevicesStore(
+    (s) => s.liveState.get(liveKey(device.id, 'color', 'saturation')) as number | undefined,
+  );
   const kelvin = useDevicesStore(
     (s) => s.liveState.get(liveKey(device.id, 'color_temp', 'kelvin')) as number | undefined,
   );
@@ -186,6 +203,12 @@ function DeviceMainControl({ device }: { device: Device }) {
     );
   const setKelvin = (v: number) =>
     void writeState(device.id, { feature: 'color_temp', key: 'kelvin', value: v }).catch(
+      console.warn,
+    );
+  const setHue = (v: number) =>
+    void writeState(device.id, { feature: 'color', key: 'hue', value: v }).catch(console.warn);
+  const setSaturation = (v: number) =>
+    void writeState(device.id, { feature: 'color', key: 'saturation', value: v }).catch(
       console.warn,
     );
 
@@ -232,17 +255,45 @@ function DeviceMainControl({ device }: { device: Device }) {
           )}
         </div>
 
-        {hasFeature(device, 'brightness') && brightness !== undefined && on && (
+        {/* Регуляторы показываем по наличию возможности, а не по наличию
+            значения: раньше слайдер прятался, пока не приедет состояние, и
+            лампа выглядела как «не умеет диммироваться». Пока значение
+            неизвестно или свет выключен — слайдер виден, но заблокирован. */}
+        {hasFeature(device, 'brightness') && (
           <div className={styles.sliderBlock}>
             <p className={styles.sliderLabel}>Яркость</p>
-            <BrightnessSlider value={brightness} size="lg" onCommit={setBrightness} />
+            <BrightnessSlider
+              value={brightness ?? 0}
+              size="lg"
+              disabled={!on || brightness === undefined}
+              onCommit={setBrightness}
+            />
           </div>
         )}
 
-        {hasFeature(device, 'color_temp') && kelvin !== undefined && on && (
+        {hasFeature(device, 'color_temp') && (
           <div className={styles.sliderBlock}>
-            <p className={styles.sliderLabel}>Цветовая температура — {kelvinTone(kelvin)}</p>
-            <ColorTempSlider value={kelvin} onCommit={setKelvin} />
+            <p className={styles.sliderLabel}>
+              Цветовая температура{kelvin !== undefined ? ` — ${kelvinTone(kelvin)}` : ''}
+            </p>
+            <ColorTempSlider
+              value={kelvin ?? 2700}
+              disabled={!on || kelvin === undefined}
+              onCommit={setKelvin}
+            />
+          </div>
+        )}
+
+        {hasFeature(device, 'color') && (
+          <div className={styles.sliderBlock}>
+            <p className={styles.sliderLabel}>Цвет</p>
+            <ColorSlider
+              hue={hue ?? 0}
+              saturation={saturation ?? 100}
+              disabled={!on}
+              onCommitHue={setHue}
+              onCommitSaturation={setSaturation}
+            />
           </div>
         )}
       </section>

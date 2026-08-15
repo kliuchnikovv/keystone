@@ -324,6 +324,23 @@ type RemoveNodeParams struct {
 	NodeID string `json:"nodeId"`
 }
 
+// RemoveNodeResult says how the node actually left.
+//
+// "decommissioned" means the device dropped our fabric and no longer lists
+// keystone among its connected services. "forced" means it was unreachable and
+// only forgotten locally — it still carries our fabric, and only a factory
+// reset will clear that.
+type RemoveNodeResult struct {
+	Removed string `json:"removed"`
+	Message string `json:"message,omitempty"`
+}
+
+// ErrForcedRemoval reports that a device was removed from keystone without
+// being able to tell it to drop our fabric. Not a failure of the delete — the
+// device is gone from keystone either way — but the user needs to know the
+// accessory still lists us.
+var ErrForcedRemoval = errors.New("matter: device removed locally but still holds our fabric — a factory reset is needed to clear it")
+
 // --- Event payloads ---
 
 // AttributeChanged is the payload of the attributeChanged server event.

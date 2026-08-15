@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import styles from './BrightnessSlider.module.css';
+import { useDragValue } from '../../hooks/useDragValue';
 
 export interface BrightnessSliderProps {
   value: number;
@@ -17,7 +18,8 @@ export function BrightnessSlider({
   onCommit,
 }: BrightnessSliderProps) {
   const id = useId();
-  const pct = Math.max(0, Math.min(100, value));
+  const drag = useDragValue(value);
+  const pct = Math.max(0, Math.min(100, drag.current));
   return (
     <div className={[styles.root, styles[`size-${size}`]].join(' ')}>
       <div className={styles.track}>
@@ -33,9 +35,13 @@ export function BrightnessSlider({
         disabled={disabled}
         aria-label="Яркость"
         className={styles.input}
-        onChange={(e) => onChange?.(Number(e.currentTarget.value))}
-        onMouseUp={(e) => onCommit?.(Number(e.currentTarget.value))}
-        onTouchEnd={(e) => onCommit?.(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const v = Number(e.currentTarget.value);
+          drag.onInput(v);
+          onChange?.(v);
+        }}
+        onMouseUp={(e) => drag.onRelease(Number(e.currentTarget.value), onCommit)}
+        onTouchEnd={(e) => drag.onRelease(Number(e.currentTarget.value), onCommit)}
       />
     </div>
   );

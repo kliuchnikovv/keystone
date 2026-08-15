@@ -97,7 +97,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
         [Methods.ReadAttribute]: (p) => opts.controller.readAttribute(p as never),
         [Methods.WriteAttribute]: (p) => opts.controller.writeAttribute(p as never).then(() => null),
         [Methods.InvokeCommand]: (p) => opts.controller.invokeCommand(p as never),
-        [Methods.RemoveNode]: (p) => opts.controller.removeNode(p as never).then(() => null),
+        [Methods.RemoveNode]: (p) => opts.controller.removeNode(p as never),
         [Methods.DiscoverCommissionable]: (p) => opts.controller.discoverCommissionable((p ?? {}) as never),
         [Methods.WebrtcOffer]: (p) => opts.controller.webrtcOffer(p as never),
         [Methods.WebrtcIce]: (p) => opts.controller.webrtcIce(p as never).then(() => null),

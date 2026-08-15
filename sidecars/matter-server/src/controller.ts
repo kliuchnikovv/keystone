@@ -34,6 +34,7 @@ import type {
     Node,
     NodeLifecycle,
     RemoveNodeParams,
+    RemoveNodeResult,
     WriteAttrParams,
 } from "./protocol.js";
 import { RpcError } from "./protocol.js";
@@ -58,7 +59,7 @@ export interface MatterController {
     readAttribute(p: AttrRef): Promise<unknown>;
     writeAttribute(p: WriteAttrParams): Promise<void>;
     invokeCommand(p: InvokeParams): Promise<unknown>;
-    removeNode(p: RemoveNodeParams): Promise<void>;
+    removeNode(p: RemoveNodeParams): Promise<RemoveNodeResult>;
 
     // discoverCommissionable listens for devices advertising themselves as
     // ready to pair. Results are also pushed as `commissionableFound` events so
@@ -311,10 +312,33 @@ export function createController(opts: ControllerOptions): MatterController {
             return await fn(p.args ?? undefined);
         },
 
-        async removeNode(p: RemoveNodeParams): Promise<void> {
+        async removeNode(p: RemoveNodeParams): Promise<RemoveNodeResult> {
             const n = assertStarted(node);
             const client = clientFor(n, p.nodeId);
-            await client.delete();
+
+            // decommission() tells the device to drop our fabric; delete() only
+            // forgets it on our side. Using delete() left the accessory
+            // carrying our fabric forever — visible to the user as a stale
+            // "Matter Test" entry under Apple Home's Connected Services, with
+            // no way to remove it short of a factory reset.
+            try {
+                await client.decommission();
+                log("info", "matter node decommissioned", { nodeId: p.nodeId });
+                return { removed: "decommissioned" };
+            } catch (err) {
+                // Only reachable devices can be decommissioned properly. An
+                // unplugged one still has to disappear from keystone, but the
+                // caller must learn that the device kept our fabric.
+                log("warn", "matter node unreachable, forcing removal", {
+                    nodeId: p.nodeId,
+                    err: String(err),
+                });
+                await client.delete();
+                return {
+                    removed: "forced",
+                    message: "device did not respond; it still holds our fabric and needs a factory reset",
+                };
+            }
         },
 
         async discoverCommissionable(p: DiscoverCommissionableParams): Promise<CommissionableDevice[]> {
