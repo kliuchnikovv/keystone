@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keystone — UI наметки v0.1</title>
+<style>
+  /* ---- Design tokens (from ui-design-brief.md §5–6) ---- */
+  :root {
+    --bg: #141210;
+    --surface: #1E1B18;
+    --surface-2: #262220;
+    --line: #322D28;
+    --text: #F4EFE7;
+    --text-2: #A69F94;
+    --text-3: #6D655C;
+    --accent: #F4A860;
+    --accent-2: #D96B4A;
+    --success: #7FB069;
+    --warn: #E4A649;
+    --danger: #D45D5D;
+    --radius: 22px;
+    --radius-sm: 14px;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'tnum' 1;
+  }
+  html, body {
+    background: #0d0b0a;
+    color: var(--text);
+    margin: 0;
+    padding: 48px 24px;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1.doc-title {
+    font-weight: 500; font-size: 28px; letter-spacing: -0.02em;
+    margin: 0 0 6px; color: var(--text);
+  }
+  p.doc-note {
+    color: var(--text-2); font-size: 14px; margin: 0 0 40px;
+    max-width: 720px; line-height: 1.5;
+  }
+  .screens {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 380px));
+    gap: 32px;
+    justify-content: center;
+  }
+  .phone {
+    background: var(--bg);
+    border-radius: 44px;
+    padding: 44px 0 22px;
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5), 0 0 0 6px #1a1815;
+    position: relative;
+    min-height: 720px;
+    overflow: hidden;
+  }
+  .phone::before {
+    content: '';
+    position: absolute;
+    top: 12px; left: 50%; transform: translateX(-50%);
+    width: 100px; height: 24px;
+    background: #050403;
+    border-radius: 12px;
+  }
+  .screen-label {
+    text-align: center;
+    color: var(--text-2);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding-top: 2px;
+  }
+  .body {
+    padding: 12px 20px 88px;
+    color: var(--text);
+    height: 620px;
+    overflow: hidden;
+    position: relative;
+  }
+  .navbar {
+    position: absolute;
+    left: 20px; right: 20px; bottom: 22px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 10px;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+  }
+  .nav-item {
+    color: var(--text-3);
+    font-size: 11px;
+    text-align: center;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 3px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    line-height: 1;
+  }
+  .nav-item .glyph { font-size: 20px; }
+  .nav-item.active { color: var(--text); background: var(--surface-2); }
+  .nav-item.active .glyph { filter: drop-shadow(0 0 10px rgba(244,168,96,0.5)); }
+
+  /* ---- Home screen ---- */
+  .greeting {
+    font-size: 24px; font-weight: 500; letter-spacing: -0.02em;
+    margin: 6px 0 4px;
+  }
+  .weather {
+    color: var(--text-2); font-size: 13px; margin-bottom: 20px;
+  }
+  .room-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: 100px 100px 100px;
+    gap: 10px;
+  }
+  .room {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
+    position: relative;
+    overflow: hidden;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .room-name { font-size: 15px; font-weight: 500; }
+  .room-meta { font-size: 11px; color: var(--text-2); }
+  /* Ambient glow — active room */
+  .room.active {
+    background:
+      radial-gradient(120% 90% at 20% 100%, rgba(244,168,96,0.28), transparent 60%),
+      var(--surface);
+    border-color: rgba(244,168,96,0.25);
+  }
+  .room.active .room-meta { color: var(--accent); }
+  /* Room with motion — small pulse */
+  .room .motion-dot {
+    position: absolute;
+    top: 12px; right: 12px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow: 0 0 12px rgba(217,107,74,0.7);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.35; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.3); }
+  }
+  .room .contact-badge {
+    position: absolute; top: 12px; right: 12px;
+    background: rgba(228,166,73,0.15);
+    color: var(--warn);
+    font-size: 10px; padding: 3px 7px; border-radius: 8px;
+    letter-spacing: 0.02em;
+  }
+  .room.big { grid-row: span 2; }
+  .kettle-icon {
+    position: absolute; bottom: 44px; right: 14px;
+    font-size: 28px; opacity: 0.4;
+  }
+  .power-live {
+    position: absolute; bottom: 12px; left: 14px;
+    font-size: 11px; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .intent-card {
+    margin-top: 16px;
+    background:
+      linear-gradient(135deg, rgba(217,107,74,0.15), rgba(244,168,96,0.08));
+    border: 1px solid rgba(217,107,74,0.3);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .intent-card .icon {
+    width: 36px; height: 36px; border-radius: 12px;
+    background: rgba(217,107,74,0.25);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .intent-card .text { flex: 1; }
+  .intent-card .title { font-size: 14px; font-weight: 500; }
+  .intent-card .subtitle { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+  .intent-card .arrow { color: var(--accent-2); font-size: 18px; }
+
+  /* ---- Room detail screen ---- */
+  .room-header {
+    padding: 8px 0 20px;
+  }
+  .room-title-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  .room-title { font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
+  .back { color: var(--text-2); font-size: 14px; }
+  .room-status {
+    color: var(--text-2); font-size: 13px;
+  }
+  .ambient-hero {
+    height: 140px;
+    background:
+      radial-gradient(70% 90% at 30% 100%, rgba(244,168,96,0.35), transparent 70%),
+      radial-gradient(80% 60% at 80% 40%, rgba(217,107,74,0.2), transparent 70%),
+      var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .ambient-hero .light-blob {
+    position: absolute;
+    width: 90px; height: 90px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(244,168,96,0.7), transparent 65%);
+    filter: blur(8px);
+  }
+  .ambient-hero .light-blob.a { bottom: 10px; left: 20px; }
+  .ambient-hero .light-blob.b { top: 20px; right: 45px; opacity: 0.5; }
+  .ambient-hero .motion-wave {
+    position: absolute;
+    left: 50%; top: 40%;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow:
+      0 0 0 8px rgba(217,107,74,0.15),
+      0 0 0 18px rgba(217,107,74,0.06);
+  }
+  .scene-chips {
+    display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;
+  }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .chip.active { background: var(--accent); color: #1e1810; border-color: var(--accent); }
+  .device-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .device-row:last-child { border-bottom: none; }
+  .device-row .name { flex: 1; font-size: 15px; }
+  .device-row .caption { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+  .slider {
+    flex: 0 0 100px;
+    height: 24px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    position: relative;
+    overflow: hidden;
+  }
+  .slider .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, #d38846, var(--accent));
+    border-radius: 12px;
+  }
+  .toggle {
+    width: 46px; height: 26px;
+    background: var(--surface-2);
+    border-radius: 999px;
+    position: relative;
+  }
+  .toggle::after {
+    content:''; position: absolute; left: 3px; top: 3px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--text-3);
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { left: 23px; background: var(--text); }
+  .device-emoji { font-size: 20px; width: 30px; text-align: center; }
+
+  /* ---- Add device screen ---- */
+  .add-title {
+    font-size: 22px; font-weight: 500;
+    margin: 8px 0 6px; letter-spacing: -0.02em;
+  }
+  .add-sub {
+    color: var(--text-2); font-size: 13px; margin-bottom: 20px;
+    line-height: 1.5;
+  }
+  .camera-frame {
+    height: 200px;
+    background:
+      linear-gradient(135deg, #29231e, #1a1614);
+    border-radius: var(--radius);
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-3);
+    font-size: 13px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .camera-frame .brackets {
+    position: absolute;
+    top: 24px; bottom: 24px; left: 24px; right: 24px;
+    border-radius: 12px;
+  }
+  .camera-frame .brackets::before,
+  .camera-frame .brackets::after,
+  .camera-frame::before,
+  .camera-frame::after {
+    content:''; position: absolute; width: 28px; height: 28px;
+    border-color: var(--accent);
+    border-style: solid;
+  }
+  .camera-frame::before { top: 24px; left: 24px; border-width: 2px 0 0 2px; border-top-left-radius: 8px; }
+  .camera-frame::after  { top: 24px; right: 24px; border-width: 2px 2px 0 0; border-top-right-radius: 8px; }
+  .camera-frame .brackets::before { bottom: 24px; left: 24px; border-width: 0 0 2px 2px; border-bottom-left-radius: 8px; }
+  .camera-frame .brackets::after  { bottom: 24px; right: 24px; border-width: 0 2px 2px 0; border-bottom-right-radius: 8px; }
+  .found-list {
+    color: var(--text-2); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.08em; margin: 12px 0 8px;
+  }
+  .found-item {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 12px;
+    position: relative;
+  }
+  .found-item.new::before {
+    content:''; position: absolute; left: -3px; top: 14px; bottom: 14px;
+    width: 3px; background: var(--accent);
+    border-radius: 2px;
+  }
+  .found-item .avatar {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+  .found-item .info { flex: 1; }
+  .found-item .info .name { font-size: 14px; font-weight: 500; }
+  .found-item .info .caption { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+  .found-item .cta {
+    color: var(--accent); font-size: 13px; font-weight: 500;
+  }
+
+  /* ---- Automations screen ---- */
+  .prompt-box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 18px;
+  }
+  .prompt-label {
+    font-size: 12px; color: var(--text-2);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .prompt-field {
+    color: var(--text-3);
+    font-size: 15px;
+    display: flex; justify-content: space-between; align-items: center;
+    line-height: 1.4;
+  }
+  .prompt-field .mic {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    color: #1e1810; font-size: 15px;
+    flex-shrink: 0;
+    margin-left: 12px;
+  }
+  .section-label {
+    color: var(--text-2); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 20px 0 10px;
+  }
+  .rule-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .rule-card .head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .rule-card .head .icon { font-size: 20px; }
+  .rule-card .head .name { font-size: 15px; font-weight: 500; flex: 1; }
+  .rule-card .head .status {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 8px rgba(127,176,105,0.6);
+  }
+  .rule-card .body-text {
+    font-size: 13px; color: var(--text-2); line-height: 1.5;
+  }
+  .rule-card .footer {
+    font-size: 11px; color: var(--text-3);
+    margin-top: 10px;
+    display: flex; justify-content: space-between;
+  }
+  .suggestion {
+    background: linear-gradient(135deg, rgba(217,107,74,0.15), rgba(244,168,96,0.08));
+    border: 1px dashed rgba(217,107,74,0.4);
+  }
+  .suggestion .head .name { color: var(--accent-2); }
+  .suggestion-actions {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .btn {
+    flex: 1;
+    padding: 10px;
+    border-radius: 12px;
+    font-size: 13px;
+    text-align: center;
+    font-weight: 500;
+  }
+  .btn.primary { background: var(--accent); color: #1e1810; }
+  .btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--line); }
+
+  .legend {
+    max-width: 780px;
+    margin: 40px auto 0;
+    color: var(--text-2);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .legend h3 { color: var(--text); font-size: 15px; margin: 20px 0 6px; font-weight: 500; }
+  .legend ul { padding-left: 20px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+
+<h1 class="doc-title">Keystone — UI наметки v0.1</h1>
+<p class="doc-note">
+  Rough wireframes четырёх ключевых экранов. Палитра, типографика и spacing —
+  индикативные, не финальные. Задача этих макетов — показать структуру, иерархию
+  и характер взаимодействия. Финальный визуальный дизайн — работа дизайнера.
+</p>
+
+<div class="screens">
+
+  <!-- ============================================ -->
+  <!-- HOME                                          -->
+  <!-- ============================================ -->
+  <div>
+    <div class="screen-label">1 · Home (ambient view)</div>
+    <div class="phone">
+      <div class="body">
+        <div class="greeting">Доброе утро, Валерий</div>
+        <div class="weather">22° · солнечно · ветер 5 м/с</div>
+
+        <div class="room-grid">
+          <div class="room big active">
+            <div>
+              <div class="room-name">Гостиная</div>
+              <div class="room-meta">2 источника света · 21°C</div>
+            </div>
+            <div class="motion-dot"></div>
+            <div class="room-meta" style="align-self: flex-end;">свет включён</div>
+          </div>
+          <div class="room">
+            <div class="room-name">Кухня</div>
+            <div class="power-live">340 W</div>
+            <div class="kettle-icon">☕</div>
+          </div>
+          <div class="room active">
+            <div class="room-name">Спальня</div>
+            <div class="room-meta">21°C · 60% RH</div>
+          </div>
+          <div class="room">
+            <div class="room-name">Ванная</div>
+            <div class="contact-badge">окно</div>
+            <div class="room-meta">никого</div>
+          </div>
+          <div class="room">
+            <div class="room-name">Коридор</div>
+            <div class="room-meta">21°C</div>
+          </div>
+        </div>
+
+        <div class="intent-card">
+          <div class="icon">☕</div>
+          <div class="text">
+            <div class="title">Утренний сценарий</div>
+            <div class="subtitle">Свет 30% · Кофеварка · Шторы 50%</div>
+          </div>
+          <div class="arrow">›</div>
+        </div>
+      </div>
+      <div class="navbar">
+        <div class="nav-item active"><div class="glyph">🏠</div>Дом</div>
+        <div class="nav-item"><div class="glyph">⚡</div>Энергия</div>
+        <div class="nav-item"><div class="glyph">✨</div>Правила</div>
+        <div class="nav-item"><div class="glyph">👤</div>Я</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- ROOM DETAIL                                   -->
+  <!-- ============================================ -->
+  <div>
+    <div class="screen-label">2 · Room detail (Гостиная)</div>
+    <div class="phone">
+      <div class="body">
+        <div class="room-header">
+          <div class="back">‹ Дом</div>
+          <div class="room-title-row">
+            <div class="room-title">Гостиная</div>
+            <div style="color: var(--accent); font-size: 13px;">свет вкл</div>
+          </div>
+          <div class="room-status">21°C · 60% · 3 устройства активны</div>
+        </div>
+
+        <div class="ambient-hero">
+          <div class="light-blob a"></div>
+          <div class="light-blob b"></div>
+          <div class="motion-wave"></div>
+        </div>
+
+        <div class="scene-chips">
+          <div class="chip active">Кино</div>
+          <div class="chip">Работа</div>
+          <div class="chip">Уснуть</div>
+          <div class="chip">+ Сцена</div>
+        </div>
+
+        <div class="device-row">
+          <div class="device-emoji">💡</div>
+          <div class="name">Верхний свет
+            <div class="caption">включён · 65%</div>
+          </div>
+          <div class="slider"><div class="fill" style="width:65%"></div></div>
+        </div>
+        <div class="device-row">
+          <div class="device-emoji">🛋️</div>
+          <div class="name">Торшер
+            <div class="caption">выключен</div>
+          </div>
+          <div class="toggle"></div>
+        </div>
+        <div class="device-row">
+          <div class="device-emoji">🎵</div>
+          <div class="name">Sonos
+            <div class="caption">играет · Radiohead</div>
+          </div>
+          <div class="toggle on"></div>
+        </div>
+      </div>
+      <div class="navbar">
+        <div class="nav-item active"><div class="glyph">🏠</div>Дом</div>
+        <div class="nav-item"><div class="glyph">⚡</div>Энергия</div>
+        <div class="nav-item"><div class="glyph">✨</div>Правила</div>
+        <div class="nav-item"><div class="glyph">👤</div>Я</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- ADD DEVICE                                    -->
+  <!-- ============================================ -->
+  <div>
+    <div class="screen-label">3 · Добавить устройство</div>
+    <div class="phone">
+      <div class="body">
+        <div class="back">‹ Отмена</div>
+        <div class="add-title">Найдём устройство</div>
+        <div class="add-sub">Наведи камеру на QR-код или коробку. Мы также ищем устройства в твоей сети.</div>
+
+        <div class="camera-frame">
+          <div class="brackets"></div>
+          Live preview
+        </div>
+
+        <div class="found-list">Найдено рядом · 3</div>
+        <div class="found-item new">
+          <div class="avatar">💡</div>
+          <div class="info">
+            <div class="name">Лампа Aqara</div>
+            <div class="caption">Zigbee · через DIRIGERA</div>
+          </div>
+          <div class="cta">Добавить</div>
+        </div>
+        <div class="found-item new">
+          <div class="avatar">🔌</div>
+          <div class="info">
+            <div class="name">Розетка TRETAKT</div>
+            <div class="caption">Zigbee · через DIRIGERA</div>
+          </div>
+          <div class="cta">Добавить</div>
+        </div>
+        <div class="found-item">
+          <div class="avatar">📺</div>
+          <div class="info">
+            <div class="name">Apple TV</div>
+            <div class="caption">Matter · Wi-Fi</div>
+          </div>
+          <div class="cta">Добавить</div>
+        </div>
+      </div>
+      <div class="navbar">
+        <div class="nav-item active"><div class="glyph">🏠</div>Дом</div>
+        <div class="nav-item"><div class="glyph">⚡</div>Энергия</div>
+        <div class="nav-item"><div class="glyph">✨</div>Правила</div>
+        <div class="nav-item"><div class="glyph">👤</div>Я</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- AUTOMATIONS                                   -->
+  <!-- ============================================ -->
+  <div>
+    <div class="screen-label">4 · Правила (AI-first)</div>
+    <div class="phone">
+      <div class="body">
+        <div class="add-title" style="margin-top: 6px;">Правила</div>
+        <div class="add-sub">Опиши что хочешь — Keystone соберёт правило сам.</div>
+
+        <div class="prompt-box">
+          <div class="prompt-label">Что автоматизировать?</div>
+          <div class="prompt-field">
+            <div style="flex: 1;">В 22:00 приглушить свет по всему дому…</div>
+            <div class="mic">🎤</div>
+          </div>
+        </div>
+
+        <div class="rule-card suggestion">
+          <div class="head">
+            <div class="icon">💡</div>
+            <div class="name">Обнаружен паттерн</div>
+          </div>
+          <div class="body-text">
+            Ты каждое утро в 7:30 включаешь свет и кофеварку. Автоматизировать?
+          </div>
+          <div class="suggestion-actions">
+            <div class="btn primary">Да, включить</div>
+            <div class="btn ghost">Не сейчас</div>
+          </div>
+        </div>
+
+        <div class="section-label">Активные</div>
+
+        <div class="rule-card">
+          <div class="head">
+            <div class="icon">🌇</div>
+            <div class="name">Умное утро</div>
+            <div class="status"></div>
+          </div>
+          <div class="body-text">
+            Каждый будний день в 7:30: свет в спальне → 30%, кофеварка → включить.
+          </div>
+          <div class="footer">
+            <span>активно</span>
+            <span>4 срабатывания на неделе</span>
+          </div>
+        </div>
+
+        <div class="rule-card">
+          <div class="head">
+            <div class="icon">☕</div>
+            <div class="name">Чайник → лампа</div>
+            <div class="status"></div>
+          </div>
+          <div class="body-text">
+            Когда чайник тянет больше 1.5 кВт — включить лампу в спальне.
+          </div>
+          <div class="footer">
+            <span>активно</span>
+            <span>12 срабатываний</span>
+          </div>
+        </div>
+      </div>
+      <div class="navbar">
+        <div class="nav-item"><div class="glyph">🏠</div>Дом</div>
+        <div class="nav-item"><div class="glyph">⚡</div>Энергия</div>
+        <div class="nav-item active"><div class="glyph">✨</div>Правила</div>
+        <div class="nav-item"><div class="glyph">👤</div>Я</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <h3>Что показывают эти макеты</h3>
+  <ul>
+    <li><strong>Home</strong> — ambient view комнат неровной сеткой. Свет включён — тайл теплеет. Движение — точка пульсирует. Открытое окно — тонкий бэдж в углу. Живой чайник INSPELNING — цифра ватт в реальном времени. Внизу — intent-card «утренний сценарий».</li>
+    <li><strong>Room detail</strong> — крупный ambient-hero комнаты (свет как размытые пятна, точка движения). Сцены как chip-buttons. Устройства — inline controls, каждое своим типом (свет = слайдер, розетка = toggle, media = toggle с caption).</li>
+    <li><strong>Add device</strong> — один экран, камера + live-список найденного. Zigbee-устройства через DIRIGERA видны сразу, Matter-устройства подхватываются в тот же список. Никаких «выберите бренд из списка».</li>
+    <li><strong>Automations</strong> — верхняя половина: prompt-поле «что автоматизировать?» + proactive suggestion от pattern-detector. Ниже — активные правила как natural-language карточки со статусом.</li>
+  </ul>
+
+  <h3>Что здесь не показано (нужно от дизайнера)</h3>
+  <ul>
+    <li>Onboarding flow (5 экранов).</li>
+    <li>Empty / loading / error / offline states каждого из экранов выше.</li>
+    <li>Light mode вариант.</li>
+    <li>Energy screen — с реальным графиком, топ-потребители, аномалии.</li>
+    <li>You / Family mode — управление доступом семьи.</li>
+    <li>Motion tokens и микровзаимодействия — как ambient-элементы дышат.</li>
+    <li>Финальная типографика и spacing — здесь использован Inter + system-ui как приближение.</li>
+    <li>Компонентная библиотека в Figma.</li>
+  </ul>
+
+  <h3>Открытые вопросы</h3>
+  <ul>
+    <li>Ambient view — оставляем абстрактную сетку или в v1.5 добавляем реальный 2D-план квартиры пользователя?</li>
+    <li>OCR коробки в Add device — насколько глубоко? Или только Matter QR?</li>
+    <li>Тон копирайта — сейчас «на ты», нейтрально. Финально: остаёмся на «ты», или локализуем?</li>
+  </ul>
+</div>
+
+</body>
+</html>
