@@ -151,3 +151,59 @@
 .state-error .meta {
   color: var(--c-danger);
 }
+
+/* ---- Событие устройства ---- */
+
+/* Вспышка по краю плитки: заметно боковым зрением, но не дёргает раскладку. */
+.fired {
+  animation: tile-fired 900ms var(--easing-spring);
+}
+
+.eventBadge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--c-bg);
+  background: var(--c-accent);
+  animation: badge-in 220ms var(--easing-spring);
+}
+
+.eventBadge[data-tone='neutral'] {
+  background: var(--c-text-2);
+}
+
+.eventBadge[data-tone='danger'] {
+  background: var(--c-danger);
+  color: var(--c-text);
+}
+
+@keyframes tile-fired {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fired {
+    animation: none;
+  }
+  .eventBadge {
+    animation: none;
+  }
+}

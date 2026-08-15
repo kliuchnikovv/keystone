@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Trash2 } from 'lucide-react';
 import styles from './DeviceDetailScreen.module.css';
 import { CameraView } from '../components/CameraView/CameraView';
+import { ButtonActivity } from '../components/ButtonActivity/ButtonActivity';
 import { useDevicesStore, liveKey } from '../state/devicesStore';
 import { useEventsStore } from '../state/eventsStore';
 import { Toggle } from '../components/Toggle/Toggle';
@@ -126,6 +127,16 @@ function DeviceMainControl({ device }: { device: Device }) {
     void writeState(device.id, { feature: 'color_temp', key: 'kelvin', value: v }).catch(
       console.warn,
     );
+
+  // У кнопки нет ни одного состояния — только события. Экран показывает
+  // последний жест и историю, иначе смотреть просто не на что.
+  if (hasFeature(device, 'button')) {
+    return (
+      <section className={styles.main}>
+        <ButtonActivity deviceId={device.id} />
+      </section>
+    );
+  }
 
   // Камера — своя раскладка: видео занимает верх экрана, остальные фичи
   // (звонок, PTZ) идут под ним.

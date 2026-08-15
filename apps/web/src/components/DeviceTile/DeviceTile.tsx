@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Lightbulb, Plug, Thermometer, Droplet, Eye, HelpCircle } from 'lucide-react';
+import { Lightbulb, Plug, Thermometer, Droplet, Eye, HelpCircle, RadioTower } from 'lucide-react';
 import styles from './DeviceTile.module.css';
 import { Toggle } from '../Toggle/Toggle';
 import { BrightnessSlider } from '../BrightnessSlider/BrightnessSlider';
@@ -7,6 +7,7 @@ import { useDevicesStore, liveKey } from '../../state/devicesStore';
 import { invokeAction, writeState } from '../../api/devices';
 import type { Device } from '../../api/types';
 import { kelvinTone } from '../../lib/format';
+import { useRecentEvent } from '../../hooks/useRecentEvent';
 
 export type TileState = 'idle' | 'active' | 'pending' | 'offline' | 'error';
 
@@ -28,7 +29,10 @@ function IconFor({ type }: { type: string }) {
     case 'humidity':
       return <Droplet size={20} />;
     case 'motion':
+    case 'motion_sensor':
       return <Eye size={20} />;
+    case 'button':
+      return <RadioTower size={20} />;
     default:
       return <HelpCircle size={20} />;
   }
@@ -64,16 +68,20 @@ export function DeviceTile({ device, size = 'default', onOpen }: DeviceTileProps
   const motion = useDevicesStore(
     (s) => s.liveState.get(liveKey(device.id, 'motion', 'detected')) as boolean | undefined,
   );
+  // Кнопка не имеет состояния вообще: нажатие живёт долю секунды и существует
+  // только как событие. Без этой подсветки пульт выглядит неисправным.
+  const recentEvent = useRecentEvent(device.id);
   const pending = useDevicesStore((s) => s.pending.get(liveKey(device.id, 'onoff', 'value')));
   const markPending = useDevicesStore((s) => s.markPending);
 
   const state: TileState = useMemo(() => {
     if (pending) return 'pending';
     if (!online) return 'offline';
+    if (recentEvent) return 'active';
     if (motion === true) return 'active';
     if (on === true) return 'active';
     return 'idle';
-  }, [pending, online, on, motion]);
+  }, [pending, online, on, motion, recentEvent]);
 
   const clearPending = useDevicesStore((s) => s.clearPending);
 
@@ -114,9 +122,25 @@ export function DeviceTile({ device, size = 'default', onOpen }: DeviceTileProps
         styles[`size-${size}`],
         styles[`state-${state}`],
         styles[`type-${device.type}`],
-      ].join(' ')}
+        recentEvent && styles.fired,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       aria-label={device.name}
     >
+      {recentEvent && (
+        <span
+          // Ключ по времени перезапускает анимацию, когда два нажатия приходят
+          // подряд: без него второе нажатие визуально теряется.
+          key={recentEvent.at}
+          className={styles.eventBadge}
+          data-tone={recentEvent.tone}
+          role="status"
+          aria-live="polite"
+        >
+          {recentEvent.short}
+        </span>
+      )}
       <header className={styles.header}>
         <span className={styles.icon}>
           <IconFor type={device.type} />

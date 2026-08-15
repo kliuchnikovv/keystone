@@ -3,11 +3,13 @@ import { openStream } from '../api/stream';
 import { useDevicesStore, liveKey } from '../state/devicesStore';
 import { useConnectionStore } from '../state/connectionStore';
 import { useEventsStore } from '../state/eventsStore';
+import { describeEvent } from '../lib/device-events';
 
 export function useLiveStream() {
   const setLive = useDevicesStore((s) => s.setLive);
   const setStatus = useConnectionStore((s) => s.setStatus);
   const pushEvent = useEventsStore((s) => s.push);
+  const noteEvent = useEventsStore((s) => s.noteEvent);
 
   useEffect(() => {
     const handle = openStream(
@@ -34,19 +36,27 @@ export function useLiveStream() {
             DeviceID: string;
             Feature: string;
             Name: string;
+            Data?: Record<string, unknown>;
           };
+          const label = describeEvent(p.Name, p.Data);
           pushEvent({
             kind: 'event',
             deviceId: p.DeviceID,
             feature: p.Feature,
-            label: p.Name,
+            label: label.long,
+          });
+          noteEvent({
+            deviceId: p.DeviceID,
+            feature: p.Feature,
+            name: p.Name,
+            data: p.Data,
           });
         }
       },
       (status) => setStatus(status),
     );
     return () => handle.close();
-  }, [setLive, setStatus, pushEvent]);
+  }, [setLive, setStatus, pushEvent, noteEvent]);
 }
 
 function describeChange(prev: unknown, next: unknown): string {
