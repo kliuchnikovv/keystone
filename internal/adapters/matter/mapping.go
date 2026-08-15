@@ -327,9 +327,12 @@ var featureBindings = map[domain.FeatureKey]map[domain.StateKey][]FeatureBinding
 	},
 }
 
-// writeAsCommand lists states that Matter exposes read-only and that can only
-// be changed through a cluster command. Values are the parameter name the
-// corresponding ActionSet expects.
+// writeAsCommand lists states that can only be changed through a cluster
+// command, with the parameter name the corresponding ActionSet expects.
+//
+// Which of them are read-only is not asserted here — genAttributes carries that
+// straight from the spec, and TestWriteAsCommandMatchesSpec fails if this list
+// and the model ever disagree.
 //
 // This is not an implementation detail we can push onto callers: keystone's
 // domain says "set brightness to 30", and it is the transport's job to know
@@ -549,35 +552,22 @@ func LogLuxToLux(raw int) float32 {
 // lowercase strings keystone stores, so rules can compare against stable words
 // rather than magic numbers.
 
-var lockStates = map[int]string{0: "not_fully_locked", 1: "locked", 2: "unlocked", 3: "unlatched"}
-
-var hvacModes = map[int]string{
-	0: "off", 1: "auto", 3: "cool", 4: "heat", 5: "emergency_heat", 6: "precooling", 7: "fan_only", 8: "dry", 9: "sleep",
-}
-
-var fanModes = map[int]string{0: "off", 1: "low", 2: "medium", 3: "high", 4: "on", 5: "auto", 6: "smart"}
-
-var airQualityLevels = map[int]string{
-	0: "unknown", 1: "good", 2: "fair", 3: "moderate", 4: "poor", 5: "very_poor", 6: "extremely_poor",
-}
-
-var alarmStates = map[int]string{0: "normal", 1: "warning", 2: "critical"}
-
-var operationalStates = map[int]string{
-	0: "stopped", 1: "running", 2: "paused", 3: "error",
-	0x40: "seeking_charger", 0x41: "charging", 0x42: "docked",
-}
-
-var playbackStates = map[int]string{0: "playing", 1: "paused", 2: "not_playing", 3: "buffering"}
-
-var evseStates = map[int]string{
-	0: "not_plugged_in", 1: "plugged_in_no_demand", 2: "plugged_in_demand",
-	3: "plugged_in_charging", 4: "plugged_in_discharging", 5: "session_ending", 6: "fault",
-}
-
-var evseSupplyStates = map[int]string{
-	0: "disabled", 1: "charging_enabled", 2: "discharging_enabled", 3: "disabled_error", 4: "disabled_diagnostics",
-}
+// Таблицы значений берутся из сгенерированного matter_gen.go: раньше они
+// набивались по памяти, и в двух из восьми были пропуски — у робота-пылесоса
+// не хватало половины состояний, у зарядки авто одного.
+var (
+	lockStates        = genEnums["DoorLock.LockStateEnum"]
+	hvacModes         = genEnums["Thermostat.SystemModeEnum"]
+	fanModes          = genEnums["FanControl.FanModeEnum"]
+	airQualityLevels  = genEnums["AirQuality.AirQualityEnum"]
+	alarmStates       = genEnums["SmokeCoAlarm.AlarmStateEnum"]
+	operationalStates = genEnums["RvcOperationalState.OperationalStateEnum"]
+	playbackStates    = genEnums["MediaPlayback.PlaybackStateEnum"]
+	evseStates        = genEnums["EnergyEvse.StateEnum"]
+	evseSupplyStates  = genEnums["EnergyEvse.SupplyStateEnum"]
+	colorModes        = genEnums["ColorControl.ColorModeEnum"]
+	valveStates       = genEnums["ValveConfigurationAndControl.ValveStateEnum"]
+)
 
 // enumValue normalises a Matter enum to a keystone string. Names that arrive
 // already decoded are lower-cased; unknown numbers are surfaced as-is rather
@@ -1276,7 +1266,7 @@ func decodeAttributeAny(feature domain.FeatureKey, key domain.StateKey, v any) (
 		}
 		return SaturationToPercent(n), nil
 	case feature == domain.FeatureColor && key == domain.StateColorMode:
-		return enumValue(v, map[int]string{0: "hue_sat", 1: "xy", 2: "color_temp"})
+		return enumValue(v, colorModes)
 
 	// --- environment ---
 	case feature == domain.FeatureIlluminance:
@@ -1357,7 +1347,7 @@ func decodeAttributeAny(feature domain.FeatureKey, key domain.StateKey, v any) (
 	case feature == domain.FeatureMode && key == domain.StateMode:
 		return asInt(v)
 	case feature == domain.FeatureValve && key == domain.StateValveOpen:
-		state, err := enumValue(v, map[int]string{0: "closed", 1: "open", 2: "transitioning"})
+		state, err := enumValue(v, valveStates)
 		if err != nil {
 			return nil, err
 		}
