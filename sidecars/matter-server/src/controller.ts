@@ -334,29 +334,53 @@ export function createController(opts: ControllerOptions): MatterController {
             const n = assertStarted(node);
             const client = clientFor(n, p.nodeId);
 
-            // decommission() tells the device to drop our fabric; delete() only
-            // forgets it on our side. Using delete() left the accessory
-            // carrying our fabric forever — visible to the user as a stale
-            // "Matter Test" entry under Apple Home's Connected Services, with
-            // no way to remove it short of a factory reset.
-            try {
-                await client.decommission();
-                log("info", "matter node decommissioned", { nodeId: p.nodeId });
-                return { removed: "decommissioned" };
-            } catch (err) {
-                // Only reachable devices can be decommissioned properly. An
-                // unplugged one still has to disappear from keystone, but the
-                // caller must learn that the device kept our fabric.
-                log("warn", "matter node unreachable, forcing removal", {
-                    nodeId: p.nodeId,
-                    err: String(err),
-                });
-                await client.delete();
-                return {
-                    removed: "forced",
-                    message: "device did not respond; it still holds our fabric and needs a factory reset",
-                };
+            // What matters is whether the device still carries our fabric.
+            // ClientNode.decommission() gates the fabric removal on
+            // lifecycle.isCommissioned and silently degrades to a local delete
+            // when that flag is false — reporting success while the accessory
+            // goes on listing us under Apple Home's Connected Services. Read
+            // both signals and log them, so a failure is diagnosable instead of
+            // being another silent no-op.
+            const commissioned = isCommissioned(client);
+            const flagged = Boolean((client as unknown as {
+                lifecycle?: { isCommissioned?: boolean };
+            }).lifecycle?.isCommissioned);
+            log("info", "removing matter node", { nodeId: p.nodeId, hasPeerAddress: commissioned, lifecycleFlag: flagged });
+
+            if (commissioned) {
+                try {
+                    // Invoked directly rather than through ClientNode
+                    // .decommission(): this is the call that tells the device to
+                    // drop our fabric, and it must not depend on a flag that can
+                    // be stale after a restart.
+                    await (client as unknown as {
+                        act(purpose: string, actor: (agent: {
+                            commissioning: { decommission(): Promise<void> };
+                        }) => Promise<void>): Promise<void>;
+                    }).act("decommission", (agent) => agent.commissioning.decommission());
+
+                    // The node is out of the fabric; drop what is left locally.
+                    await client.delete();
+                    log("info", "matter node decommissioned", { nodeId: p.nodeId });
+                    return { removed: "decommissioned" };
+                } catch (err) {
+                    log("warn", "matter node did not accept decommissioning", {
+                        nodeId: p.nodeId,
+                        err: String(err),
+                    });
+                    await client.delete();
+                    return {
+                        removed: "forced",
+                        message: `device refused or did not answer decommissioning: ${String(err)}`,
+                    };
+                }
             }
+
+            // No peer address means we never held a fabric on it — nothing to
+            // give back, only local bookkeeping.
+            await client.delete();
+            log("info", "matter node removed locally (was not commissioned)", { nodeId: p.nodeId });
+            return { removed: "decommissioned" };
         },
 
         async discoverCommissionable(p: DiscoverCommissionableParams): Promise<CommissionableDevice[]> {

@@ -312,12 +312,33 @@ curl -s -X POST localhost:7777/devices/commission \
 ```
 Ожидаемо: подключение проходит так же, как по цифровому коду.
 
-### D4. Удаление
+### D4. Удаление — и проверка в Apple Home
 
 ```bash
 curl -s -X DELETE localhost:7777/devices/$ID
 ```
-Ожидаемо: `{"ok":true}`, устройство исчезло из `/devices` и из UI. Если в ответе есть `adapter_warning` — устройство удалено у нас, но не ответило само (например, уже офлайн). Это допустимо, но запиши.
+
+Ожидаемо: `{"ok":true}`, устройство исчезло из `/devices` и из UI.
+
+**Главная часть проверки — не в keystone.** Открой в Apple Home: устройство → Настройки → Connected Services. Записи «Matter Test / matter.js» там быть **не должно**: удаление обязано снять нашу фабрику с самого устройства.
+
+В логе sidecar'а смотри три строки подряд:
+
+```
+removing matter node        nodeId=... hasPeerAddress=true lifecycleFlag=...
+(matter.js) Removing node ... by removing fabric N on the node
+matter node decommissioned  nodeId=...
+```
+
+Строка matter.js про `removing fabric` — единственное доказательство, что мы действительно попросили устройство нас забыть.
+
+**Провал и что он значит:**
+
+| Симптом | Что произошло |
+|---|---|
+| `hasPeerAddress=false` | keystone не считает себя владельцем фабрики — удалит только локально, устройство про нас не узнает |
+| `matter node did not accept decommissioning` | устройство отказалось или не ответило; в ответе будет `adapter_warning`, потребуется factory-reset |
+| Все три строки есть, но запись в Apple Home осталась | закрой и открой экран Connected Services: список кэшируется |
 
 ---
 
