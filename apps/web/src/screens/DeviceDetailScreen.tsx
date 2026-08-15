@@ -57,6 +57,7 @@ export function DeviceDetailScreen() {
   // недоступном сервере не доходит вовсе. «Данные есть» и «ждём слишком долго»
   // — признаки, которые видно снаружи и которые не зависят от версии
   // библиотеки.
+  const [notice, setNotice] = useState<{ tone: 'warn' | 'error'; text: string } | undefined>();
   const devicesQuery = useDevices();
   const loaded = devicesQuery.data !== undefined;
   const stalled = useStalled(!loaded);
@@ -99,29 +100,38 @@ export function DeviceDetailScreen() {
     );
   }
 
+  const leaveToHome = () => {
+    void qc.invalidateQueries({ queryKey: ['devices'] });
+    nav('/');
+  };
+
+  // Подтверждение уже спрашивается в самой секции («Отмена» / «Точно
+  // удалить»), поэтому никакого window.confirm здесь нет: он был вторым
+  // вопросом поверх первого и, когда браузер подавляет диалоги, молча
+  // возвращал false — нажатие просто ничего не делало.
   const onDelete = async () => {
-    if (!confirm(`Удалить «${device.name}»?`)) return;
+    setNotice(undefined);
     try {
       const res = await deleteDevice(device.id);
       if (res.persist_warning) console.warn('persist warning:', res.persist_warning);
       if (res.adapter_warning) {
         // Устройство удалено из keystone, но транспорт не смог договориться с
         // ним самим — оно продолжит показывать нас среди своих подключённых
-        // сервисов. Молчать об этом нельзя: убрать нас оттуда сможет только
-        // пользователь.
+        // сервисов. Убрать нас оттуда сможет только пользователь, поэтому
+        // остаёмся на экране, пока он не прочитает.
         console.warn('adapter decommission warning:', res.adapter_warning);
-        alert(
-          `«${device.name}» удалено из Keystone, но устройство не ответило и всё ещё считает нас подключённым сервисом.\n\n` +
-            'Убери нас вручную в приложении производителя или сбрось устройство к заводским настройкам.',
-        );
+        setNotice({
+          tone: 'warn',
+          text: `«${device.name}» удалено из Keystone, но устройство не ответило и всё ещё считает нас подключённым сервисом. Убери нас в приложении производителя или сбрось устройство к заводским настройкам.`,
+        });
+        return;
       }
     } catch (e) {
       console.warn('delete failed', e);
-      alert('Не удалось удалить устройство. Проверь, что keystone запущен.');
+      setNotice({ tone: 'error', text: 'Не удалось удалить устройство. Проверь, что keystone запущен.' });
       return;
     }
-    void qc.invalidateQueries({ queryKey: ['devices'] });
-    nav('/');
+    leaveToHome();
   };
 
   return (
@@ -141,6 +151,19 @@ export function DeviceDetailScreen() {
       <DeviceMainControl device={device} />
 
       <HistoryList deviceId={device.id} />
+
+      {notice && (
+        <div className={styles.notice} data-tone={notice.tone} role="alert">
+          <p>{notice.text}</p>
+          <Button
+            variant="ghost"
+            size="md"
+            onClick={() => (notice.tone === 'warn' ? leaveToHome() : setNotice(undefined))}
+          >
+            {notice.tone === 'warn' ? 'Понятно' : 'Закрыть'}
+          </Button>
+        </div>
+      )}
 
       <DeviceSettingsSection device={device} onDelete={onDelete} />
     </div>
@@ -197,23 +220,33 @@ function DeviceMainControl({ device }: { device: Device }) {
     }
   };
 
+  // Отказ в управлении обязан быть виден. Раньше он уходил в console.warn, и
+  // отвергнутая устройством команда выглядела как «ползунок просто не
+  // работает» — на диагностику этого ушёл целый прогон.
+  const [controlError, setControlError] = useState<string | undefined>();
+  const control = (what: string, run: Promise<unknown>) =>
+    void run.catch((e: Error) => {
+      console.warn(`${what} failed`, e);
+      setControlError(`Не удалось изменить ${what}: ${e.message}`);
+    });
+
   const setBrightness = (v: number) =>
-    void writeState(device.id, { feature: 'brightness', key: 'level', value: v }).catch(
-      console.warn,
-    );
+    control('яркость', writeState(device.id, { feature: 'brightness', key: 'level', value: v }));
   const setKelvin = (v: number) =>
-    void writeState(device.id, { feature: 'color_temp', key: 'kelvin', value: v }).catch(
-      console.warn,
-    );
+    control('температуру', writeState(device.id, { feature: 'color_temp', key: 'kelvin', value: v }));
   const setHue = (v: number) =>
-    void writeState(device.id, { feature: 'color', key: 'hue', value: v }).catch(console.warn);
+    control('цвет', writeState(device.id, { feature: 'color', key: 'hue', value: v }));
   const setSaturation = (v: number) =>
-    void writeState(device.id, { feature: 'color', key: 'saturation', value: v }).catch(
-      console.warn,
-    );
+    control('насыщенность', writeState(device.id, { feature: 'color', key: 'saturation', value: v }));
 
   // У кнопки нет ни одного состояния — только события. Экран показывает
   // последний жест и историю, иначе смотреть просто не на что.
+  const errorBanner = controlError ? (
+    <p className={styles.controlError} role="alert">
+      {controlError}
+    </p>
+  ) : null;
+
   if (hasFeature(device, 'button')) {
     return (
       <section className={styles.main}>
@@ -256,16 +289,19 @@ function DeviceMainControl({ device }: { device: Device }) {
         </div>
 
         {/* Регуляторы показываем по наличию возможности, а не по наличию
-            значения: раньше слайдер прятался, пока не приедет состояние, и
-            лампа выглядела как «не умеет диммироваться». Пока значение
-            неизвестно или свет выключен — слайдер виден, но заблокирован. */}
+            значения: иначе слайдер прячется, пока не приедет состояние, и
+            лампа выглядит как «не умеет диммироваться».
+            Выключенный свет их НЕ блокирует: выставить яркость на выключенной
+            лампе — обычное действие, она от этого включается (в Matter для
+            этого есть MoveToLevelWithOnOff), а цвет применяется флагом
+            ExecuteIfOff. Блокировка «пока выключено» просто съедала нажатия. */}
         {hasFeature(device, 'brightness') && (
           <div className={styles.sliderBlock}>
             <p className={styles.sliderLabel}>Яркость</p>
             <BrightnessSlider
               value={brightness ?? 0}
               size="lg"
-              disabled={!on || brightness === undefined}
+              disabled={brightness === undefined}
               onCommit={setBrightness}
             />
           </div>
@@ -278,11 +314,13 @@ function DeviceMainControl({ device }: { device: Device }) {
             </p>
             <ColorTempSlider
               value={kelvin ?? 2700}
-              disabled={!on || kelvin === undefined}
+              disabled={kelvin === undefined}
               onCommit={setKelvin}
             />
           </div>
         )}
+
+        {errorBanner}
 
         {hasFeature(device, 'color') && (
           <div className={styles.sliderBlock}>
@@ -290,7 +328,6 @@ function DeviceMainControl({ device }: { device: Device }) {
             <ColorSlider
               hue={hue ?? 0}
               saturation={saturation ?? 100}
-              disabled={!on}
               onCommitHue={setHue}
               onCommitSaturation={setSaturation}
             />

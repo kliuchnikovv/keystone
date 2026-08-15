@@ -125,6 +125,7 @@ const (
 	CmdOff                   = "Off"
 	CmdToggle                = "Toggle"
 	CmdMoveToLevel           = "MoveToLevel"
+	CmdMoveToLevelWithOnOff  = "MoveToLevelWithOnOff"
 	CmdMoveToColorTempMireds = "MoveToColorTemperature"
 
 	CmdMoveToHueAndSaturation = "MoveToHueAndSaturation"
@@ -1512,8 +1513,16 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 			return base, fmt.Errorf("matter: brightness set: params.level: %w", err)
 		}
 		base.Cluster = ClusterLevelControl
-		base.Command = CmdMoveToLevel
-		base.Args = map[string]any{"level": PercentToLevel(n), "transitionTime": 0}
+		// WithOnOff: setting a brightness on a lamp that is off should light it,
+		// which is what every other app does and what the user means. Plain
+		// MoveToLevel is accepted and does nothing visible while the lamp is off.
+		base.Command = CmdMoveToLevelWithOnOff
+		// The options pair is mandatory even here, where we do not need to
+		// override anything: WithOnOff already lights the lamp.
+		base.Args = withOptions(map[string]any{
+			"level":          PercentToLevel(n),
+			"transitionTime": 0,
+		})
 		return base, nil
 
 	case domain.FeatureColorTemp:
@@ -1526,7 +1535,10 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 		}
 		base.Cluster = ClusterColorControl
 		base.Command = CmdMoveToColorTempMireds
-		base.Args = map[string]any{"colorTemperatureMireds": KelvinToMireds(n), "transitionTime": 0}
+		base.Args = executeIfOff(map[string]any{
+			"colorTemperatureMireds": KelvinToMireds(n),
+			"transitionTime":         0,
+		})
 		return base, nil
 
 	case domain.FeatureColor:
@@ -1550,11 +1562,11 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 				return base, fmt.Errorf("matter: color set: params.y: %w", err)
 			}
 			base.Command = CmdMoveToColor
-			base.Args = map[string]any{
+			base.Args = executeIfOff(map[string]any{
 				"colorX":         CieToMatter(float64(fx)),
 				"colorY":         CieToMatter(float64(fy)),
 				"transitionTime": 0,
-			}
+			})
 			return base, nil
 		}
 		// Hue and saturation can be set together or one at a time; a slider that
@@ -1572,32 +1584,32 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 				return base, fmt.Errorf("matter: color set: params.saturation: %w", err)
 			}
 			base.Command = CmdMoveToHueAndSaturation
-			base.Args = map[string]any{
+			base.Args = executeIfOff(map[string]any{
 				"hue":            DegreesToHue(hue),
 				"saturation":     PercentToSaturation(sat),
 				"transitionTime": 0,
-			}
+			})
 		case hasHue:
 			hue, err := asInt(rawHue)
 			if err != nil {
 				return base, fmt.Errorf("matter: color set: params.hue: %w", err)
 			}
 			base.Command = CmdMoveToHue
-			base.Args = map[string]any{
+			base.Args = executeIfOff(map[string]any{
 				"hue":            DegreesToHue(hue),
 				"direction":      0, // shortest path
 				"transitionTime": 0,
-			}
+			})
 		case hasSat:
 			sat, err := asInt(rawSat)
 			if err != nil {
 				return base, fmt.Errorf("matter: color set: params.saturation: %w", err)
 			}
 			base.Command = CmdMoveToSaturation
-			base.Args = map[string]any{
+			base.Args = executeIfOff(map[string]any{
 				"saturation":     PercentToSaturation(sat),
 				"transitionTime": 0,
-			}
+			})
 		default:
 			return base, fmt.Errorf("matter: color set needs hue/saturation or x/y")
 		}
@@ -1857,6 +1869,26 @@ func pickCluster(clusters []string, candidates ...string) string {
 		}
 	}
 	return candidates[len(candidates)-1]
+}
+
+// withOptions fills the OptionsMask/OptionsOverride pair that LevelControl and
+// ColorControl commands declare as mandatory. Omitting them is not a lenient
+// "use defaults" — the command fails validation and the device never sees it,
+// which is exactly how brightness silently did nothing.
+func withOptions(args map[string]any) map[string]any {
+	args["optionsMask"] = 0
+	args["optionsOverride"] = 0
+	return args
+}
+
+// executeIfOff makes a ColorControl command apply even when the light is off.
+// Without it the spec says the device ignores the command outright, so setting
+// a colour on a lamp that is off would silently do nothing — the mask selects
+// the ExecuteIfOff bit and the override sets it.
+func executeIfOff(args map[string]any) map[string]any {
+	args["optionsMask"] = 1
+	args["optionsOverride"] = 1
+	return args
 }
 
 // asInt accepts json.Number, float64, int, int64 uniformly. Sidecar values

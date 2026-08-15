@@ -273,6 +273,7 @@ func TestCommandsForControllableFeatures(t *testing.T) {
 		{domain.FeatureCoverPosition, domain.ActionClose, nil, nil, ClusterWindowCovering, CmdDownOrClose},
 		{domain.FeatureCoverPosition, domain.ActionStop, nil, nil, ClusterWindowCovering, CmdStopMotion},
 		{domain.FeatureCoverPosition, domain.ActionSet, map[string]any{"level": 40}, nil, ClusterWindowCovering, CmdGoToLiftPercentage},
+		{domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": 40}, nil, ClusterLevelControl, CmdMoveToLevelWithOnOff},
 		{domain.FeatureColor, domain.ActionSet, map[string]any{"hue": 120, "saturation": 100}, nil, ClusterColorControl, CmdMoveToHueAndSaturation},
 		{domain.FeatureColor, domain.ActionSet, map[string]any{"x": 0.3, "y": 0.4}, nil, ClusterColorControl, CmdMoveToColor},
 		{domain.FeatureMedia, domain.ActionStart, nil, nil, ClusterMediaPlayback, CmdPlay},
@@ -427,5 +428,44 @@ func TestButtonAndAlarmEvents(t *testing.T) {
 	}
 	if _, _, ok := EventForCluster(ClusterSwitch, "MultiPressOngoing"); ok {
 		t.Error("intermediate events should not reach rules")
+	}
+}
+
+// Выключенная лампа — обычное состояние, из которого пользователь ставит
+// яркость или цвет. Раньше команда уходила, но устройство её игнорировало:
+// LevelControl без WithOnOff ничего не делает на выключенной лампе, а
+// ColorControl по спеке отбрасывает команду без флага ExecuteIfOff.
+func TestCommandsWorkWhileTheLightIsOff(t *testing.T) {
+	t.Run("яркость включает лампу", func(t *testing.T) {
+		inv, err := actionToInvoke("n1", 1, nil, domain.FeatureBrightness, domain.ActionSet,
+			map[string]any{"level": 30})
+		if err != nil {
+			t.Fatalf("actionToInvoke: %v", err)
+		}
+		if inv.Command != CmdMoveToLevelWithOnOff {
+			t.Errorf("command = %s, а обычный MoveToLevel на выключенной лампе ничего не делает", inv.Command)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		feature domain.FeatureKey
+		params  map[string]any
+	}{
+		{"оттенок", domain.FeatureColor, map[string]any{"hue": 120}},
+		{"насыщенность", domain.FeatureColor, map[string]any{"saturation": 50}},
+		{"оттенок и насыщенность", domain.FeatureColor, map[string]any{"hue": 120, "saturation": 50}},
+		{"xy", domain.FeatureColor, map[string]any{"x": 0.3, "y": 0.4}},
+		{"температура", domain.FeatureColorTemp, map[string]any{"kelvin": 2700}},
+	} {
+		t.Run(tc.name+" применяется при выключенном свете", func(t *testing.T) {
+			inv, err := actionToInvoke("n1", 1, nil, tc.feature, domain.ActionSet, tc.params)
+			if err != nil {
+				t.Fatalf("actionToInvoke: %v", err)
+			}
+			if inv.Args["optionsMask"] != 1 || inv.Args["optionsOverride"] != 1 {
+				t.Errorf("нет ExecuteIfOff (%v) — устройство отбросит команду", inv.Args)
+			}
+		})
 	}
 }

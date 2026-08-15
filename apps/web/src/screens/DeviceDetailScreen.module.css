@@ -197,3 +197,39 @@
 .confirmRow > * {
   flex: 1;
 }
+
+/* ---- Сообщение после удаления ---- */
+.notice {
+  margin-top: var(--s-md);
+  padding: 14px;
+  border-radius: var(--r-md);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text-2);
+}
+
+.notice[data-tone='warn'] {
+  border-color: color-mix(in srgb, var(--c-warn) 45%, var(--c-line));
+}
+
+.notice[data-tone='error'] {
+  border-color: color-mix(in srgb, var(--c-danger) 45%, var(--c-line));
+}
+
+.notice p {
+  margin: 0 0 10px;
+}
+
+/* Отказ устройства в управлении — виден рядом с регулятором, а не в консоли. */
+.controlError {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c-danger) 45%, var(--c-line));
+  color: var(--c-text);
+  font-size: 12px;
+  line-height: 1.45;
+}

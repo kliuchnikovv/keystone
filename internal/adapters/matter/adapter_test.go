@@ -666,7 +666,7 @@ func TestWriteStateUsesCommandsForReadOnlyAttributes(t *testing.T) {
 		cluster string
 		command string
 	}{
-		{"яркость", domain.FeatureBrightness, domain.StateLevel, 30, ClusterLevelControl, CmdMoveToLevel},
+		{"яркость", domain.FeatureBrightness, domain.StateLevel, 30, ClusterLevelControl, CmdMoveToLevelWithOnOff},
 		{"температура", domain.FeatureColorTemp, domain.StateColorTempK, 2700, ClusterColorControl, CmdMoveToColorTempMireds},
 		{"оттенок", domain.FeatureColor, domain.StateColorHue, 120, ClusterColorControl, CmdMoveToHue},
 		{"насыщенность", domain.FeatureColor, domain.StateColorSat, 80, ClusterColorControl, CmdMoveToSaturation},

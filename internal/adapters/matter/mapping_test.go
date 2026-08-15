@@ -61,7 +61,8 @@ func TestActionToInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("brightness set: %v", err)
 	}
-	if bright.Command != CmdMoveToLevel {
+	// WithOnOff: выставленная яркость должна зажигать выключенную лампу.
+	if bright.Command != CmdMoveToLevelWithOnOff {
 		t.Errorf("brightness command: %s", bright.Command)
 	}
 	if got := bright.Args["level"].(int); got != 127 {
