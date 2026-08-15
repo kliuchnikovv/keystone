@@ -128,6 +128,8 @@ const (
 	CmdMoveToColorTempMireds = "MoveToColorTemperature"
 
 	CmdMoveToHueAndSaturation = "MoveToHueAndSaturation"
+	CmdMoveToHue              = "MoveToHue"
+	CmdMoveToSaturation       = "MoveToSaturation"
 	CmdMoveToColor            = "MoveToColor"
 
 	CmdLockDoor   = "LockDoor"
@@ -322,6 +324,31 @@ var featureBindings = map[domain.FeatureKey]map[domain.StateKey][]FeatureBinding
 		domain.StateEVSEState:  {{Cluster: ClusterEnergyEvse, Attribute: AttrEvseState}},
 		domain.StateEVSESupply: {{Cluster: ClusterEnergyEvse, Attribute: AttrEvseSupplyState}},
 	},
+}
+
+// writeAsCommand lists states that Matter exposes read-only and that can only
+// be changed through a cluster command. Values are the parameter name the
+// corresponding ActionSet expects.
+//
+// This is not an implementation detail we can push onto callers: keystone's
+// domain says "set brightness to 30", and it is the transport's job to know
+// that LevelControl.CurrentLevel is `R V` and the change goes through
+// MoveToLevel. Writing the attribute silently does nothing on real hardware —
+// which is exactly how it failed: the lamp toggled but never dimmed.
+var writeAsCommand = map[domain.FeatureKey]map[domain.StateKey]string{
+	domain.FeatureBrightness:    {domain.StateLevel: "level"},
+	domain.FeatureColorTemp:     {domain.StateColorTempK: "kelvin"},
+	domain.FeatureColor:         {domain.StateColorHue: "hue", domain.StateColorSat: "saturation"},
+	domain.FeatureCoverPosition: {domain.StateLevel: "level"},
+	domain.FeatureTempControl:   {domain.StateSetpoint: "celsius"},
+	domain.FeatureMode:          {domain.StateMode: "mode"},
+}
+
+// WriteAsCommand reports whether a state change has to be issued as a command,
+// and under which parameter name the value travels.
+func WriteAsCommand(feature domain.FeatureKey, key domain.StateKey) (string, bool) {
+	param, ok := writeAsCommand[feature][key]
+	return param, ok
 }
 
 // BindingFor returns the (cluster, attribute) address for a (feature, state)
@@ -1402,19 +1429,6 @@ func encodeAttribute(feature domain.FeatureKey, key domain.StateKey, value any) 
 			return nil, typeMismatch("bool", value)
 		}
 		return b, nil
-	case feature == domain.FeatureBrightness && key == domain.StateLevel:
-		n, err := asInt(value)
-		if err != nil {
-			return nil, err
-		}
-		return PercentToLevel(n), nil
-	case feature == domain.FeatureColorTemp && key == domain.StateColorTempK:
-		n, err := asInt(value)
-		if err != nil {
-			return nil, err
-		}
-		return KelvinToMireds(n), nil
-
 	case feature == domain.FeatureThermostat && (key == domain.StateTargetHeat || key == domain.StateTargetCool):
 		f, err := asFloat(value)
 		if err != nil {
@@ -1543,19 +1557,49 @@ func actionToInvoke(ref domain.TransportRef, endpoint int, clusters []string, fe
 			}
 			return base, nil
 		}
-		hue, err := asInt(params["hue"])
-		if err != nil {
-			return base, fmt.Errorf("matter: color set: params.hue: %w", err)
-		}
-		sat, err := asInt(params["saturation"])
-		if err != nil {
-			return base, fmt.Errorf("matter: color set: params.saturation: %w", err)
-		}
-		base.Command = CmdMoveToHueAndSaturation
-		base.Args = map[string]any{
-			"hue":            DegreesToHue(hue),
-			"saturation":     PercentToSaturation(sat),
-			"transitionTime": 0,
+		// Hue and saturation can be set together or one at a time; a slider that
+		// only moves hue must not have to invent a saturation value.
+		rawHue, hasHue := params["hue"]
+		rawSat, hasSat := params["saturation"]
+		switch {
+		case hasHue && hasSat:
+			hue, err := asInt(rawHue)
+			if err != nil {
+				return base, fmt.Errorf("matter: color set: params.hue: %w", err)
+			}
+			sat, err := asInt(rawSat)
+			if err != nil {
+				return base, fmt.Errorf("matter: color set: params.saturation: %w", err)
+			}
+			base.Command = CmdMoveToHueAndSaturation
+			base.Args = map[string]any{
+				"hue":            DegreesToHue(hue),
+				"saturation":     PercentToSaturation(sat),
+				"transitionTime": 0,
+			}
+		case hasHue:
+			hue, err := asInt(rawHue)
+			if err != nil {
+				return base, fmt.Errorf("matter: color set: params.hue: %w", err)
+			}
+			base.Command = CmdMoveToHue
+			base.Args = map[string]any{
+				"hue":            DegreesToHue(hue),
+				"direction":      0, // shortest path
+				"transitionTime": 0,
+			}
+		case hasSat:
+			sat, err := asInt(rawSat)
+			if err != nil {
+				return base, fmt.Errorf("matter: color set: params.saturation: %w", err)
+			}
+			base.Command = CmdMoveToSaturation
+			base.Args = map[string]any{
+				"saturation":     PercentToSaturation(sat),
+				"transitionTime": 0,
+			}
+		default:
+			return base, fmt.Errorf("matter: color set needs hue/saturation or x/y")
 		}
 		return base, nil
 

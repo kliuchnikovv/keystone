@@ -627,3 +627,78 @@ func TestAdapterCommissionPassesTarget(t *testing.T) {
 		t.Errorf("setup code = %q — targeting must not drop the code", got.SetupCode)
 	}
 }
+
+// Яркость и цвет в Matter — read-only атрибуты (`R V`), менять их можно только
+// командами. Запись атрибута на живой лампе тихо ничего не делает: она
+// включалась, но не диммировалась. Тест смотрит на фактический кадр, а не на
+// то, что вызов вернул nil.
+func TestWriteStateUsesCommandsForReadOnlyAttributes(t *testing.T) {
+	frames := make(chan Request, 8)
+	sc := newFakeSidecar(t, func(req Request) any {
+		switch req.Method {
+		case MethodListNodes:
+			return []Node{{NodeID: "lamp", Online: true, Endpoints: []Endpoint{
+				{EndpointID: 1, DeviceType: "ExtendedColorLight", Clusters: []string{
+					ClusterOnOff, ClusterLevelControl, ClusterColorControl,
+				}},
+			}}}
+		case MethodInvokeCommand, MethodWriteAttribute:
+			frames <- req
+			return nil
+		}
+		return &RPCError{Code: RPCCodeMethodMissing, Message: "unknown"}
+	})
+	defer sc.Close()
+
+	a := New(testLogger(), DefaultConfig(), NewWSClient(sc.URL(), testLogger()))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = a.Stop(context.Background()) }()
+
+	cases := []struct {
+		name    string
+		feature domain.FeatureKey
+		key     domain.StateKey
+		value   any
+		cluster string
+		command string
+	}{
+		{"яркость", domain.FeatureBrightness, domain.StateLevel, 30, ClusterLevelControl, CmdMoveToLevel},
+		{"температура", domain.FeatureColorTemp, domain.StateColorTempK, 2700, ClusterColorControl, CmdMoveToColorTempMireds},
+		{"оттенок", domain.FeatureColor, domain.StateColorHue, 120, ClusterColorControl, CmdMoveToHue},
+		{"насыщенность", domain.FeatureColor, domain.StateColorSat, 80, ClusterColorControl, CmdMoveToSaturation},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := a.WriteState(ctx, "lamp", tc.feature, tc.key, tc.value); err != nil {
+				t.Fatalf("WriteState: %v", err)
+			}
+			req := <-frames
+			if req.Method != MethodInvokeCommand {
+				t.Fatalf("ушёл %s вместо команды — устройство это проигнорирует", req.Method)
+			}
+			var inv InvokeParams
+			if err := json.Unmarshal(req.Params, &inv); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if inv.Cluster != tc.cluster || inv.Command != tc.command {
+				t.Errorf("got %s.%s want %s.%s", inv.Cluster, inv.Command, tc.cluster, tc.command)
+			}
+			if len(inv.Args) == 0 {
+				t.Error("команда без аргументов — значение потерялось")
+			}
+		})
+	}
+
+	// Атрибуты, которые Matter разрешает писать, должны так и писаться.
+	if err := a.WriteState(ctx, "lamp", domain.FeatureFan, domain.StateFanPercent, 50); err == nil {
+		req := <-frames
+		if req.Method != MethodWriteAttribute {
+			t.Errorf("записываемый атрибут ушёл как %s", req.Method)
+		}
+	}
+}

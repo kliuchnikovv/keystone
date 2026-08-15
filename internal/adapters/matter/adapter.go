@@ -341,6 +341,23 @@ func (a *Adapter) WriteState(ctx context.Context, ref domain.TransportRef, featu
 	if !a.connected.Load() {
 		return ErrSidecarUnavailable
 	}
+	// Some states are read-only in Matter and change only through a command —
+	// brightness and colour among them. Writing the attribute is silently
+	// ineffective on real hardware, so translate instead of pretending.
+	if param, viaCommand := WriteAsCommand(feature, key); viaCommand {
+		endpoint := a.endpointFor(ctx, ref, feature)
+		invoke, err := actionToInvoke(ref, endpoint, a.clustersOn(ref, endpoint),
+			feature, domain.ActionSet, map[string]any{param: value})
+		if err != nil {
+			return err
+		}
+		if err := a.client.Call(ctx, MethodInvokeCommand, invoke, nil); err != nil {
+			return fmt.Errorf("matter: set %s.%s via %s.%s: %w",
+				feature, key, invoke.Cluster, invoke.Command, err)
+		}
+		return nil
+	}
+
 	binding, endpoint, err := a.bindingFor(ctx, ref, feature, key)
 	if err != nil {
 		return err
