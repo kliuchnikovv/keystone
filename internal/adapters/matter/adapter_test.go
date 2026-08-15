@@ -748,3 +748,70 @@ func TestDecommissionReportsForcedRemoval(t *testing.T) {
 		})
 	}
 }
+
+// Порт объявлял поля Wi-Fi, а адаптер их выбрасывал: устройство, которому ещё
+// нужно попасть в сеть, подключить было невозможно в принципе.
+func TestCommissionCarriesNetworkCredentials(t *testing.T) {
+	params := make(chan CommissionParams, 1)
+	sc := newFakeSidecar(t, func(req Request) any {
+		switch req.Method {
+		case MethodCommission:
+			var p CommissionParams
+			_ = json.Unmarshal(req.Params, &p)
+			params <- p
+			return CommissionResult{NodeID: "n1"}
+		case MethodListNodes:
+			return []Node{}
+		}
+		return &RPCError{Code: RPCCodeMethodMissing, Message: "unknown"}
+	})
+	defer sc.Close()
+
+	a := New(testLogger(), DefaultConfig(), NewWSClient(sc.URL(), testLogger()))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = a.Stop(context.Background()) }()
+
+	t.Run("wi-fi", func(t *testing.T) {
+		if _, err := a.Commission(ctx, ports.CommissionRequest{
+			Payload: "34970112332", WifiSSID: "home", WifiCred: "secret",
+		}); err != nil {
+			t.Fatalf("commission: %v", err)
+		}
+		got := <-params
+		if got.Network == nil || got.Network.Wifi == nil {
+			t.Fatal("сетевые креды не доехали — устройство не сможет войти в сеть")
+		}
+		if got.Network.Wifi.SSID != "home" || got.Network.Wifi.Credentials != "secret" {
+			t.Errorf("wifi = %+v", got.Network.Wifi)
+		}
+	})
+
+	t.Run("thread", func(t *testing.T) {
+		if _, err := a.Commission(ctx, ports.CommissionRequest{
+			Payload: "34970112332",
+			Extra:   map[string]string{"matter.threadDataset": "0e08...", "matter.threadNetwork": "MyHome"},
+		}); err != nil {
+			t.Fatalf("commission: %v", err)
+		}
+		got := <-params
+		if got.Network == nil || got.Network.Thread == nil {
+			t.Fatal("thread dataset не доехал")
+		}
+		if got.Network.Thread.OperationalDataset != "0e08..." {
+			t.Errorf("dataset = %q", got.Network.Thread.OperationalDataset)
+		}
+	})
+
+	t.Run("без сети ничего лишнего не шлём", func(t *testing.T) {
+		if _, err := a.Commission(ctx, ports.CommissionRequest{Payload: "34970112332"}); err != nil {
+			t.Fatalf("commission: %v", err)
+		}
+		if got := <-params; got.Network != nil {
+			t.Errorf("network = %+v, а устройство уже в сети", got.Network)
+		}
+	})
+}

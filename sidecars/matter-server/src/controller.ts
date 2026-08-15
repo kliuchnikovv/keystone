@@ -205,7 +205,25 @@ export function createController(opts: ControllerOptions): MatterController {
 
             try {
                 reportProgress("discovering", "looking for the device");
+                // Only meaningful for a device that still has to join a
+                // network; matter.js skips the network steps entirely when the
+                // device is already reachable over IP.
+                const networkOptions: Record<string, unknown> = {};
+                if (p.network?.wifi?.ssid) {
+                    networkOptions.wifiNetwork = {
+                        wifiSsid: p.network.wifi.ssid,
+                        wifiCredentials: p.network.wifi.credentials ?? "",
+                    };
+                }
+                if (p.network?.thread?.operationalDataset) {
+                    networkOptions.threadNetwork = {
+                        operationalDataset: p.network.thread.operationalDataset,
+                        networkName: p.network.thread.networkName,
+                    };
+                }
+
                 const flowOptions = {
+                    ...networkOptions,
                     // Real phase reporting: the flow subclass announces each
                     // commissioning step as matter.js executes it.
                     commissioningFlowImpl: ProgressReportingFlow,

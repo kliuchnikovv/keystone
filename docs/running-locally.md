@@ -93,6 +93,14 @@ Initialize multicast address: 192.168.1.X:5353 interface: en0
 
 где `192.168.1.X` — твой Mac в LAN. **Если видишь `192.168.64.x` или `192.168.65.x` — это Docker-VM, значит sidecar случайно взят из докера.** Останови контейнер.
 
+**BLE (необязательно, только для устройств из коробки).** Устройство, которое ещё не в сети, доступно лишь по Bluetooth:
+
+```sh
+KEYSTONE_MATTER_BLE=true node dist/index.js
+```
+
+На macOS это не заработает — система убьёт процесс при первом обращении к Bluetooth (у `node` нет `NSBluetoothAlwaysUsageDescription`). Нужен Linux. Для устройств, уже подключённых к сети через свою экосистему, BLE не нужен.
+
 **Терминал 2 — keystone:**
 
 ```sh

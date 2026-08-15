@@ -62,8 +62,22 @@ export const Events = {
 
 // --- method payloads ---
 
+/** Credentials a device needs to join the network during commissioning. */
+export interface NetworkCredentials {
+    /** Wi-Fi network for a device that is not on the network yet. */
+    wifi?: { ssid: string; credentials: string };
+    /** Thread operational dataset, hex-encoded. */
+    thread?: { operationalDataset: string; networkName?: string };
+}
+
 export interface CommissionParams {
     setupCode: string;
+    /**
+     * Network the device should join. Required only for a device that is not
+     * reachable over IP yet — one being commissioned straight out of the box
+     * over BLE. A device already on the network ignores this.
+     */
+    network?: NetworkCredentials;
     /**
      * Ref of a device previously reported by discoverCommissionable. When set,
      * commissioning targets exactly that device and only the passcode is taken

@@ -15,6 +15,9 @@ interface CommissioningState {
   stage: Stage;
   ecosystem?: Ecosystem;
   setupCode: string;
+  /** Сеть для устройства, которое ещё не в сети. Пусто — значит не нужна. */
+  wifiSsid: string;
+  wifiPassword: string;
   found: DiscoveredDevice[];
   addedRefs: Set<string>;
   currentRef?: string;
@@ -28,6 +31,7 @@ interface CommissioningState {
   setStage: (s: Stage) => void;
   pickEcosystem: (e: Ecosystem) => void;
   setSetupCode: (code: string) => void;
+  setWifi: (ssid: string, password: string) => void;
   submitCode: () => void;
   backTo: (s: Stage) => void;
 
@@ -50,6 +54,8 @@ const INITIAL: Pick<
   | 'stage'
   | 'ecosystem'
   | 'setupCode'
+  | 'wifiSsid'
+  | 'wifiPassword'
   | 'found'
   | 'addedRefs'
   | 'currentRef'
@@ -62,6 +68,8 @@ const INITIAL: Pick<
   stage: 'pick-ecosystem',
   ecosystem: undefined,
   setupCode: '',
+  wifiSsid: '',
+  wifiPassword: '',
   found: [],
   addedRefs: new Set(),
   currentRef: undefined,
@@ -82,6 +90,7 @@ export const useCommissioningStore = create<CommissioningState>((set) => ({
   pickEcosystem: (e) => set({ ecosystem: e, stage: 'scanning', found: [], currentRef: undefined }),
 
   setSetupCode: (code) => set({ setupCode: code }),
+  setWifi: (wifiSsid, wifiPassword) => set({ wifiSsid, wifiPassword }),
 
   submitCode: () =>
     set((s) => ({

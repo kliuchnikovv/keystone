@@ -34,6 +34,9 @@ export function AddDeviceScreen() {
   const errorKind = useCommissioningStore((s) => s.errorKind);
   const pickEcosystem = useCommissioningStore((s) => s.pickEcosystem);
   const setSetupCode = useCommissioningStore((s) => s.setSetupCode);
+  const wifiSsid = useCommissioningStore((s) => s.wifiSsid);
+  const wifiPassword = useCommissioningStore((s) => s.wifiPassword);
+  const setWifi = useCommissioningStore((s) => s.setWifi);
   const submitCode = useCommissioningStore((s) => s.submitCode);
   const backTo = useCommissioningStore((s) => s.backTo);
   const addFound = useCommissioningStore((s) => s.addFound);
@@ -63,7 +66,12 @@ export function AddDeviceScreen() {
       //
       // Имя из списка не передаём: для безымянного анонса это наша заглушка
       // («Matter device 493»), а настоящее имя бэкенд прочитает из устройства.
-      { target: currentRef },
+      {
+        target: currentRef,
+        // Пусто для подавляющего большинства случаев: сеть нужна только
+        // устройству из коробки, которое подключается по BLE.
+        wifi: wifiSsid ? { ssid: wifiSsid, password: wifiPassword } : undefined,
+      },
     );
   };
 
@@ -114,6 +122,9 @@ export function AddDeviceScreen() {
           ecosystemId={ecosystem}
           code={setupCode}
           candidateName={candidateName}
+          wifiSsid={wifiSsid}
+          wifiPassword={wifiPassword}
+          onWifiChange={setWifi}
           onChange={setSetupCode}
           onSubmit={onSubmitCode}
         />
@@ -274,12 +285,18 @@ function EnterCodeStage({
   ecosystemId,
   code,
   candidateName,
+  wifiSsid,
+  wifiPassword,
+  onWifiChange,
   onChange,
   onSubmit,
 }: {
   ecosystemId: import('../state/commissioningStore').Ecosystem;
   code: string;
   candidateName?: string;
+  wifiSsid: string;
+  wifiPassword: string;
+  onWifiChange: (ssid: string, password: string) => void;
   onChange: (v: string) => void;
   onSubmit: () => void;
 }) {
@@ -296,6 +313,33 @@ function EnterCodeStage({
       <EcosystemGuide eco={eco} />
       <div className={styles.codeBlock}>
         <SetupCodeField value={code} onChange={onChange} autoFocus />
+        {/* Сеть нужна только устройству, которое ещё в неё не вошло: новому
+            из коробки, подключаемому по Bluetooth. Устройство, уже видимое в
+            сети, эти поля игнорирует — поэтому блок свёрнут и необязателен. */}
+        <details className={styles.wifiBlock}>
+          <summary className={styles.wifiSummary}>Устройство ещё не подключено к Wi-Fi?</summary>
+          <p className={styles.wifiHint}>
+            Заполни, если добавляешь новое устройство прямо из коробки. Оно получит эти данные
+            по Bluetooth и войдёт в сеть само.
+          </p>
+          <input
+            className={styles.wifiInput}
+            type="text"
+            autoComplete="off"
+            placeholder="Имя сети (SSID)"
+            value={wifiSsid}
+            onChange={(e) => onWifiChange(e.currentTarget.value, wifiPassword)}
+          />
+          <input
+            className={styles.wifiInput}
+            type="password"
+            autoComplete="off"
+            placeholder="Пароль"
+            value={wifiPassword}
+            onChange={(e) => onWifiChange(wifiSsid, e.currentTarget.value)}
+          />
+        </details>
+
         <Button
           variant="primary"
           size="lg"

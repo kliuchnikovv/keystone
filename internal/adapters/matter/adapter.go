@@ -299,6 +299,26 @@ func (a *Adapter) Commission(ctx context.Context, req ports.CommissionRequest) (
 
 	var res CommissionResult
 	params := CommissionParams{SetupCode: req.Payload, Target: req.Extra["matter.target"]}
+	// Wi-Fi credentials were being dropped here: the port advertised the
+	// fields and nothing carried them, so a device that still had to join a
+	// network could never be commissioned.
+	if req.WifiSSID != "" {
+		params.Network = &NetworkCredentials{
+			Wifi: &WifiCredentials{SSID: req.WifiSSID, Credentials: req.WifiCred},
+		}
+	}
+	// Thread needs the operational dataset, which only the border router can
+	// hand out; it travels through Extra until keystone has a way to obtain it
+	// on its own.
+	if dataset := req.Extra["matter.threadDataset"]; dataset != "" {
+		if params.Network == nil {
+			params.Network = &NetworkCredentials{}
+		}
+		params.Network.Thread = &ThreadCredentials{
+			OperationalDataset: dataset,
+			NetworkName:        req.Extra["matter.threadNetwork"],
+		}
+	}
 	if err := a.client.Call(ctx, MethodCommission, params, &res); err != nil {
 		return "", fmt.Errorf("matter: commission: %w", err)
 	}

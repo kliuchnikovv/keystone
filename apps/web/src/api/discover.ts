@@ -195,7 +195,13 @@ export function openCommissionWithCode(
   setupCode: string,
   ecosystemHint: string,
   onEvent: (ev: CommissioningEvent) => void,
-  opts: { forceFail?: boolean; target?: string; name?: string } = {},
+  opts: {
+    forceFail?: boolean;
+    target?: string;
+    name?: string;
+    /** Сеть для устройства, которое ещё в неё не вошло (подключение по BLE). */
+    wifi?: { ssid: string; password: string };
+  } = {},
 ): CommissionHandle {
   if (USE_MOCK) {
     return mockCommission(
@@ -233,6 +239,12 @@ export function openCommissionWithCode(
           // Устройство, выбранное в списке найденных. Код всё равно обязателен:
           // passcode не анонсируется, без него PASE не стартует.
           ...(opts.target ? { extra: { 'matter.target': opts.target } } : {}),
+          // Нужно только устройству из коробки: оно ещё не в сети, и войти
+          // туда само не может. Устройство, уже доступное по IP, это поле
+          // игнорирует.
+          ...(opts.wifi?.ssid
+            ? { wifi_ssid: opts.wifi.ssid, wifi_cred: opts.wifi.password }
+            : {}),
         }),
         signal: ctrl.signal,
       });

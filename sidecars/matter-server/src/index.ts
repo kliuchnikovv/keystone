@@ -15,6 +15,27 @@
 const STORAGE = process.env.KEYSTONE_MATTER_STORAGE ?? "./matter-data";
 if (!process.env.MATTER_STORAGE_PATH) process.env.MATTER_STORAGE_PATH = STORAGE;
 
+// BLE, when enabled. Order matters: the package registers a service on the
+// matter.js environment, so the import has to happen before anything touches
+// Environment — same reason MATTER_STORAGE_PATH is set above.
+//
+// Off by default: BLE needs Bluetooth permission for this process and a working
+// adapter, and it is only required to reach devices that are not on the network
+// yet. A device already reachable over IP is found without it.
+const BLE_ENABLED = /^(1|true|yes)$/i.test(process.env.KEYSTONE_MATTER_BLE ?? "");
+if (BLE_ENABLED) {
+    await import("@matter/nodejs-ble");
+    const { Environment } = await import("@matter/main");
+    Environment.default.vars.set("ble.enable", true);
+}
+
+// macOS refuses CoreBluetooth to any binary whose Info.plist lacks
+// NSBluetoothAlwaysUsageDescription, and plain `node` has no such key. The
+// refusal is not an error we can catch: TCC SIGKILLs the process the moment the
+// radio is touched, which looks exactly like an unexplained disappearance.
+// Warning up front is the only thing that helps.
+const BLE_UNSUPPORTED_HOST = BLE_ENABLED && process.platform === "darwin";
+
 const { createController } = await import("./controller.js");
 const { startWsServer } = await import("./wsServer.js");
 
@@ -34,7 +55,29 @@ const log = (
 };
 
 async function main(): Promise<void> {
-    log("info", "matter sidecar starting", { host: HOST, port: PORT, storage: STORAGE });
+    log("info", "matter sidecar starting", { host: HOST, port: PORT, storage: STORAGE, ble: BLE_ENABLED });
+    if (BLE_UNSUPPORTED_HOST) {
+        console.error(
+            JSON.stringify({
+                ts: new Date().toISOString(),
+                level: "error",
+                msg: "BLE is not usable on macOS with a plain node binary",
+                detail:
+                    "macOS will SIGKILL this process as soon as Bluetooth is touched, because node's " +
+                    "Info.plist has no NSBluetoothAlwaysUsageDescription. Run the sidecar on Linux for " +
+                    "BLE, or leave KEYSTONE_MATTER_BLE unset — devices already on the network do not need it.",
+            }),
+        );
+    }
+
+    if (!BLE_ENABLED) {
+        // Cheaper to say up front than to debug why a scan cannot see a
+        // factory-fresh device: without BLE it is physically unreachable until
+        // it joins an IP network.
+        log("info", "BLE disabled — devices that are not yet on the network cannot be reached", {
+            hint: "KEYSTONE_MATTER_BLE=true",
+        });
+    }
 
     const controller = createController({ storagePath: STORAGE, fabricLabel: LABEL, log });
     await controller.start();

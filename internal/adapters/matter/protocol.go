@@ -242,10 +242,33 @@ func KindOf(err error) ErrorKind {
 // device to pair.
 type CommissionParams struct {
 	SetupCode string `json:"setupCode"`
+	// Network is only needed for a device that is not on the network yet —
+	// one being commissioned straight out of the box over BLE. A device
+	// already reachable over IP ignores it.
+	Network *NetworkCredentials `json:"network,omitempty"`
 	// Target is a ref from a previous discoverCommissionable scan. Empty means
 	// "find the device from the setup code", which is what a user typing a code
 	// with no prior scan gets.
 	Target string `json:"target,omitempty"`
+}
+
+// NetworkCredentials carries what a fresh device needs to join the network.
+type NetworkCredentials struct {
+	Wifi   *WifiCredentials   `json:"wifi,omitempty"`
+	Thread *ThreadCredentials `json:"thread,omitempty"`
+}
+
+// WifiCredentials is the network a Wi-Fi device should join.
+type WifiCredentials struct {
+	SSID        string `json:"ssid"`
+	Credentials string `json:"credentials"`
+}
+
+// ThreadCredentials is the operational dataset a Thread device should join,
+// hex-encoded as the border router reports it.
+type ThreadCredentials struct {
+	OperationalDataset string `json:"operationalDataset"`
+	NetworkName        string `json:"networkName,omitempty"`
 }
 
 // DiscoverCommissionableParams bounds a scan.
