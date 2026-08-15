@@ -26,16 +26,30 @@ type Client interface {
 	// the caller doesn't need it.
 	Call(ctx context.Context, method string, params any, result any) error
 
-	// Events returns a channel of server-pushed events. The channel is closed
-	// when Close is called or the underlying connection dies terminally. A
-	// re-Connect starts a fresh channel — callers must re-subscribe.
+	// Events returns a channel of server-pushed events. The channel lives for
+	// the lifetime of the Client, not of one connection: it stays open across
+	// reconnects and is never closed, so consumers must select on their own
+	// context rather than ranging over it. (Closing it would race the read
+	// pump, which may still be delivering a frame when Close lands.)
 	Events() <-chan Event
+
+	// Disconnected returns a channel closed when the current connection drops
+	// for any reason — remote close, read error, or a failed heartbeat. Callers
+	// use it to trigger a reconnect. When no connection is up the returned
+	// channel is already closed, so a caller that races Connect sees the
+	// "reconnect needed" state rather than blocking forever.
+	//
+	// Each successful Connect installs a fresh channel; re-read it after
+	// reconnecting.
+	Disconnected() <-chan struct{}
 }
 
-// Event is one decoded server-pushed message.
+// Event is one decoded server-pushed message. Seq is the sidecar's sequence
+// number for it, or 0 if the sidecar doesn't sequence events.
 type Event struct {
 	Name string
 	Data json.RawMessage
+	Seq  int64
 }
 
 // ErrNotConnected is returned by Client methods when the underlying transport

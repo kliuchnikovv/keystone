@@ -36,19 +36,51 @@ const log = (
 async function main(): Promise<void> {
     log("info", "matter sidecar starting", { host: HOST, port: PORT, storage: STORAGE });
 
-    const controller = createController({ storagePath: STORAGE, fabricLabel: LABEL });
+    const controller = createController({ storagePath: STORAGE, fabricLabel: LABEL, log });
     await controller.start();
 
     const server = startWsServer({ host: HOST, port: PORT, controller, log });
 
-    const shutdown = async (signal: string) => {
-        log("info", "shutting down", { signal });
+    // Each shutdown step gets its own deadline. Unbounded, a wedged matter.js
+    // close (a peer that won't finish a session teardown) hangs the process
+    // until systemd/docker escalates to SIGKILL — and a SIGKILL mid-write is
+    // exactly how the fabric store on disk ends up inconsistent. Better to
+    // abandon a slow step and exit deliberately.
+    const SHUTDOWN_STEP_MS = 5_000;
+
+    const withDeadline = async (name: string, step: Promise<unknown>): Promise<void> => {
+        let timer: NodeJS.Timeout | undefined;
+        const expired = Symbol("expired");
+        const deadline = new Promise<typeof expired>((resolve) => {
+            timer = setTimeout(() => resolve(expired), SHUTDOWN_STEP_MS);
+        });
         try {
-            await server.close();
-            await controller.stop();
+            const result = await Promise.race([step.then(() => "done" as const), deadline]);
+            if (result === expired) {
+                log("warn", "shutdown step timed out, continuing", { step: name, timeoutMs: SHUTDOWN_STEP_MS });
+            }
         } catch (err) {
-            log("error", "shutdown failed", { err: String(err) });
+            log("error", "shutdown step failed", { step: name, err: String(err) });
+        } finally {
+            if (timer) clearTimeout(timer);
         }
+    };
+
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+        // A second Ctrl-C (or SIGTERM after SIGINT) should not start a parallel
+        // teardown of the same resources.
+        if (shuttingDown) {
+            log("warn", "shutdown already in progress, forcing exit", { signal });
+            process.exit(1);
+        }
+        shuttingDown = true;
+
+        log("info", "shutting down", { signal });
+        // Stop accepting work before tearing down the controller, so no RPC
+        // lands on a half-closed matter.js node.
+        await withDeadline("ws-server", server.close());
+        await withDeadline("controller", controller.stop());
         process.exit(0);
     };
 

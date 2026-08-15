@@ -5,6 +5,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/kliuchnikovv/keystone/internal/domain"
 )
@@ -63,10 +64,52 @@ type DiscoveredDevice struct {
 // transport — for Matter it's a setup payload, for Zigbee typically nothing
 // (permit-join is a mode).
 type CommissionRequest struct {
-	Payload   string            // e.g. Matter setup code "MT:..."
-	WifiSSID  string            // for Matter Wi-Fi commissioning
-	WifiCred  string            // for Matter Wi-Fi commissioning
-	Extra     map[string]string // transport-specific
+	Payload  string            // e.g. Matter setup code "MT:..."
+	WifiSSID string            // for Matter Wi-Fi commissioning
+	WifiCred string            // for Matter Wi-Fi commissioning
+	Extra    map[string]string // transport-specific
+
+	// Progress, if set, receives real pairing stages as the transport reports
+	// them (Matter: PASE established, attestation, credentials, network, …).
+	// Adapters that have no progress to report simply never call it.
+	//
+	// Called from the adapter's event goroutine, so it must not block: send to
+	// a buffered channel rather than doing work inline.
+	Progress func(stage, message string)
+}
+
+// CommissionableDevice is a device advertising itself as ready to pair but not
+// yet in any of our fabrics. Everything here comes from the advertisement — the
+// device has not been interviewed, so there are no features and no state.
+//
+// Note that discovery does NOT remove the need for a setup code: the passcode
+// is never advertised, so pairing cannot start without the user reading it off
+// the device or its box. Discovery only spares them from identifying which
+// device is which.
+type CommissionableDevice struct {
+	// Ref identifies this advertisement. Pass it back in
+	// CommissionRequest.Extra["matter.target"] to pair this exact device.
+	Ref string
+	// Name is the vendor-set advertised name, often empty.
+	Name string
+	// Type is the advertised device type, or "" when not advertised.
+	Type domain.DeviceType
+	// VendorID / ProductID identify the model; no vendor-name lookup exists.
+	VendorID  int
+	ProductID int
+	// Discriminator is the device's long discriminator, useful for matching a
+	// device against the digits printed next to its QR code.
+	Discriminator int
+}
+
+// CommissionableDiscoverer is implemented by adapters that can find devices
+// which are not yet commissioned. It is deliberately separate from
+// ports.Adapter: most transports have no such concept, and Adapter.Discover
+// means something different — devices already usable by this transport.
+type CommissionableDiscoverer interface {
+	// DiscoverCommissionable listens for advertisements for the given window
+	// and streams what it finds. The channel is closed when the scan ends.
+	DiscoverCommissionable(ctx context.Context, window time.Duration) (<-chan CommissionableDevice, error)
 }
 
 // TransportEventKind classifies what happened in a TransportEvent.
@@ -79,6 +122,15 @@ const (
 	TransportEventOffline      TransportEventKind = "offline"
 	TransportEventAdded        TransportEventKind = "added"
 	TransportEventRemoved      TransportEventKind = "removed"
+
+	// TransportEventAdapterStatus reports the adapter's own connectivity to
+	// its backend (for Matter: the sidecar WebSocket), not any one device's.
+	// Ref is empty and Value is a bool: true = usable, false = degraded.
+	//
+	// Subscribers otherwise cannot tell "quiet house" from "adapter is dead" —
+	// both look like an idle channel. Every subscriber receives the current
+	// status as soon as it subscribes, so late joiners are not left guessing.
+	TransportEventAdapterStatus TransportEventKind = "adapter_status"
 )
 
 // TransportEvent is the unified message emitted by every adapter's Subscribe

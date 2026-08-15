@@ -52,12 +52,12 @@ func TestFeatureForClusterReverse(t *testing.T) {
 func TestActionToInvoke(t *testing.T) {
 	ref := domain.TransportRef("node-42")
 
-	on, err := actionToInvoke(ref, domain.FeatureOnOff, domain.ActionTurnOn, nil)
+	on, err := actionToInvoke(ref, 1, domain.FeatureOnOff, domain.ActionTurnOn, nil)
 	if err != nil || on.Cluster != ClusterOnOff || on.Command != CmdOn || on.NodeID != "node-42" {
 		t.Errorf("turn_on: %+v err=%v", on, err)
 	}
 
-	bright, err := actionToInvoke(ref, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": 50})
+	bright, err := actionToInvoke(ref, 1, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": 50})
 	if err != nil {
 		t.Fatalf("brightness set: %v", err)
 	}
@@ -68,10 +68,10 @@ func TestActionToInvoke(t *testing.T) {
 		t.Errorf("brightness level scaled: got %d want 127", got)
 	}
 
-	if _, err := actionToInvoke(ref, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": "oops"}); err == nil {
+	if _, err := actionToInvoke(ref, 1, domain.FeatureBrightness, domain.ActionSet, map[string]any{"level": "oops"}); err == nil {
 		t.Error("expected error for non-numeric level")
 	}
-	if _, err := actionToInvoke(ref, domain.FeatureOnOff, domain.ActionSet, nil); err == nil {
+	if _, err := actionToInvoke(ref, 1, domain.FeatureOnOff, domain.ActionSet, nil); err == nil {
 		t.Error("expected error for onoff.set")
 	}
 }
@@ -115,7 +115,7 @@ func TestNodeToDiscoveredLight(t *testing.T) {
 			{EndpointID: 1, Clusters: []string{ClusterOnOff, ClusterLevelControl, ClusterColorControl}},
 		},
 	}
-	d := nodeToDiscovered(n)
+	d, _ := nodeToDiscovered(n)
 	if d.Type != domain.DeviceTypeLight {
 		t.Errorf("type = %s want light", d.Type)
 	}
@@ -127,5 +127,114 @@ func TestNodeToDiscoveredLight(t *testing.T) {
 	}
 	if d.TransportRef != "abc" {
 		t.Errorf("transport ref = %s", d.TransportRef)
+	}
+}
+
+// A plug and a light expose the same clusters, so the declared Matter device
+// type is the only thing that tells them apart. Before DeviceTypeList was
+// read, everything with OnOff+Level became a "light".
+func TestDeviceTypeFromDeclaredType(t *testing.T) {
+	cases := []struct {
+		name       string
+		deviceType string
+		clusters   []string
+		want       domain.DeviceType
+	}{
+		{"dimmable plug is a plug", "DimmablePlugInUnit",
+			[]string{ClusterOnOff, ClusterLevelControl}, domain.DeviceTypePlug},
+		{"dimmable light is a light", "DimmableLight",
+			[]string{ClusterOnOff, ClusterLevelControl}, domain.DeviceTypeLight},
+		{"thermostat is not a temperature sensor", "Thermostat",
+			[]string{ClusterTemperatureMeas}, domain.DeviceTypeThermostat},
+		{"door lock", "DoorLock", []string{ClusterOnOff}, domain.DeviceTypeLock},
+		{"window covering", "WindowCovering", []string{ClusterOnOff}, domain.DeviceTypeCover},
+		{"unknown type falls back to features", "SomeFutureGadget",
+			[]string{ClusterOnOff, ClusterLevelControl}, domain.DeviceTypeLight},
+		{"no declared type falls back to features", "",
+			[]string{ClusterOccupancySensing}, domain.DeviceTypeMotion},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := Node{
+				NodeID:    "n1",
+				Endpoints: []Endpoint{{EndpointID: 1, DeviceType: tc.deviceType, Clusters: tc.clusters}},
+			}
+			d, _ := nodeToDiscovered(n)
+			if d.Type != tc.want {
+				t.Errorf("type = %s want %s", d.Type, tc.want)
+			}
+		})
+	}
+}
+
+// Endpoint 0 carries the node's administrative clusters and a RootNode device
+// type. Neither may leak into the user-visible classification.
+func TestRootEndpointIgnored(t *testing.T) {
+	n := Node{
+		NodeID: "n1",
+		Endpoints: []Endpoint{
+			{EndpointID: 0, DeviceType: "RootNode", Clusters: []string{ClusterPowerSource}},
+			{EndpointID: 1, DeviceType: "OnOffPlugInUnit", Clusters: []string{ClusterOnOff}},
+		},
+	}
+	d, routes := nodeToDiscovered(n)
+	if d.Type != domain.DeviceTypePlug {
+		t.Errorf("type = %s want plug", d.Type)
+	}
+	if _, ok := routes[domain.FeatureBattery]; ok {
+		t.Error("PowerSource on endpoint 0 must not become a battery feature")
+	}
+	if got := routes[domain.FeatureOnOff]; got != 1 {
+		t.Errorf("onoff endpoint = %d want 1", got)
+	}
+}
+
+// A two-socket plug puts an independent OnOff on each endpoint, and a light
+// strip splits colour across segments. Every feature must carry the endpoint it
+// was actually found on, not the hardcoded 1.
+func TestFeatureRoutesAcrossEndpoints(t *testing.T) {
+	n := Node{
+		NodeID: "strip",
+		Endpoints: []Endpoint{
+			{EndpointID: 0, DeviceType: "RootNode"},
+			{EndpointID: 3, DeviceType: "ExtendedColorLight", Clusters: []string{ClusterOnOff, ClusterLevelControl}},
+			{EndpointID: 4, Clusters: []string{ClusterColorControl, ClusterOnOff}},
+			{EndpointID: 5, Clusters: []string{ClusterTemperatureMeas}},
+		},
+	}
+	d, routes := nodeToDiscovered(n)
+
+	if got := routes[domain.FeatureOnOff]; got != 3 {
+		t.Errorf("onoff endpoint = %d want 3 (lowest functional endpoint wins)", got)
+	}
+	if got := routes[domain.FeatureColorTemp]; got != 4 {
+		t.Errorf("color_temp endpoint = %d want 4", got)
+	}
+	if got := routes[domain.FeatureTemperature]; got != 5 {
+		t.Errorf("temperature endpoint = %d want 5", got)
+	}
+	if got := d.Metadata["matter.endpoint.color_temp"]; got != "4" {
+		t.Errorf("metadata color_temp endpoint = %q want \"4\"", got)
+	}
+
+	// The routed endpoint must reach the invoke params, not defaultEndpoint.
+	inv, err := actionToInvoke(d.TransportRef, routes[domain.FeatureColorTemp],
+		domain.FeatureColorTemp, domain.ActionSet, map[string]any{"kelvin": 2700})
+	if err != nil {
+		t.Fatalf("color_temp invoke: %v", err)
+	}
+	if inv.EndpointID != 4 {
+		t.Errorf("invoke endpoint = %d want 4", inv.EndpointID)
+	}
+}
+
+func TestDisplayNamePrefersNodeLabel(t *testing.T) {
+	n := Node{NodeID: "n1", VendorName: "IKEA", ProductName: "WARMBLIXT", NodeLabel: "Kitchen strip"}
+	if got := displayNameFor(n); got != "Kitchen strip" {
+		t.Errorf("name = %q want the user's own label", got)
+	}
+	n.NodeLabel = ""
+	if got := displayNameFor(n); got != "IKEA WARMBLIXT" {
+		t.Errorf("name = %q want vendor + product", got)
 	}
 }

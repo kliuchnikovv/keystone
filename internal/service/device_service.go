@@ -135,19 +135,44 @@ func (s *DeviceService) Decommission(ctx context.Context, id domain.DeviceID) er
 	return adapterErr
 }
 
+// DiscoverCommissionable asks one transport to scan for devices that are not
+// yet commissioned. Returns an error if the transport is unknown or has no
+// concept of commissionable discovery (most don't).
+//
+// Finding a device does not mean it can be added: pairing still needs the setup
+// code from the device itself, which is never advertised.
+func (s *DeviceService) DiscoverCommissionable(
+	ctx context.Context,
+	transport domain.TransportKind,
+	window time.Duration,
+) (<-chan ports.CommissionableDevice, error) {
+	adapter, ok := s.adapters[transport]
+	if !ok {
+		return nil, fmt.Errorf("no adapter registered for transport %q", transport)
+	}
+	scanner, ok := adapter.(ports.CommissionableDiscoverer)
+	if !ok {
+		return nil, fmt.Errorf("transport %q does not support scanning for commissionable devices", transport)
+	}
+	return scanner.DiscoverCommissionable(ctx, window)
+}
+
 // SyncFromAdapters walks every registered adapter, calls Discover, and
 // registers any peer the adapter reports but the registry does not know
 // about yet. Intended to run once at boot so a matter.js sidecar with
 // pre-commissioned devices (typical case: keystone restarted, fabric on
 // disk survived) rehydrates the domain registry automatically. Returns the
 // list of newly added devices so callers can persist them.
-func (s *DeviceService) SyncFromAdapters(ctx context.Context) ([]*domain.Device, error) {
-	known := make(map[string]bool)
+func (s *DeviceService) SyncFromAdapters(ctx context.Context) (added, updated []*domain.Device, err error) {
+	// Index existing devices by transport-ref so we can distinguish
+	// "new to keystone" (add) from "already known, features maybe stale"
+	// (refresh) — the latter happens after a sidecar upgrade that starts
+	// reporting cluster info we couldn't see before.
+	knownByKey := make(map[string]*domain.Device)
 	for _, d := range s.registry.List() {
-		known[string(d.Transport)+":"+string(d.TransportRef)] = true
+		knownByKey[string(d.Transport)+":"+string(d.TransportRef)] = d
 	}
 
-	var added []*domain.Device
 	var firstErr error
 	for kind, adapter := range s.adapters {
 		ch, err := adapter.Discover(ctx)
@@ -160,7 +185,15 @@ func (s *DeviceService) SyncFromAdapters(ctx context.Context) ([]*domain.Device,
 		}
 		for disc := range ch {
 			key := string(kind) + ":" + string(disc.TransportRef)
-			if known[key] {
+			if existing, ok := knownByKey[key]; ok {
+				if s.registry.UpdateDiscoveryInfo(existing.ID, disc.Type, disc.Manufacturer, disc.Model, disc.Features) {
+					s.log.Info("device features refreshed from adapter",
+						"id", existing.ID, "transport", kind, "features", len(disc.Features))
+					// Re-fetch the updated snapshot so caller can persist it.
+					if refreshed, err := s.registry.Get(existing.ID); err == nil {
+						updated = append(updated, refreshed)
+					}
+				}
 				continue
 			}
 			d := &domain.Device{
@@ -180,11 +213,11 @@ func (s *DeviceService) SyncFromAdapters(ctx context.Context) ([]*domain.Device,
 				continue
 			}
 			s.log.Info("device synced from adapter", "id", d.ID, "transport", kind, "name", d.Name)
-			known[key] = true
+			knownByKey[key] = d
 			added = append(added, d)
 		}
 	}
-	return added, firstErr
+	return added, updated, firstErr
 }
 
 // InvokeAction executes an action on a device, holding the per-device lock
@@ -266,6 +299,19 @@ func (s *DeviceService) IngressLoop(ctx context.Context, adapter ports.Adapter) 
 			if !ok {
 				return nil
 			}
+			// Adapter-level status carries no device ref, so it must be
+			// handled before the per-device lookup below.
+			if ev.Kind == ports.TransportEventAdapterStatus {
+				connected, _ := ev.Value.(bool)
+				if connected {
+					s.log.Info("adapter backend reachable", "transport", adapter.Kind())
+				} else {
+					s.log.Warn("adapter backend unreachable — device state may be stale",
+						"transport", adapter.Kind())
+				}
+				continue
+			}
+
 			d, found := findDeviceByRef(ev.Ref)
 			if !found {
 				s.log.Debug("transport event for unknown device",

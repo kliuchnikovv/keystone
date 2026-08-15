@@ -6,9 +6,12 @@ import {
     Events,
     Methods,
     RpcErrorCode,
+    toRpcErrorBody,
     type OutboundFrame,
     type RpcRequest,
     type ServerEvent,
+    type SubscribeParams,
+    type SubscribeResult,
 } from "./protocol.js";
 import type { MatterController } from "./controller.js";
 
@@ -19,9 +22,74 @@ export interface ServerOptions {
     log: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
+// How many recent events stay replayable. A colour animation from the Home app
+// can produce a few hundred coalesced updates a minute, so this covers roughly
+// a minute of heavy traffic — long enough for a reconnect, short enough to stay
+// bounded.
+const EVENT_BUFFER_SIZE = 512;
+
 export function startWsServer(opts: ServerOptions): { close: () => Promise<void> } {
     const wss = new WebSocketServer({ host: opts.host, port: opts.port });
     const clients = new Set<WebSocket>();
+
+    // Ring buffer of recently broadcast events, oldest first. A client that
+    // reconnects within this window gets the exact events it missed instead of
+    // a full snapshot — and, more importantly, instead of silently missing
+    // them, which is what happened before seq existed.
+    const buffer: ServerEvent[] = [];
+    let lastSeq = 0;
+
+    const record = (event: string, data: unknown): ServerEvent => {
+        const frame: ServerEvent = { event, data, seq: ++lastSeq };
+        buffer.push(frame);
+        if (buffer.length > EVENT_BUFFER_SIZE) buffer.shift();
+        return frame;
+    };
+
+    // subscribe re-syncs a client after (re)connect. It runs to completion
+    // synchronously: Node's single-threaded event loop guarantees no live event
+    // can be broadcast between the replay writes and the client going live, so
+    // there is no window in which an event is lost or reordered.
+    const subscribe = (params: unknown, ws: WebSocket): SubscribeResult => {
+        const sinceSeq = Number((params as SubscribeParams | undefined)?.sinceSeq ?? 0);
+        // Position the server occupied before this call — the client clamps to
+        // it, which is how it detects that we restarted and renumbered.
+        const seqBefore = lastSeq;
+
+        const oldestBuffered = buffer.length > 0 ? buffer[0].seq : lastSeq + 1;
+        const canReplay =
+            Number.isFinite(sinceSeq) &&
+            sinceSeq > 0 &&
+            sinceSeq <= lastSeq && // ahead of us => we restarted; not a replay case
+            sinceSeq >= oldestBuffered - 1; // everything after sinceSeq is still buffered
+
+        if (canReplay) {
+            let replayed = 0;
+            for (const frame of buffer) {
+                if (frame.seq <= sinceSeq) continue;
+                sendFrame(ws, frame);
+                replayed++;
+            }
+            opts.log("info", "client resubscribed with replay", { sinceSeq, replayed, seq: seqBefore });
+            return { seq: seqBefore, replayed, gap: false };
+        }
+
+        // Either a first connect, a gap too large to replay, or a client that
+        // is ahead of us because we restarted. All three need current truth
+        // rather than history.
+        opts.log("info", "client resubscribed with snapshot", {
+            sinceSeq,
+            seq: seqBefore,
+            oldestBuffered,
+            reason: sinceSeq <= 0 ? "no position" : sinceSeq > lastSeq ? "server restarted" : "buffer overrun",
+        });
+        try {
+            opts.controller.publishSnapshot();
+        } catch (err) {
+            opts.log("warn", "snapshot on subscribe failed", { err: String(err) });
+        }
+        return { seq: seqBefore, replayed: 0, gap: true };
+    };
 
     const handlers: Record<string, (params: unknown) => Promise<unknown>> = {
         [Methods.Commission]: (p) => opts.controller.commission(p as never),
@@ -30,6 +98,7 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
         [Methods.WriteAttribute]: (p) => opts.controller.writeAttribute(p as never).then(() => null),
         [Methods.InvokeCommand]: (p) => opts.controller.invokeCommand(p as never),
         [Methods.RemoveNode]: (p) => opts.controller.removeNode(p as never).then(() => null),
+        [Methods.DiscoverCommissionable]: (p) => opts.controller.discoverCommissionable((p ?? {}) as never),
     };
 
     wss.on("connection", (ws) => {
@@ -41,15 +110,32 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
             if (!req) {
                 sendFrame(ws, {
                     id: "",
-                    error: { code: RpcErrorCode.BadRequest, message: "invalid json frame" },
+                    error: {
+                        code: RpcErrorCode.BadRequest,
+                        message: "invalid json frame",
+                        kind: "bad_request",
+                        retryable: false,
+                    },
                 });
                 return;
             }
+            // subscribe is the one method whose reply depends on which socket
+            // asked, so it can't go through the params-only handler table.
+            if (req.method === Methods.Subscribe) {
+                sendFrame(ws, { id: req.id, result: subscribe(req.params, ws) });
+                return;
+            }
+
             const handler = handlers[req.method];
             if (!handler) {
                 sendFrame(ws, {
                     id: req.id,
-                    error: { code: RpcErrorCode.MethodNotFound, message: `unknown method ${req.method}` },
+                    error: {
+                        code: RpcErrorCode.MethodNotFound,
+                        message: `unknown method ${req.method}`,
+                        kind: "unsupported",
+                        retryable: false,
+                    },
                 });
                 return;
             }
@@ -57,11 +143,14 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
                 const result = await handler(req.params);
                 sendFrame(ws, { id: req.id, result: result ?? null });
             } catch (err) {
-                opts.log("warn", "rpc handler failed", { method: req.method, err: String(err) });
-                sendFrame(ws, {
-                    id: req.id,
-                    error: { code: RpcErrorCode.Internal, message: err instanceof Error ? err.message : String(err) },
+                const body = toRpcErrorBody(err);
+                opts.log("warn", "rpc handler failed", {
+                    method: req.method,
+                    kind: body.kind,
+                    retryable: body.retryable,
+                    err: body.message,
                 });
+                sendFrame(ws, { id: req.id, error: body });
             }
         });
 
@@ -71,13 +160,16 @@ export function startWsServer(opts: ServerOptions): { close: () => Promise<void>
         });
     });
 
-    // Fan out matter.js events to every connected WS client.
+    // Fan out matter.js events to every connected WS client, numbering and
+    // buffering each one on the way out.
     const forward = (event: string) => (data: unknown) => {
-        broadcast(clients, { event, data });
+        broadcast(clients, record(event, data));
     };
     opts.controller.on(Events.AttributeChanged, forward(Events.AttributeChanged));
     opts.controller.on(Events.NodeOnline, forward(Events.NodeOnline));
     opts.controller.on(Events.NodeOffline, forward(Events.NodeOffline));
+    opts.controller.on(Events.CommissioningProgress, forward(Events.CommissioningProgress));
+    opts.controller.on(Events.CommissionableFound, forward(Events.CommissionableFound));
 
     opts.log("info", "ws server listening", { host: opts.host, port: opts.port });
 

@@ -169,11 +169,14 @@ func main() {
 	go func() {
 		syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer syncCancel()
-		added, err := devSvc.SyncFromAdapters(syncCtx)
+		added, updated, err := devSvc.SyncFromAdapters(syncCtx)
 		if err != nil {
 			log.Warn("adapter sync had errors", "err", err)
 		}
 		for _, d := range added {
+			persistOnAdd(d)
+		}
+		for _, d := range updated {
 			persistOnAdd(d)
 		}
 	}()
@@ -186,6 +189,7 @@ func main() {
 	mux.HandleFunc("GET /devices", handleListDevices(devSvc))
 	mux.HandleFunc("POST /devices/commission", handleCommission(devSvc, persistOnAdd))
 	mux.HandleFunc("POST /devices/sync", handleSyncFromAdapters(devSvc, persistOnAdd))
+	mux.HandleFunc("GET /discover", handleDiscoverCommissionable(devSvc))
 	mux.HandleFunc("GET /devices/{id}", handleGetDevice(devSvc))
 	mux.HandleFunc("DELETE /devices/{id}", handleDeleteDevice(devSvc, repo))
 	mux.HandleFunc("POST /devices/{id}/actions", handleInvokeAction(devSvc))
@@ -338,10 +342,10 @@ func handleListDevices(svc *service.DeviceService) http.HandlerFunc {
 }
 
 type commissionRequest struct {
-	Transport string            `json:"transport"`         // e.g. "matter", "virtual"
-	Payload   string            `json:"payload"`           // Matter setup code, virtual spec, …
-	Name      string            `json:"name"`              // user-visible label
-	Type      string            `json:"type,omitempty"`    // domain.DeviceType override; falls back to what the adapter reports
+	Transport string            `json:"transport"`      // e.g. "matter", "virtual"
+	Payload   string            `json:"payload"`        // Matter setup code, virtual spec, …
+	Name      string            `json:"name"`           // user-visible label
+	Type      string            `json:"type,omitempty"` // domain.DeviceType override; falls back to what the adapter reports
 	WifiSSID  string            `json:"wifi_ssid,omitempty"`
 	WifiCred  string            `json:"wifi_cred,omitempty"`
 	Extra     map[string]string `json:"extra,omitempty"`
@@ -361,28 +365,158 @@ func handleCommission(svc *service.DeviceService, persist func(*domain.Device)) 
 		if req.Name == "" {
 			req.Name = "New device"
 		}
+
+		// NDJSON progress stream. Frontend expects one JSON object per line
+		// with shape {stage, message?, device?} where stage is one of
+		// discovering|pairing|verifying|done|error.
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		flusher, _ := w.(http.Flusher)
+		enc := json.NewEncoder(w)
+		emit := func(ev map[string]any) {
+			_ = enc.Encode(ev)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+
 		// Give the adapter generous time — matter commissioning through Thread
 		// Border Router can take 30-90 seconds under normal conditions.
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 		defer cancel()
 
-		d, err := svc.Commission(ctx,
-			domain.TransportKind(req.Transport),
-			ports.CommissionRequest{
-				Payload:  req.Payload,
-				WifiSSID: req.WifiSSID,
-				WifiCred: req.WifiCred,
-				Extra:    req.Extra,
-			},
-			req.Name,
-			domain.DeviceType(req.Type),
-		)
+		emit(map[string]any{"stage": "discovering", "message": "поиск устройства"})
+
+		// Real progress from the transport. The adapter calls Progress from its
+		// event goroutine, so stages land on a buffered channel and only this
+		// goroutine ever writes to the ResponseWriter. Buffered generously: a
+		// full Matter commissioning emits a dozen or so stages, and dropping one
+		// is better than blocking the adapter's event pump.
+		type stage struct{ name, message string }
+		stages := make(chan stage, 32)
+
+		type result struct {
+			d   *domain.Device
+			err error
+		}
+		done := make(chan result, 1)
+		go func() {
+			d, err := svc.Commission(ctx,
+				domain.TransportKind(req.Transport),
+				ports.CommissionRequest{
+					Payload:  req.Payload,
+					WifiSSID: req.WifiSSID,
+					WifiCred: req.WifiCred,
+					Extra:    req.Extra,
+					Progress: func(name, message string) {
+						select {
+						case stages <- stage{name, message}:
+						default: // stream consumer is behind; progress is cosmetic
+						}
+					},
+				},
+				req.Name,
+				domain.DeviceType(req.Type),
+			)
+			done <- result{d, err}
+		}()
+
+		for {
+			select {
+			case s := <-stages:
+				// "done" is reserved for the frame carrying the device — the
+				// frontend treats it as terminal.
+				if s.name == "done" {
+					continue
+				}
+				emit(map[string]any{"stage": s.name, "message": s.message})
+			case res := <-done:
+				if res.err != nil {
+					// Attach the transport's error category so the UI can show a
+					// sentence a person can act on instead of a wrapped Go error.
+					frame := map[string]any{"stage": "error", "message": res.err.Error()}
+					if kind := matter.KindOf(res.err); kind != "" {
+						frame["kind"] = string(kind)
+						frame["retryable"] = matter.IsRetryable(res.err)
+					}
+					emit(frame)
+					return
+				}
+				persist(res.d)
+				emit(map[string]any{"stage": "done", "device": res.d})
+				return
+			case <-ctx.Done():
+				emit(map[string]any{"stage": "error", "message": "timeout"})
+				return
+			}
+		}
+	}
+}
+
+// handleDiscoverCommissionable streams devices that are advertising themselves
+// as ready to pair, as NDJSON, one JSON object per line — the shape the web app
+// already consumes.
+//
+// A found device still cannot be added without its setup code: the passcode is
+// never advertised. The list exists so the user can see what is pairable and
+// tell two identical lamps apart, then pair the one they picked by passing its
+// ref back as extra["matter.target"].
+func handleDiscoverCommissionable(svc *service.DeviceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		transport := r.URL.Query().Get("transport")
+		if transport == "" {
+			transport = string(domain.TransportMatter)
+		}
+		window := 10 * time.Second
+		if raw := r.URL.Query().Get("timeout"); raw != "" {
+			parsed, err := time.ParseDuration(raw)
+			if err != nil || parsed <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid timeout"})
+				return
+			}
+			window = min(parsed, time.Minute)
+		}
+
+		// Outlive the scan itself so the sidecar's reply isn't cut short.
+		ctx, cancel := context.WithTimeout(r.Context(), window+30*time.Second)
+		defer cancel()
+
+		found, err := svc.DiscoverCommissionable(ctx, domain.TransportKind(transport), window)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		persist(d)
-		writeJSON(w, http.StatusOK, d)
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		flusher, _ := w.(http.Flusher)
+		enc := json.NewEncoder(w)
+
+		for d := range found {
+			line := map[string]any{
+				"ref":       d.Ref,
+				"name":      d.Name,
+				"transport": transport,
+			}
+			if d.Type != "" {
+				line["type"] = d.Type
+			}
+			if d.Discriminator != 0 {
+				line["discriminator"] = d.Discriminator
+			}
+			if d.VendorID != 0 {
+				line["vendor_id"] = d.VendorID
+			}
+			if d.ProductID != 0 {
+				line["product_id"] = d.ProductID
+			}
+			if err := enc.Encode(line); err != nil {
+				return // client hung up; the scan drains on its own
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
 	}
 }
 
@@ -390,15 +524,18 @@ func handleSyncFromAdapters(svc *service.DeviceService, persist func(*domain.Dev
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		added, err := svc.SyncFromAdapters(ctx)
+		added, updated, err := svc.SyncFromAdapters(ctx)
 		for _, d := range added {
 			persist(d)
 		}
+		for _, d := range updated {
+			persist(d)
+		}
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"added": added, "error": err.Error()})
+			writeJSON(w, http.StatusBadGateway, map[string]any{"added": added, "updated": updated, "error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"added": added})
+		writeJSON(w, http.StatusOK, map[string]any{"added": added, "updated": updated})
 	}
 }
 
@@ -414,16 +551,23 @@ func handleDeleteDevice(svc *service.DeviceService, repo deviceDeleter) http.Han
 		id := domain.DeviceID(r.PathValue("id"))
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		if err := svc.Decommission(ctx, id); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-			return
+
+		// Delete is best-effort on both sides: the user asked for the device
+		// to be gone from the UI. If the transport peer has already vanished
+		// (fabric reset, device unplugged) or the disk write fails, we still
+		// tell the UI "ok" and surface warnings — otherwise an orphan can
+		// resurrect from devices.json on next boot.
+		adapterErr := svc.Decommission(ctx, id)
+		persistErr := repo.DeleteDevice(r.Context(), id)
+
+		resp := map[string]any{"ok": true}
+		if adapterErr != nil {
+			resp["adapter_warning"] = adapterErr.Error()
 		}
-		if err := repo.DeleteDevice(r.Context(), id); err != nil {
-			// Registry already dropped it — worth logging but not a client error.
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "persist_warning": err.Error()})
-			return
+		if persistErr != nil {
+			resp["persist_warning"] = persistErr.Error()
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
