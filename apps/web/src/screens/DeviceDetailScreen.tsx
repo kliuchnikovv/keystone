@@ -17,6 +17,7 @@ import { SectionHeader } from '../components/SectionHeader/SectionHeader';
 import { EmptyState } from '../components/EmptyState/EmptyState';
 import { invokeAction, writeState, deleteDevice } from '../api/devices';
 import { kelvinTone, minutesAgo } from '../lib/format';
+import { useUnconfirmed } from '../hooks/useRecentEvent';
 import type { Device } from '../api/types';
 
 /** Сколько ждём список, прежде чем признать сервер недоступным. */
@@ -241,9 +242,13 @@ function DeviceMainControl({ device }: { device: Device }) {
 
   // У кнопки нет ни одного состояния — только события. Экран показывает
   // последний жест и историю, иначе смотреть просто не на что.
-  const errorBanner = controlError ? (
+  // Отказ и молчание — разные отказы, и оба должны быть видны. Отказ приходит
+  // из ответа на запрос, молчание — событием с бэкенда через несколько секунд.
+  const unconfirmed = useUnconfirmed(device.id);
+  const problem = controlError ?? unconfirmed;
+  const errorBanner = problem ? (
     <p className={styles.controlError} role="alert">
-      {controlError}
+      {problem}
     </p>
   ) : null;
 

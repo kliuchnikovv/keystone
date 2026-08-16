@@ -233,6 +233,9 @@ func main() {
 
 	<-ctx.Done()
 	log.Info("shutting down")
+	// Drop pending confirmation timers first: a device that never answers
+	// should not raise an alarm about a system that is already going away.
+	devSvc.StopConfirmations()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)

@@ -212,4 +212,11 @@ const (
 
 	// Valves.
 	EventValveChanged EventKey = "valve_changed"
+
+	// EventNotConfirmed is emitted when a device accepted a command but never
+	// reported the resulting state. The transport cannot tell us this: a write
+	// to a read-only attribute, a command discarded because the light is off,
+	// or one rejected before it left the stack all look like success. Only the
+	// absence of a report gives it away.
+	EventNotConfirmed EventKey = "not_confirmed"
 )

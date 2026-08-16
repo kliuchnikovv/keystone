@@ -22,6 +22,11 @@ type DeviceService struct {
 	registry *registry.Registry
 	bus      ports.EventBus
 	adapters map[domain.TransportKind]ports.Adapter
+
+	// confirms watches that commands actually changed something. Accepting a
+	// command and acting on it are different things in Matter, and only the
+	// device's own report tells them apart.
+	confirms *confirmations
 }
 
 // NewDeviceService builds the service. Adapters are keyed by their Kind() and
@@ -36,8 +41,13 @@ func NewDeviceService(log *slog.Logger, reg *registry.Registry, bus ports.EventB
 		registry: reg,
 		bus:      bus,
 		adapters: m,
+		confirms: newConfirmations(log, bus, confirmTimeout),
 	}
 }
+
+// StopConfirmations cancels outstanding confirmation timers. Called on
+// shutdown so a timer cannot fire into a closed bus.
+func (s *DeviceService) StopConfirmations() { s.confirms.stop() }
 
 // List returns every device currently in the registry.
 func (s *DeviceService) List() []*domain.Device {
@@ -269,7 +279,16 @@ func (s *DeviceService) InvokeAction(ctx context.Context, id domain.DeviceID, fe
 		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
 
-	return adapter.InvokeAction(ctx, d.TransportRef, feature, action, params)
+	if err := adapter.InvokeAction(ctx, d.TransportRef, feature, action, params); err != nil {
+		return err
+	}
+
+	// The adapter returning nil means the transport accepted the command, not
+	// that the device did anything. Expect the state to come back.
+	if state, ok := stateChangedBy(feature, action); ok {
+		s.expectChange(id, feature, state, nil, string(action))
+	}
+	return nil
 }
 
 // WriteState sets an attribute of a device, again serialising per-device.
@@ -286,7 +305,62 @@ func (s *DeviceService) WriteState(ctx context.Context, id domain.DeviceID, feat
 		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
 
-	return adapter.WriteState(ctx, d.TransportRef, feature, key, value)
+	if err := adapter.WriteState(ctx, d.TransportRef, feature, key, value); err != nil {
+		return err
+	}
+	s.expectChange(id, feature, key, value, string(key))
+	return nil
+}
+
+// expectChange arms a confirmation unless the device is already in the
+// requested state — Matter reports on change, so asking for what is already
+// true produces no report, and waiting for one would be a false alarm.
+func (s *DeviceService) expectChange(
+	id domain.DeviceID,
+	feature domain.FeatureKey,
+	state domain.StateKey,
+	target any,
+	what string,
+) {
+	if target != nil {
+		if current, ok := s.registry.GetState(id, feature, state); ok && alreadyAt(current, target) {
+			return
+		}
+	}
+	s.confirms.expect(id, feature, state, what)
+}
+
+// stateChangedBy maps an action onto the state the device should report back.
+// Actions without an observable state (a self-test, a doorbell chime) are not
+// tracked: there is nothing to wait for, and inventing an expectation would
+// produce alarms nobody can act on.
+func stateChangedBy(feature domain.FeatureKey, action domain.ActionKey) (domain.StateKey, bool) {
+	switch action {
+	case domain.ActionTurnOn, domain.ActionTurnOff, domain.ActionToggle:
+		return domain.StateOnOff, true
+	case domain.ActionLock, domain.ActionUnlock:
+		return domain.StateLocked, true
+	case domain.ActionOpen, domain.ActionClose, domain.ActionStop:
+		if feature == domain.FeatureValve {
+			return domain.StateValveOpen, true
+		}
+		return domain.StateLevel, true
+	case domain.ActionSet:
+		switch feature {
+		case domain.FeatureBrightness, domain.FeatureCoverPosition:
+			return domain.StateLevel, true
+		case domain.FeatureColorTemp:
+			return domain.StateColorTempK, true
+		case domain.FeatureMode:
+			return domain.StateMode, true
+		}
+	case domain.ActionStart, domain.ActionPause, domain.ActionResume:
+		if feature == domain.FeatureMedia {
+			return domain.StatePlayback, true
+		}
+		return domain.StateRunState, true
+	}
+	return "", false
 }
 
 // ReadState reads an attribute from a device (no lock — reads are cheap).
@@ -354,6 +428,9 @@ func (s *DeviceService) IngressLoop(ctx context.Context, adapter ports.Adapter) 
 			}
 			switch ev.Kind {
 			case ports.TransportEventStateChanged:
+				// The device spoke: whatever we were waiting for on this key
+				// has arrived.
+				s.confirms.observe(d.ID, ev.Feature, domain.StateKey(ev.Key))
 				snap := domain.StateSnapshot{
 					DeviceID:  d.ID,
 					Feature:   ev.Feature,

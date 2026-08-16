@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useEventsStore } from '../state/eventsStore';
-import { describeEvent, type EventLabel } from '../lib/device-events';
+import { describeEvent, describeUnconfirmed, type EventLabel } from '../lib/device-events';
 
 /** Сколько событие остаётся подсвеченным. */
 export const EVENT_HIGHLIGHT_MS = 4000;
@@ -39,4 +39,31 @@ export function useLastEvent(deviceId: string): RecentEventView | undefined {
   const recent = useEventsStore((s) => s.recent[deviceId]);
   if (!recent) return undefined;
   return { ...describeEvent(recent.name, recent.data), name: recent.name, at: recent.at };
+}
+
+/** Сколько держится сообщение о неподтверждённой команде. */
+const UNCONFIRMED_MS = 12000;
+
+/**
+ * useUnconfirmed возвращает текст о команде, которую устройство не подтвердило.
+ *
+ * Живёт дольше обычной подсветки: это не индикация, а сообщение об ошибке —
+ * его должны успеть прочитать. Само по себе гаснет, потому что следующая
+ * удачная команда его не «перебьёт»: событий об успехе не бывает.
+ */
+export function useUnconfirmed(deviceId: string): string | undefined {
+  const recent = useEventsStore((s) => s.recent[deviceId]);
+  const [, force] = useState(0);
+  const fresh = recent?.name === 'not_confirmed' && Date.now() - recent.at <= UNCONFIRMED_MS;
+
+  useEffect(() => {
+    if (!recent || recent.name !== 'not_confirmed') return;
+    const left = recent.at + UNCONFIRMED_MS - Date.now();
+    if (left <= 0) return;
+    const timer = window.setTimeout(() => force((n) => n + 1), left);
+    return () => window.clearTimeout(timer);
+  }, [recent]);
+
+  if (!fresh || !recent) return undefined;
+  return describeUnconfirmed(recent.data);
 }
