@@ -39,16 +39,8 @@ func (m *Manager) startSidecars(pluginName, pluginDir string, sidecars []plugin.
 			Env:     sidecarEnv(sc.Env, baseEnv),
 			Restart: mapSidecarRestart(sc.RestartPolicy()),
 			Logger:  m.log,
-			OnStdout: func(line string) {
-				if m.opts.OnPluginLog != nil {
-					m.opts.OnPluginLog(pluginName, "stdout:"+sc.Name, line)
-				}
-			},
-			OnStderr: func(line string) {
-				if m.opts.OnPluginLog != nil {
-					m.opts.OnPluginLog(pluginName, "stderr:"+sc.Name, line)
-				}
-			},
+			OnStdout: m.captureLine(pluginName, "stdout:"+sc.Name),
+			OnStderr: m.captureLine(pluginName, "stderr:"+sc.Name),
 		})
 		if err != nil {
 			stopAll(out)

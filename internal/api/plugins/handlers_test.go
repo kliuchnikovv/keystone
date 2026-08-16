@@ -62,6 +62,23 @@ func (s *stubManager) Disable(_ context.Context, name string) error {
 
 func (s *stubManager) Discover() error { return s.discoverErr }
 
+func (s *stubManager) Logs(name string, tail int) []manager.LogLine { return nil }
+func (s *stubManager) Follow(ctx context.Context, name string) (<-chan manager.LogLine, error) {
+	return nil, errors.New("not implemented in stub")
+}
+func (s *stubManager) GetConfig(name string) (json.RawMessage, error) {
+	if _, ok := s.items[name]; !ok {
+		return nil, errors.New("not found")
+	}
+	return json.RawMessage(`{}`), nil
+}
+func (s *stubManager) PutConfig(name string, cfg json.RawMessage) error {
+	if _, ok := s.items[name]; !ok {
+		return errors.New("not found")
+	}
+	return nil
+}
+
 func newServer(mgr plugins.Manager) *httptest.Server {
 	mux := http.NewServeMux()
 	plugins.Register(mux, mgr)

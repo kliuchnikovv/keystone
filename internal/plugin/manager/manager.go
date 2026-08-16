@@ -83,6 +83,9 @@ type PluginStatus struct {
 	Manifest  *plugin.Manifest `json:"manifest,omitempty"`
 }
 
+// ErrPluginNotFound is returned when a plugin name is not known.
+var ErrPluginNotFound = errors.New("plugin not found")
+
 // Manager is the top-level plugin lifecycle owner.
 type Manager struct {
 	opts Options
@@ -90,6 +93,11 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	entries map[string]*record
+
+	// logs holds a bounded ring of recent lines per plugin, plus any
+	// followers streaming live. Guarded by logsMu.
+	logsMu sync.RWMutex
+	logs   map[string]*logBuffer
 }
 
 type record struct {
@@ -113,6 +121,7 @@ func New(opts Options) (*Manager, error) {
 		opts:    opts,
 		log:     opts.Logger,
 		entries: make(map[string]*record),
+		logs:    make(map[string]*logBuffer),
 	}, nil
 }
 
@@ -264,16 +273,8 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 		Env:     entrypointEnv(ep.Env, baseEnv),
 		Restart: mapRestart(r.entry.Manifest),
 		Logger:  m.log,
-		OnStdout: func(line string) {
-			if m.opts.OnPluginLog != nil {
-				m.opts.OnPluginLog(name, "stdout", line)
-			}
-		},
-		OnStderr: func(line string) {
-			if m.opts.OnPluginLog != nil {
-				m.opts.OnPluginLog(name, "stderr", line)
-			}
-		},
+		OnStdout: m.captureLine(name, "stdout"),
+		OnStderr: m.captureLine(name, "stderr"),
 		Client: m.opts.ClientOptions,
 	}
 	sv, err := supervisor.New(cfg)
