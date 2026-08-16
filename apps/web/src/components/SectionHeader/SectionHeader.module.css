@@ -2,23 +2,23 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 0 var(--s-xs);
-  margin: var(--s-lg) 0 var(--s-sm);
+  padding: 0 var(--ks-space-xs);
+  margin: var(--ks-space-lg) 0 var(--ks-space-sm);
 }
 
 .title {
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-weight: 500;
 }
 
 .right {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-sm);
-  color: var(--c-text-3);
+  gap: var(--ks-space-sm);
+  color: var(--ks-color-text-subtle);
   font-size: 12px;
   font-feature-settings: 'tnum' 1;
 }

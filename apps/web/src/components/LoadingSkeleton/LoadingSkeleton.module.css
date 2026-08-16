@@ -1,36 +1,36 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: var(--s-lg);
+  gap: var(--ks-space-lg);
 }
 
 .section {
   display: flex;
   flex-direction: column;
-  gap: var(--s-sm);
+  gap: var(--ks-space-sm);
 }
 
 .row {
   display: flex;
-  gap: var(--s-md);
+  gap: var(--ks-space-md);
 }
 
 .pill,
 .tile {
   background: linear-gradient(
     100deg,
-    var(--c-surface) 0%,
-    var(--c-surface-2) 40%,
-    var(--c-surface) 80%
+    var(--ks-color-surface) 0%,
+    var(--ks-color-surface-raised) 40%,
+    var(--ks-color-surface) 80%
   );
   background-size: 220% 100%;
   animation: shimmer 1.8s linear infinite;
-  border-radius: var(--r-lg);
+  border-radius: var(--ks-radius-lg);
 }
 
 .pill {
   height: 12px;
-  border-radius: var(--r-pill);
+  border-radius: var(--ks-radius-pill);
   width: 40%;
 }
 
@@ -50,7 +50,7 @@
 
 .compact {
   height: 92px;
-  border-radius: var(--r-md);
+  border-radius: var(--ks-radius-md);
 }
 
 @keyframes shimmer {

@@ -5,11 +5,11 @@
   position: relative;
   width: var(--w);
   height: var(--h);
-  border-radius: var(--r-pill);
-  background: var(--c-surface-2);
+  border-radius: var(--ks-radius-pill);
+  background: var(--ks-color-surface-raised);
   transition:
-    background var(--motion-fast) var(--easing-out),
-    opacity var(--motion-fast) var(--easing-out);
+    background var(--ks-motion-fast) var(--ks-ease-out),
+    opacity var(--ks-motion-fast) var(--ks-ease-out);
   flex-shrink: 0;
 }
 
@@ -26,13 +26,13 @@
   width: var(--thumb);
   height: var(--thumb);
   border-radius: 50%;
-  background: var(--c-text);
-  transition: transform var(--motion-base) var(--easing-spring);
+  background: var(--ks-color-text);
+  transition: transform var(--ks-motion-base) var(--ks-ease-spring);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
 .on {
-  background: var(--c-accent);
+  background: var(--ks-color-accent);
 }
 
 .on .thumb {
@@ -40,7 +40,7 @@
 }
 
 .pending {
-  background: color-mix(in srgb, var(--c-accent) 45%, var(--c-surface-2));
+  background: color-mix(in srgb, var(--ks-color-accent) 45%, var(--ks-color-surface-raised));
   animation: toggle-pulse 1.2s ease-in-out infinite;
 }
 

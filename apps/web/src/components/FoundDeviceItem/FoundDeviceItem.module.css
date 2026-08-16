@@ -3,11 +3,11 @@
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border-radius: var(--r-md);
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
+  border-radius: var(--ks-radius-md);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
   position: relative;
-  animation: found-in var(--motion-base) var(--easing-spring);
+  animation: found-in var(--ks-motion-base) var(--ks-ease-spring);
 }
 
 .new::before {
@@ -17,8 +17,8 @@
   top: 12px;
   bottom: 12px;
   width: 3px;
-  border-radius: var(--r-pill);
-  background: var(--c-accent);
+  border-radius: var(--ks-radius-pill);
+  background: var(--ks-color-accent);
   animation: new-fade 3s ease-out forwards;
 }
 
@@ -29,11 +29,11 @@
 .icon {
   width: 40px;
   height: 40px;
-  border-radius: var(--r-md);
-  background: var(--c-surface-2);
+  border-radius: var(--ks-radius-md);
+  background: var(--ks-color-surface-raised);
   display: grid;
   place-items: center;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   flex-shrink: 0;
 }
 
@@ -46,7 +46,7 @@
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .meta {
@@ -59,7 +59,7 @@
 }
 
 .manuf {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 @keyframes found-in {

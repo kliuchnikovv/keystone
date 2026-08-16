@@ -7,36 +7,36 @@
 .input {
   width: 100%;
   padding: 20px 18px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-lg);
-  color: var(--c-text);
-  font-family: var(--font-mono);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
+  border-radius: var(--ks-radius-lg);
+  color: var(--ks-color-text);
+  font-family: var(--ks-font-mono);
   font-size: 22px;
   letter-spacing: 0.06em;
   text-align: center;
   transition:
-    border-color var(--motion-fast) var(--easing-out),
-    box-shadow var(--motion-fast) var(--easing-out);
+    border-color var(--ks-motion-fast) var(--ks-ease-out),
+    box-shadow var(--ks-motion-fast) var(--ks-ease-out);
   outline: none;
 }
 
 .input::placeholder {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 .input:focus {
-  border-color: var(--c-accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--c-accent) 20%, transparent);
+  border-color: var(--ks-color-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ks-color-accent) 20%, transparent);
 }
 
 .complete {
-  border-color: var(--c-accent);
+  border-color: var(--ks-color-accent);
 }
 
 .hint {
   align-self: flex-end;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--ks-font-mono);
 }

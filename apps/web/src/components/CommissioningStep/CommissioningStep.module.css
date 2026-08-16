@@ -3,12 +3,12 @@
   gap: 14px;
   padding: 14px 16px;
   align-items: center;
-  border-radius: var(--r-md);
-  transition: background var(--motion-base) var(--easing-out);
+  border-radius: var(--ks-radius-md);
+  transition: background var(--ks-motion-base) var(--ks-ease-out);
 }
 
 .status-active {
-  background: color-mix(in srgb, var(--c-accent) 12%, transparent);
+  background: color-mix(in srgb, var(--ks-color-accent) 12%, transparent);
 }
 
 .icon {
@@ -18,21 +18,21 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  background: var(--c-surface-2);
-  color: var(--c-text-3);
+  background: var(--ks-color-surface-raised);
+  color: var(--ks-color-text-subtle);
   transition:
-    background var(--motion-base) var(--easing-out),
-    color var(--motion-base) var(--easing-out);
+    background var(--ks-motion-base) var(--ks-ease-out),
+    color var(--ks-motion-base) var(--ks-ease-out);
 }
 
 .status-done .icon {
-  background: color-mix(in srgb, var(--c-success) 22%, transparent);
-  color: var(--c-success);
+  background: color-mix(in srgb, var(--ks-color-success) 22%, transparent);
+  color: var(--ks-color-success);
 }
 
 .status-active .icon {
-  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
-  color: var(--c-accent);
+  background: color-mix(in srgb, var(--ks-color-accent) 22%, transparent);
+  color: var(--ks-color-accent);
 }
 
 .dot {
@@ -51,22 +51,22 @@
 .title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--c-text);
-  transition: color var(--motion-base) var(--easing-out);
+  color: var(--ks-color-text);
+  transition: color var(--ks-motion-base) var(--ks-ease-out);
 }
 
 .status-idle .title {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 .detail {
   margin-top: 2px;
   font-size: 13px;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .status-active .detail {
-  color: var(--c-accent);
+  color: var(--ks-color-accent);
 }
 
 .spin {

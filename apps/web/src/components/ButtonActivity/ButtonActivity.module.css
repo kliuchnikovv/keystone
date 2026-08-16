@@ -1,7 +1,7 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: var(--s-lg);
+  gap: var(--ks-space-lg);
 }
 
 .stage {
@@ -12,9 +12,9 @@
   justify-content: center;
   gap: 6px;
   min-height: 220px;
-  border-radius: var(--r-lg);
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
+  border-radius: var(--ks-radius-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
   text-align: center;
   padding: 24px;
 }
@@ -26,33 +26,33 @@
   width: 96px;
   height: 96px;
   border-radius: 50%;
-  border: 2px solid var(--c-accent);
+  border: 2px solid var(--ks-color-accent);
   opacity: 0;
 }
 
 .stage[data-fresh='true'] .ring {
-  animation: ring-out 900ms var(--easing-spring);
+  animation: ring-out 900ms var(--ks-ease-spring);
 }
 
 .stage[data-tone='danger'] .ring {
-  border-color: var(--c-danger);
+  border-color: var(--ks-color-danger);
 }
 
 .label {
   position: relative;
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-size: 20px;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .stage[data-fresh='true'] .label {
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .when {
   position: relative;
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 @keyframes ring-out {

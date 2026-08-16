@@ -4,19 +4,19 @@
   flex-direction: column;
   padding: 16px;
   gap: 10px;
-  border-radius: var(--r-lg);
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
+  border-radius: var(--ks-radius-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
   transition:
-    background var(--motion-base) var(--easing-out),
-    border-color var(--motion-base) var(--easing-out);
+    background var(--ks-motion-base) var(--ks-ease-out),
+    border-color var(--ks-motion-base) var(--ks-ease-out);
   overflow: hidden;
 }
 
 .size-compact {
   padding: 12px;
   gap: 6px;
-  border-radius: var(--r-md);
+  border-radius: var(--ks-radius-md);
   min-height: 96px;
 }
 
@@ -32,7 +32,7 @@
 }
 
 .icon {
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   display: inline-flex;
 }
 
@@ -44,10 +44,10 @@
 
 .name {
   margin: 0;
-  font-family: var(--font-sans);
+  font-family: var(--ks-font-body);
   font-weight: 600;
   font-size: 15px;
-  color: var(--c-text);
+  color: var(--ks-color-text);
   letter-spacing: -0.005em;
 }
 
@@ -57,7 +57,7 @@
 
 .meta {
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   min-height: 14px;
 }
 
@@ -70,7 +70,7 @@
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .kelvinDot {
@@ -81,57 +81,57 @@
 }
 
 .big {
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-weight: 500;
   font-size: 34px;
   line-height: 1;
-  color: var(--c-text);
+  color: var(--ks-color-text);
   font-feature-settings: 'tnum' 1;
   margin-top: 4px;
 }
 
 .bigUnit {
-  font-family: var(--font-sans);
+  font-family: var(--ks-font-body);
   font-size: 14px;
   font-weight: 500;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   margin-left: 4px;
 }
 
 /* ---- Type accents ---- */
 .type-light .icon {
-  color: var(--c-warn);
+  color: var(--ks-color-warning);
 }
 
 .type-plug .icon {
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .type-sensor .icon {
-  color: color-mix(in srgb, var(--c-accent) 60%, white);
+  color: color-mix(in srgb, var(--ks-color-accent) 60%, white);
 }
 
 .type-motion .icon {
-  color: var(--c-accent-2);
+  color: var(--ks-color-accent-secondary);
 }
 
 /* ---- States ---- */
 .state-active {
-  background: color-mix(in srgb, var(--c-accent) 8%, var(--c-surface));
-  border-color: color-mix(in srgb, var(--c-accent) 22%, var(--c-line));
+  background: color-mix(in srgb, var(--ks-color-accent) 8%, var(--ks-color-surface));
+  border-color: color-mix(in srgb, var(--ks-color-accent) 22%, var(--ks-color-border));
 }
 
 .state-active.type-light {
-  box-shadow: inset 0 0 32px color-mix(in srgb, var(--c-accent) 18%, transparent);
+  box-shadow: inset 0 0 32px color-mix(in srgb, var(--ks-color-accent) 18%, transparent);
 }
 
 .state-active.type-motion .big,
 .state-active.type-motion .name {
-  color: var(--c-accent-2);
+  color: var(--ks-color-accent-secondary);
 }
 
 .state-pending {
-  border-color: color-mix(in srgb, var(--c-accent) 35%, transparent);
+  border-color: color-mix(in srgb, var(--ks-color-accent) 35%, transparent);
 }
 
 .state-offline {
@@ -140,23 +140,23 @@
 
 .state-offline .name,
 .state-offline .meta {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 .state-error {
-  border-color: color-mix(in srgb, var(--c-danger) 50%, transparent);
-  background: color-mix(in srgb, var(--c-danger) 6%, var(--c-surface));
+  border-color: color-mix(in srgb, var(--ks-color-danger) 50%, transparent);
+  background: color-mix(in srgb, var(--ks-color-danger) 6%, var(--ks-color-surface));
 }
 
 .state-error .meta {
-  color: var(--c-danger);
+  color: var(--ks-color-danger);
 }
 
 /* ---- Событие устройства ---- */
 
 /* Вспышка по краю плитки: заметно боковым зрением, но не дёргает раскладку. */
 .fired {
-  animation: tile-fired 900ms var(--easing-spring);
+  animation: tile-fired 900ms var(--ks-ease-spring);
 }
 
 .eventBadge {
@@ -165,27 +165,27 @@
   right: 10px;
   z-index: 2;
   padding: 3px 9px;
-  border-radius: var(--r-pill);
+  border-radius: var(--ks-radius-pill);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  color: var(--c-bg);
-  background: var(--c-accent);
-  animation: badge-in 220ms var(--easing-spring);
+  color: var(--ks-color-bg);
+  background: var(--ks-color-accent);
+  animation: badge-in 220ms var(--ks-ease-spring);
 }
 
 .eventBadge[data-tone='neutral'] {
-  background: var(--c-text-2);
+  background: var(--ks-color-text-muted);
 }
 
 .eventBadge[data-tone='danger'] {
-  background: var(--c-danger);
-  color: var(--c-text);
+  background: var(--ks-color-danger);
+  color: var(--ks-color-text);
 }
 
 @keyframes tile-fired {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ks-color-accent) 55%, transparent);
   }
   100% {
     box-shadow: 0 0 0 14px transparent;

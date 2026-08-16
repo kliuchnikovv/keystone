@@ -1,7 +1,7 @@
 .root {
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
+  border-radius: var(--ks-radius-lg);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -18,12 +18,12 @@
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: var(--c-surface-2);
+  background: var(--ks-color-surface-raised);
   display: grid;
   place-items: center;
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-size: 20px;
-  color: var(--c-text);
+  color: var(--ks-color-text);
   flex-shrink: 0;
 }
 
@@ -32,14 +32,14 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
 }
 
 .title {
   margin: 2px 0 0;
   font-size: 16px;
   font-weight: 500;
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .steps {
@@ -62,8 +62,8 @@
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: var(--c-surface-2);
-  color: var(--c-text-2);
+  background: var(--ks-color-surface-raised);
+  color: var(--ks-color-text-muted);
   display: grid;
   place-items: center;
   font-size: 12px;
@@ -72,7 +72,7 @@
 }
 
 .text {
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   font-size: 14px;
   line-height: 1.4;
 }

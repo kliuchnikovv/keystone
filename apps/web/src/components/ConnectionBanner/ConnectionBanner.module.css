@@ -4,13 +4,13 @@
   gap: 8px;
   padding: 6px 12px;
   margin: 0 20px 8px;
-  border-radius: var(--r-pill);
-  background: color-mix(in srgb, var(--c-warn) 16%, var(--c-surface));
-  border: 1px solid color-mix(in srgb, var(--c-warn) 35%, transparent);
-  color: var(--c-warn);
+  border-radius: var(--ks-radius-pill);
+  background: color-mix(in srgb, var(--ks-color-warning) 16%, var(--ks-color-surface));
+  border: 1px solid color-mix(in srgb, var(--ks-color-warning) 35%, transparent);
+  color: var(--ks-color-warning);
   font-size: 12px;
   align-self: flex-start;
-  animation: bnr-in var(--motion-base) var(--easing-out);
+  animation: bnr-in var(--ks-motion-base) var(--ks-ease-out);
 }
 
 .dot {

@@ -1,0 +1,94 @@
+:root {
+  --ks-color-bg: #141210;
+  --ks-color-surface: #1e1b18;
+  --ks-color-surface-raised: #262220;
+  --ks-color-border: #322d28;
+
+  --ks-color-text: #f4efe7;
+  --ks-color-text-muted: #a69f94;
+  --ks-color-text-subtle: #6d655c;
+
+  --ks-color-accent: #f4a860;
+  --ks-color-accent-secondary: #d96b4a;
+
+  --ks-color-success: #7fb069;
+  --ks-color-warning: #e4a649;
+  --ks-color-danger: #d45d5d;
+
+  /* Текст поверх залитой поверхности. Каждая заливка обязана иметь пару,
+     иначе следующая тема превращается в аудит контраста. Тёмный на всех
+     четырёх: акценты светлые, и светлый текст на них не проходит AA. */
+  --ks-color-on-accent: #221912;
+  --ks-color-on-success: #221912;
+  --ks-color-on-warning: #221912;
+  --ks-color-on-danger: #221912;
+
+  /* Единственные производные акцента, которые встречаются больше одного раза.
+     Остальные color-mix в экранах — локальные вариации, а не токены. */
+  --ks-color-accent-subtle: color-mix(in srgb, var(--ks-color-accent) 12%, transparent);
+  --ks-color-accent-ring: color-mix(in srgb, var(--ks-color-accent) 20%, transparent);
+  --ks-color-accent-hover: color-mix(in srgb, var(--ks-color-accent) 88%, white);
+  --ks-color-surface-hover: #262220;
+
+  --ks-radius-sm: 12px;
+  --ks-radius-md: 14px;
+  --ks-radius-lg: 22px;
+  --ks-radius-pill: 999px;
+
+  --ks-space-xs: 4px;
+  --ks-space-sm: 8px;
+  --ks-space-md: 12px;
+  --ks-space-lg: 20px;
+  --ks-space-xl: 32px;
+  --ks-space-2xl: 48px;
+
+  --ks-font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --ks-font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --ks-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Четыре текстовых размера — ui-design-brief.md §6. Не шорткат `font:`:
+     его нельзя переопределить частично, и он ломает Dynamic Type. */
+  --ks-text-display-size: 32px;
+  --ks-text-display-line: 1.15;
+  --ks-text-title-size: 22px;
+  --ks-text-title-line: 1.2;
+  --ks-text-body-size: 15px;
+  --ks-text-body-line: 1.5;
+  --ks-text-caption-size: 12px;
+  --ks-text-caption-line: 1.4;
+
+  --ks-font-weight-regular: 400;
+  --ks-font-weight-medium: 500;
+  --ks-font-weight-semibold: 600;
+
+  --ks-tracking-tight: -0.005em;
+  --ks-tracking-caps: 0.14em;
+
+  /* Эмодзи-иллюстрации и крупные показания — это не текст, и в текстовой
+     шкале им делать нечего. */
+  --ks-size-glyph-lg: 40px;
+  --ks-size-glyph-xl: 56px;
+
+  --ks-size-touch-min: 44px;
+  --ks-opacity-disabled: 0.5;
+
+  --ks-elevation-1: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --ks-elevation-2: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --ks-elevation-3: 0 8px 24px rgba(0, 0, 0, 0.25);
+  --ks-elevation-hairline: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --ks-glow-accent: drop-shadow(0 0 22px rgba(244, 168, 96, 0.35));
+
+  /* Обязаны существовать до первого Web Component: глобальный :focus-visible
+     из main.css не пересекает границу Shadow DOM, и кольцо фокуса внутри
+     компонента можно нарисовать только через эти переменные. */
+  --ks-focus-ring-width: 2px;
+  --ks-focus-ring-offset: 2px;
+  --ks-focus-ring-color: var(--ks-color-accent);
+  --ks-focus-ring-radius: 4px;
+
+  --ks-motion-fast: 160ms;
+  --ks-motion-base: 220ms;
+  --ks-motion-slow: 320ms;
+  --ks-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ks-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

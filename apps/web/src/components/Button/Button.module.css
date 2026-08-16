@@ -2,14 +2,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--s-sm);
-  border-radius: var(--r-md);
-  font-family: var(--font-sans);
+  gap: var(--ks-space-sm);
+  border-radius: var(--ks-radius-md);
+  font-family: var(--ks-font-body);
   font-weight: 600;
   transition:
-    background var(--motion-fast) var(--easing-out),
-    color var(--motion-fast) var(--easing-out),
-    transform var(--motion-fast) var(--easing-out);
+    background var(--ks-motion-fast) var(--ks-ease-out),
+    color var(--ks-motion-fast) var(--ks-ease-out),
+    transform var(--ks-motion-fast) var(--ks-ease-out);
 }
 
 .root:active {
@@ -45,20 +45,20 @@
 }
 
 .variant-primary {
-  background: var(--c-accent);
+  background: var(--ks-color-accent);
   color: #221912;
 }
 
 .variant-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--c-accent) 88%, white);
+  background: color-mix(in srgb, var(--ks-color-accent) 88%, white);
 }
 
 .variant-ghost {
   background: transparent;
-  color: var(--c-text);
-  border: 1px solid var(--c-line);
+  color: var(--ks-color-text);
+  border: 1px solid var(--ks-color-border);
 }
 
 .variant-ghost:hover:not(:disabled) {
-  background: var(--c-surface-2);
+  background: var(--ks-color-surface-raised);
 }

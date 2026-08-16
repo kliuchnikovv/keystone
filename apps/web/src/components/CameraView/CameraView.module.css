@@ -1,10 +1,10 @@
 .root {
   position: relative;
   margin: 0;
-  border-radius: var(--r-lg);
+  border-radius: var(--ks-radius-lg);
   overflow: hidden;
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
   aspect-ratio: 16 / 9;
 }
 
@@ -15,7 +15,7 @@
   display: block;
   /* До первого кадра прозрачное видео показывало бы белый прямоугольник. */
   opacity: 0;
-  transition: opacity var(--motion-base) ease;
+  transition: opacity var(--ks-motion-base) ease;
 }
 
 .video[data-live='true'] {
@@ -30,7 +30,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 13px;
   text-align: center;
   padding: 16px;
@@ -38,7 +38,7 @@
 
 .detail {
   font-size: 11px;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   opacity: 0.8;
   max-width: 30ch;
 }
@@ -52,9 +52,9 @@
   left: 12px;
   bottom: 12px;
   padding: 4px 10px;
-  border-radius: var(--r-pill);
-  background: color-mix(in srgb, var(--c-bg) 70%, transparent);
-  color: var(--c-text);
+  border-radius: var(--ks-radius-pill);
+  background: color-mix(in srgb, var(--ks-color-bg) 70%, transparent);
+  color: var(--ks-color-text);
   font-size: 12px;
   backdrop-filter: blur(8px);
 }

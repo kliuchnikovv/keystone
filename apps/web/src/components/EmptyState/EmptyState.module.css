@@ -4,7 +4,7 @@
   align-items: center;
   text-align: center;
   padding: 48px 24px;
-  gap: var(--s-md);
+  gap: var(--ks-space-md);
 }
 
 .halo {
@@ -15,11 +15,11 @@
   place-items: center;
   background: radial-gradient(
     circle at 50% 55%,
-    color-mix(in srgb, var(--c-accent) 40%, transparent),
+    color-mix(in srgb, var(--ks-color-accent) 40%, transparent),
     transparent 70%
   );
   animation: halo-breathe 3.6s ease-in-out infinite;
-  margin-bottom: var(--s-md);
+  margin-bottom: var(--ks-space-md);
 }
 
 .emoji {
@@ -29,29 +29,29 @@
 }
 
 .title {
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-weight: 500;
   font-size: 24px;
   line-height: 1.15;
-  color: var(--c-text);
+  color: var(--ks-color-text);
   margin: 0;
   max-width: 22ch;
 }
 
 .body {
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   font-size: 14px;
-  margin: 0 0 var(--s-md);
+  margin: 0 0 var(--ks-space-md);
   max-width: 34ch;
 }
 
 .primary {
-  margin-top: var(--s-sm);
+  margin-top: var(--ks-space-sm);
 }
 
 .secondary {
-  margin-top: var(--s-sm);
-  color: var(--c-text-3);
+  margin-top: var(--ks-space-sm);
+  color: var(--ks-color-text-subtle);
   font-size: 13px;
 }
 

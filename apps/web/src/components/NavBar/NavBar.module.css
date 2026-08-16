@@ -5,10 +5,10 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-  background: color-mix(in srgb, var(--c-surface) 92%, transparent);
+  background: color-mix(in srgb, var(--ks-color-surface) 92%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border-top: 1px solid var(--c-line);
+  border-top: 1px solid var(--ks-color-border);
 }
 
 .item {
@@ -17,13 +17,13 @@
   align-items: center;
   gap: 4px;
   padding: 6px 4px;
-  border-radius: var(--r-md);
-  color: var(--c-text-3);
+  border-radius: var(--ks-radius-md);
+  color: var(--ks-color-text-subtle);
   font-size: 11px;
   font-weight: 500;
   transition:
-    color var(--motion-fast) var(--easing-out),
-    background var(--motion-fast) var(--easing-out);
+    color var(--ks-motion-fast) var(--ks-ease-out),
+    background var(--ks-motion-fast) var(--ks-ease-out);
 }
 
 .item:disabled {
@@ -31,6 +31,6 @@
 }
 
 .active {
-  color: var(--c-accent);
-  background: color-mix(in srgb, var(--c-accent) 12%, transparent);
+  color: var(--ks-color-accent);
+  background: color-mix(in srgb, var(--ks-color-accent) 12%, transparent);
 }

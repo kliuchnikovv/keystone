@@ -5,7 +5,7 @@
   max-width: 520px;
   margin: 0 auto;
   padding: env(safe-area-inset-top, 0px) 20px 32px;
-  gap: var(--s-md);
+  gap: var(--ks-space-md);
 }
 
 .back {
@@ -13,7 +13,7 @@
   align-items: center;
   gap: 4px;
   padding: 12px 4px;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   font-size: 14px;
   align-self: flex-start;
   background: none;
@@ -22,7 +22,7 @@
 }
 
 .back:hover {
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .head {
@@ -33,22 +33,22 @@
 
 .name {
   margin: 0;
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-weight: 500;
   font-size: 28px;
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .meta {
   margin: 0;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 13px;
 }
 
 .main {
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
+  border-radius: var(--ks-radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -64,7 +64,7 @@
 
 .mainLabel {
   margin: 0;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -72,16 +72,16 @@
 
 .mainValue {
   margin: 4px 0 0;
-  font-family: var(--font-display);
+  font-family: var(--ks-font-display);
   font-size: 40px;
   font-weight: 500;
   line-height: 1;
-  color: var(--c-text);
+  color: var(--ks-color-text);
 }
 
 .unit {
   font-size: 20px;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
   margin-left: 4px;
 }
 
@@ -93,7 +93,7 @@
 
 .sliderLabel {
   margin: 0;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -101,7 +101,7 @@
 
 .emptyHint {
   margin: 8px 0 0;
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 13px;
 }
 
@@ -112,9 +112,9 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
+  border-radius: var(--ks-radius-lg);
   overflow: hidden;
 }
 
@@ -125,7 +125,7 @@
   gap: 10px;
   align-items: baseline;
   font-size: 13px;
-  border-bottom: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--ks-color-border);
 }
 
 .historyItem:last-child {
@@ -133,26 +133,26 @@
 }
 
 .historyTime {
-  color: var(--c-text-3);
-  font-family: var(--font-mono);
+  color: var(--ks-color-text-subtle);
+  font-family: var(--ks-font-mono);
   font-size: 11px;
 }
 
 .historyLabel {
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .historyDetail {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   font-size: 12px;
 }
 
 .settings {
   margin: 8px 0 0;
   padding: 0;
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--r-lg);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
+  border-radius: var(--ks-radius-lg);
   overflow: hidden;
 }
 
@@ -161,7 +161,7 @@
   justify-content: space-between;
   align-items: baseline;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--ks-color-border);
   font-size: 13px;
 }
 
@@ -170,23 +170,23 @@
 }
 
 .row dt {
-  color: var(--c-text-3);
+  color: var(--ks-color-text-subtle);
   margin: 0;
 }
 
 .row dd {
-  color: var(--c-text);
+  color: var(--ks-color-text);
   margin: 0;
   text-align: right;
 }
 
 .mono {
-  font-family: var(--font-mono);
+  font-family: var(--ks-font-mono);
   font-size: 12px;
 }
 
 .deleteBlock {
-  margin-top: var(--s-md);
+  margin-top: var(--ks-space-md);
 }
 
 .confirmRow {
@@ -200,22 +200,22 @@
 
 /* ---- Сообщение после удаления ---- */
 .notice {
-  margin-top: var(--s-md);
+  margin-top: var(--ks-space-md);
   padding: 14px;
-  border-radius: var(--r-md);
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
+  border-radius: var(--ks-radius-md);
+  background: var(--ks-color-surface);
+  border: 1px solid var(--ks-color-border);
   font-size: 13px;
   line-height: 1.5;
-  color: var(--c-text-2);
+  color: var(--ks-color-text-muted);
 }
 
 .notice[data-tone='warn'] {
-  border-color: color-mix(in srgb, var(--c-warn) 45%, var(--c-line));
+  border-color: color-mix(in srgb, var(--ks-color-warning) 45%, var(--ks-color-border));
 }
 
 .notice[data-tone='error'] {
-  border-color: color-mix(in srgb, var(--c-danger) 45%, var(--c-line));
+  border-color: color-mix(in srgb, var(--ks-color-danger) 45%, var(--ks-color-border));
 }
 
 .notice p {
@@ -226,10 +226,10 @@
 .controlError {
   margin: 0;
   padding: 10px 12px;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--c-danger) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--c-danger) 45%, var(--c-line));
-  color: var(--c-text);
+  border-radius: var(--ks-radius-sm);
+  background: color-mix(in srgb, var(--ks-color-danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ks-color-danger) 45%, var(--ks-color-border));
+  color: var(--ks-color-text);
   font-size: 12px;
   line-height: 1.45;
 }
