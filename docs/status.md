@@ -1,6 +1,6 @@
 # Keystone — статус
 
-**Дата:** 2026-08-16
+**Дата:** 2026-08-16 (обновление после сверки с GH project 5)
 **Обновляется** на переходах между фазами, а не при каждом коммите.
 
 **Куда смотреть за деталями:**
@@ -27,16 +27,18 @@
 - ✅ **Read BasicInformation + DeviceTypeList** — устройства именуются корректно («IKEA WARMBLIXT», не «Matter device N»), тип определяется из Matter-спеки.
 - ✅ **Reconnect + heartbeat** — обрыв sidecar посреди сессии восстанавливается автоматически, WS ping/pong каждые 10 сек.
 - ✅ **Structured error taxonomy** — 7 ErrorKind (bad_request/not_found/not_ready/unreachable/timeout/unsupported/internal), sentinelByKind + `errors.Is` в handler'ах вместо regex по тексту.
+- ✅ **Coverage wave 1+ (bonus)** — Illuminance/Switch/RGB/DoorLock/WindowCovering плюс сверх плана: valves, temperature control, mode select, buttons, WebRTC-камера.
 
-⚠️ Требуют верификации на живом WARMBLIXT:
+⚠️ Требуют верификации на живом WARMBLIXT (остаются `In progress` на борде):
 - Auto-subscribe после commission — код с StateStream работает, явного `subscribeAll` нет, полагается на matter.js 0.17 auto-subscribe.
 - Per-feature endpoint mapping — логика есть, `defaultEndpoint = 1` остался как fallback. Multi-endpoint не тестили.
-- Initial state read после commission — нет явного кода, но появился `internal/service/confirm.go` (watch-and-verify command effects) как reliability слой.
+- Initial state read после commission — нет явного кода, но `internal/service/confirm.go` (watch-and-verify) закрывает практический риск.
 
 ### Phase B — Plugin architecture (частично)
 
 - ✅ **Sidecar Protocol v1** — отдельная репа `keystone-api`. 9 коммитов. Cross-language conformance testing (Go ↔ TS peers). Бонусом: миграция gRPC API ядра туда же (`core/proto/keystone/`).
-- ✅ **Plugin manifest v1 + validator** — `internal/plugin/{manifest.go, semantic.go, validator.go, testdata/, manifest_schema.json}` + CLI `cmd/keystone-plugin-validate/`. **Не закоммичено, лежит в working tree на `plugin/manifest-v1`.**
+- ✅ **Plugin manifest v1 + validator** — `internal/plugin/{manifest.go, semantic.go, validator.go, testdata/, manifest_schema.json}` + CLI `cmd/keystone-plugin-validate/` (commit `7052c6f`).
+- ✅ **UI Design System v0.1 (token layer)** — `apps/web/src/theme/tokens.css` + 418 использований `--ks-*` (commits `046cffa` / `6589f8a` / `2f93318`). Web Components отложены до Phase G — треки `Layer 3 Web Components loader` / `Layer 4 iframe router` остались в бэклоге.
 
 ### Bonus (сверх плана)
 
@@ -53,7 +55,24 @@
 
 ## 2. Что в работе
 
-- **[UI] Design System v0.1** — scope сжат до token layer: `apps/web/src/theme/tokens.css` + 418 использований `--ks-*` через `apps/web`. Web Components (`<ks-*>`), packages/design и Storybook — **отложены до Phase G**, реально нужны только когда стартует UI-runtime для плагинов.
+- **[Plugin] Plugin manager в ядре** — Ready. Стартовали: `go.work` + `replace` для `keystone-api/sidecar` подключены, build проходит.
+- **[Plugin] HTTP API endpoints `/plugins/*`** — Ready.
+- **[Plugin] Extract Matter → `plugins/matter/`** — Ready. Решено: жить в этой же репе (`plugins/matter/`), не в отдельной. В отдельный репозиторий вынесем в фазе Store вместе с plugin-registry.
+
+### Ключевая находка: runtime **уже готов** в `keystone-api/sidecar`
+
+Обе стороны sidecar-protocol-v1 реализованы, тестированы, стабильны:
+- Plugin-side: `sidecar.RunPlugin(ctx, opts)` — hello/ping/subscribe/unsubscribe/resume «из коробки».
+- Core-side: `sidecar.Connect(ctx, path, opts) *Client` — dial UDS, handshake, request/push API.
+- Внутри: NDJSON codec, symmetric Peer, seq/replay ringbuf, heartbeat, backoff, topic matcher, structured errors.
+
+Фаза «Runtime» из плана Phase B **пропускается** — писать нечего. Осталось:
+1. **`internal/plugin/supervisor`** — spawn entrypoint (`os/exec`), listen UDS на `$KEYSTONE_PLUGIN_SOCKET`, connect, keep-alive c restart policy, log capture.
+2. **`internal/plugin/registry`** — walk `/etc/keystone/plugins/`, load+validate манифесты.
+3. **`internal/plugin/manager`** — FSM (`Discover→Configured→Running`), owns registry+supervisor+client.
+4. **`internal/api/plugins.go`** (или где HTTP сейчас) — `/plugins/*` endpoints.
+5. **`ports.PluginAdapter`** — `ports.Adapter` поверх `*sidecar.Client`. Убирает необходимость менять `service.DeviceService`.
+6. **`plugins/matter/`** — новый бинарь: `sidecar.RunPlugin` + бизнес-логика из `internal/adapters/matter`. Пере-експорт `parseMatterURL`, `KindOf`, `IsRetryable`. Из `domain.TransportKind` убрать `TransportMatter` — плагин сообщает свой kind в `hello`.
 
 ---
 
@@ -87,11 +106,10 @@
 - `plugin/manifest-v1` — тот же tip, что `feat/matter-hardening`, плюс uncommitted Task 9 + Task 10 работы
 - `keystone-api` — только локально, репозиторий на GitHub не создан
 
-Uncommitted файлы на `plugin/manifest-v1`:
-- Task 9 code: `internal/plugin/*`, `cmd/keystone-plugin-validate/`
-- Task 10 code: `apps/web/src/theme/tokens.css` + ~20 `apps/web/src/components/**/*.module.css`
-- Docs: 5 файлов в `docs/` (plugin-store-architecture, keystone-cli-spec, plugin-sdk-guide, plugin-ui-integration, sidecar-protocol-v1)
-- Misc: `.claude/`, `create-project-tasks.py`, `apps/web/scripts/`
+Uncommitted файлы на `plugin/manifest-v1` (осталось только misc):
+- `.claude/`, `create-project-tasks.py`, пустой `packages/design/`.
+
+Task 9 (`internal/plugin/*`, `cmd/keystone-plugin-validate/`), Task 10 (token layer), design docs — уже в ветке.
 
 **План разбора** (по appетиту):
 1. `gh repo create kliuchnikovv/keystone-api --public` + push всех 9 коммитов

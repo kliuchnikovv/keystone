@@ -1,0 +1,6 @@
+go 1.23
+
+use (
+	.
+	/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-api/sidecar
+)
