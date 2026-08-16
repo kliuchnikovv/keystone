@@ -56,8 +56,15 @@ type PluginEntry struct {
 type Package struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
-	// Signature is reserved for a future Sigstore field. Ignored today.
+
+	// Signature is a base64 or hex detached signature used by
+	// Ed25519Verifier and simpler custom verifiers.
 	Signature string `json:"signature,omitempty"`
+
+	// Bundle is a JSON blob used by SigstoreVerifier and future
+	// keyless verifiers. Its shape is verifier-specific; the store
+	// core treats it as opaque.
+	Bundle string `json:"bundle,omitempty"`
 }
 
 // Registry is a store client bound to one base URL.
