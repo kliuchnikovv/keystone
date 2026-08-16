@@ -8,7 +8,6 @@
 package supervisor
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -214,8 +213,8 @@ func (s *Supervisor) spawn() error {
 	s.proc = cmd.Process
 	s.mu.Unlock()
 
-	go pump(stdout, s.cfg.OnStdout)
-	go pump(stderr, s.cfg.OnStderr)
+	go pumpLines(stdout, s.cfg.OnStdout)
+	go pumpLines(stderr, s.cfg.OnStderr)
 
 	s.log.Info("plugin started", "pid", cmd.Process.Pid, "socket", s.socket)
 
@@ -257,7 +256,7 @@ func (s *Supervisor) watch() {
 		}
 		s.log.Warn("plugin exited", "err", exited, "restart", string(s.cfg.Restart))
 
-		if !s.shouldRestart(err) {
+		if !shouldRestart(s.cfg.Restart, err) {
 			s.lastError = err
 			return
 		}
@@ -270,17 +269,6 @@ func (s *Supervisor) watch() {
 			s.lastError = err
 			return
 		}
-	}
-}
-
-func (s *Supervisor) shouldRestart(err error) bool {
-	switch s.cfg.Restart {
-	case RestartAlways:
-		return true
-	case RestartOnFailure:
-		return err != nil
-	default:
-		return false
 	}
 }
 
@@ -361,22 +349,6 @@ func (s *Supervisor) takeCmd() *exec.Cmd {
 	cs.cmd = nil
 	cs.mu.Unlock()
 	return c
-}
-
-func pump(r io.Reader, sink func(string)) {
-	if sink == nil {
-		_, _ = io.Copy(io.Discard, r)
-		return
-	}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 4096), 1<<20)
-	for sc.Scan() {
-		sink(sc.Text())
-	}
-	// Scanner errors on child log streams are non-fatal — the child is dying
-	// and its exit is what the supervisor reacts to. Report at debug so a
-	// pipe error does not mask itself if someone is chasing a bug.
-	_ = sc.Err()
 }
 
 func sanitize(s string) string {

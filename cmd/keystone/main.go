@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -183,9 +184,14 @@ func main() {
 	var pluginIngressMu sync.Mutex
 	if *pluginsDir != "" {
 		reg := pluginregistry.New(*pluginsDir, log.With("component", "plugin-registry"))
+		stateStore := &manager.FileStateStore{
+			Path: filepath.Join(*dataDir, "plugins-state.json"),
+		}
 		m, err := manager.New(manager.Options{
-			Registry: reg,
-			Logger:   log.With("component", "plugin-manager"),
+			Registry:   reg,
+			Logger:     log.With("component", "plugin-manager"),
+			DataDir:    filepath.Join(*dataDir, "plugin-data"),
+			StateStore: stateStore,
 			OnPluginLog: func(name, stream, line string) {
 				log.Info("plugin log", "plugin", name, "stream", stream, "line", line)
 			},
@@ -235,6 +241,10 @@ func main() {
 		if err := m.Discover(); err != nil {
 			log.Warn("plugin discover", "err", err)
 		}
+		// Bring back up whatever the operator had running before the
+		// daemon last stopped. Runs asynchronously so a plugin that
+		// hangs during Start does not delay the rest of boot.
+		go m.RestoreEnabled(ctx)
 		pluginMgr = m
 		defer m.Shutdown(context.Background())
 	}

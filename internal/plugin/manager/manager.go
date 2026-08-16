@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -39,6 +40,16 @@ const (
 type Options struct {
 	Registry *registry.Registry
 	Logger   *slog.Logger
+
+	// DataDir is the base under which each plugin gets its own persistent
+	// data directory, exposed to the entrypoint and its sidecars as
+	// $KEYSTONE_PLUGIN_DATA. Defaults to <registry-root>/../plugin-data.
+	DataDir string
+
+	// StateStore persists which plugins the operator has enabled so the
+	// daemon can bring them back up on restart. Nil disables persistence
+	// (useful for tests). Call RestoreEnabled after Discover to apply.
+	StateStore StateStore
 
 	// ClientOptions is the sidecar.CoreOptions template applied when a
 	// plugin is enabled. Version and Handler are overridden per-plugin;
@@ -86,6 +97,7 @@ type record struct {
 	state     State
 	lastError error
 	sv        *supervisor.Supervisor
+	sidecars  []*supervisor.Process
 	client    *sidecar.Client
 }
 
@@ -221,12 +233,35 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 	}
 	m.mu.Unlock()
 
+	dataDir := m.dataDirFor(name)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		m.markFailed(name, err)
+		return fmt.Errorf("manager: creating data dir for %q: %w", name, err)
+	}
+
+	// Base env passed to entrypoint and to every declared sidecar so
+	// they can find each other on the filesystem and the manifest's
+	// $KEYSTONE_PLUGIN_* references expand consistently.
+	baseEnv := map[string]string{
+		"KEYSTONE_PLUGIN_NAME": name,
+		"KEYSTONE_PLUGIN_DATA": dataDir,
+	}
+
+	// Bring up manifest-declared sidecars first — the entrypoint may
+	// depend on them (Matter's matter-server is the canonical case).
+	// Stop them in reverse if the entrypoint fails to come up.
+	sidecars, err := m.startSidecars(name, r.entry.Dir, r.entry.Manifest.Spec.Sidecars, baseEnv)
+	if err != nil {
+		m.markFailed(name, err)
+		return err
+	}
+
 	cfg := supervisor.Config{
 		Name:    r.entry.Manifest.Metadata.Name,
 		Version: r.entry.Manifest.Metadata.Version,
 		Exec:    append([]string{resolveExec(r.entry.Dir, ep.Exec)}, ep.Args...),
 		WorkDir: r.entry.Dir,
-		Env:     flattenEnv(ep.Env),
+		Env:     entrypointEnv(ep.Env, baseEnv),
 		Restart: mapRestart(r.entry.Manifest),
 		Logger:  m.log,
 		OnStdout: func(line string) {
@@ -243,11 +278,13 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 	}
 	sv, err := supervisor.New(cfg)
 	if err != nil {
+		stopAll(sidecars)
 		m.markFailed(name, err)
 		return err
 	}
 	client, err := sv.Start(ctx)
 	if err != nil {
+		stopAll(sidecars)
 		m.markFailed(name, err)
 		return err
 	}
@@ -258,6 +295,7 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 			// to adopt it. Landing in Failed is the honest signal — the
 			// operator can retry after fixing the mount error.
 			_ = sv.Stop(context.Background())
+			stopAll(sidecars)
 			m.markFailed(name, err)
 			return fmt.Errorf("manager: OnEnable %q: %w", name, err)
 		}
@@ -266,10 +304,12 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 	m.mu.Lock()
 	r = m.entries[name]
 	r.sv = sv
+	r.sidecars = sidecars
 	r.client = client
 	r.state = StateRunning
 	r.lastError = nil
 	m.mu.Unlock()
+	m.persistState()
 	return nil
 }
 
@@ -282,21 +322,30 @@ func (m *Manager) Disable(ctx context.Context, name string) error {
 		return fmt.Errorf("manager: unknown plugin %q", name)
 	}
 	sv := r.sv
+	sidecars := r.sidecars
 	wasRunning := r.state == StateRunning
 	manifest := r.entry.Manifest
 	r.sv = nil
+	r.sidecars = nil
 	r.client = nil
 	if wasRunning {
 		r.state = StateStopped
 	}
 	m.mu.Unlock()
 
-	if sv == nil {
+	if sv == nil && len(sidecars) == 0 {
 		return nil
 	}
-	err := sv.Stop(ctx)
+	var err error
+	if sv != nil {
+		err = sv.Stop(ctx)
+	}
+	stopAll(sidecars)
 	if wasRunning && m.opts.OnDisable != nil {
 		m.opts.OnDisable(name, manifest)
+	}
+	if wasRunning {
+		m.persistState()
 	}
 	return err
 }
@@ -353,17 +402,6 @@ func resolveExec(dir, exec string) string {
 		return exec
 	}
 	return filepath.Join(dir, exec)
-}
-
-func flattenEnv(m map[string]string) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(m))
-	for k, v := range m {
-		out = append(out, k+"="+v)
-	}
-	return out
 }
 
 // mapRestart pulls the effective restart policy from the manifest. The
