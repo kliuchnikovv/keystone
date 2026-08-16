@@ -39,6 +39,13 @@ type Adapter struct {
 	// event and hands the payload to the matching channel.
 	scanMu sync.Mutex
 	scans  map[string]scanSlot
+
+	// signalMu guards signalSubs — every viewer of a camera stream
+	// registers a channel here; camera_signal events are broadcast to
+	// all of them so a single caller does not steal frames from
+	// another.
+	signalMu   sync.Mutex
+	signalSubs map[chan<- ports.CameraSignal]struct{}
 }
 
 type progressUpdate struct {
@@ -59,11 +66,12 @@ func New(client *sidecar.Client, kind domain.TransportKind, log *slog.Logger) *A
 		log = slog.Default()
 	}
 	return &Adapter{
-		client:   client,
-		kind:     kind,
-		log:      log,
-		inFlight: make(map[string]chan<- progressUpdate),
-		scans:    make(map[string]scanSlot),
+		client:     client,
+		kind:       kind,
+		log:        log,
+		inFlight:   make(map[string]chan<- progressUpdate),
+		scans:      make(map[string]scanSlot),
+		signalSubs: make(map[chan<- ports.CameraSignal]struct{}),
 	}
 }
 
@@ -256,6 +264,9 @@ func (a *Adapter) Subscribe(ctx context.Context) (<-chan ports.TransportEvent, e
 				if a.deliverFound(ev) {
 					continue
 				}
+				if a.deliverSignal(ev) {
+					continue
+				}
 				select {
 				case out <- ports.TransportEvent{
 					Ref:     ev.Ref,
@@ -338,6 +349,81 @@ func (a *Adapter) deliverFound(ev EventPayload) bool {
 	}:
 	default:
 	}
+	return true
+}
+
+// StartStream implements ports.CameraStreamer — hands the viewer's
+// SDP offer to the plugin and returns the session id the camera
+// allocated.
+func (a *Adapter) StartStream(ctx context.Context, ref domain.TransportRef, sdp string) (int, error) {
+	var res StartStreamResult
+	if err := a.client.Call(ctx, MethodCameraStart, StartStreamParams{Ref: ref, SDP: sdp}, &res); err != nil {
+		return 0, fmt.Errorf("bridge: %s: %w", MethodCameraStart, err)
+	}
+	return res.SessionID, nil
+}
+
+// AddCandidates implements ports.CameraStreamer.
+func (a *Adapter) AddCandidates(ctx context.Context, sessionID int, candidates []string) error {
+	if err := a.client.Call(ctx, MethodCameraAddCandidates, AddCandidatesParams{
+		SessionID: sessionID, Candidates: candidates,
+	}, nil); err != nil {
+		return fmt.Errorf("bridge: %s: %w", MethodCameraAddCandidates, err)
+	}
+	return nil
+}
+
+// StopStream implements ports.CameraStreamer.
+func (a *Adapter) StopStream(ctx context.Context, sessionID int) error {
+	if err := a.client.Call(ctx, MethodCameraStop, StopStreamParams{SessionID: sessionID}, nil); err != nil {
+		return fmt.Errorf("bridge: %s: %w", MethodCameraStop, err)
+	}
+	return nil
+}
+
+// Signals implements ports.CameraStreamer. Every subscriber sees every
+// signal — matter's in-tree adapter has the same fan-out semantics —
+// and callers filter by session id.
+func (a *Adapter) Signals(ctx context.Context) (<-chan ports.CameraSignal, error) {
+	out := make(chan ports.CameraSignal, 16)
+	a.signalMu.Lock()
+	a.signalSubs[out] = struct{}{}
+	a.signalMu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		a.signalMu.Lock()
+		delete(a.signalSubs, out)
+		a.signalMu.Unlock()
+		close(out)
+	}()
+	return out, nil
+}
+
+// deliverSignal broadcasts a camera_signal event to every subscriber
+// and returns true so the Subscribe fan-out doesn't re-emit it as a
+// TransportEvent. A slow subscriber drops the signal (not the frame —
+// the media stream is on its own peer connection) rather than
+// blocking every other viewer.
+func (a *Adapter) deliverSignal(ev EventPayload) bool {
+	if ev.Kind != KindCameraSignal || ev.Signal == nil {
+		return false
+	}
+	sig := ports.CameraSignal{
+		Kind:       ev.Signal.Kind,
+		SessionID:  ev.Signal.SessionID,
+		SDP:        ev.Signal.SDP,
+		Candidates: ev.Signal.Candidates,
+		Reason:     ev.Signal.Reason,
+	}
+	a.signalMu.Lock()
+	for ch := range a.signalSubs {
+		select {
+		case ch <- sig:
+		default:
+		}
+	}
+	a.signalMu.Unlock()
 	return true
 }
 

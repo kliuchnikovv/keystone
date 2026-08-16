@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/kliuchnikovv/keystone-api/sidecar"
@@ -93,6 +94,7 @@ func Run(ctx context.Context, opts Options) error {
 		Handler:      mux,
 		Logger:       log,
 		OnConnect: func(ctx context.Context, peer *sidecar.Peer) {
+			setCameraPeer(peer)
 			if err := opts.Adapter.Start(ctx); err != nil {
 				// A backend that is not yet reachable is not fatal —
 				// the adapter is expected to keep retrying. We log
@@ -103,6 +105,7 @@ func Run(ctx context.Context, opts Options) error {
 			pumpEvents(ctx, opts.Adapter, peer, log)
 		},
 		OnDisconnect: func(err error) {
+			setCameraPeer(nil)
 			log.Info("core disconnected", "err", err)
 		},
 	}
@@ -256,6 +259,10 @@ func registerHandlers(mux *sidecar.Mux, adapter Adapter, mapper ErrorMapper, log
 		return map[string]any{}, nil
 	}))
 
+	if streamer, ok := adapter.(ports.CameraStreamer); ok {
+		registerCameraHandlers(mux, streamer, mapper, log)
+	}
+
 	if scanner, ok := adapter.(ports.CommissionableDiscoverer); ok {
 		mux.Handle(bridge.MethodDiscoverCommissionable, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
 			var p bridge.DiscoverCommissionableParams
@@ -291,6 +298,105 @@ func registerHandlers(mux *sidecar.Mux, adapter Adapter, mapper ErrorMapper, log
 			return bridge.DiscoverCommissionableResult{Ended: true}, nil
 		}))
 	}
+}
+
+// registerCameraHandlers wires the three CameraStreamer RPC methods
+// and spawns a goroutine that pumps Signals() onto adapter.event as
+// camera_signal frames. Kept separate so registerHandlers stays flat
+// and the optional-cast branch above is one line.
+func registerCameraHandlers(mux *sidecar.Mux, streamer ports.CameraStreamer, mapper ErrorMapper, log *slog.Logger) {
+	mux.Handle(bridge.MethodCameraStart, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
+		var p bridge.StartStreamParams
+		if err := r.Bind(&p); err != nil {
+			return nil, err
+		}
+		id, err := streamer.StartStream(ctx, p.Ref, p.SDP)
+		if err != nil {
+			return nil, mapErr(mapper, err)
+		}
+		return bridge.StartStreamResult{SessionID: id}, nil
+	}))
+
+	mux.Handle(bridge.MethodCameraAddCandidates, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
+		var p bridge.AddCandidatesParams
+		if err := r.Bind(&p); err != nil {
+			return nil, err
+		}
+		if err := streamer.AddCandidates(ctx, p.SessionID, p.Candidates); err != nil {
+			return nil, mapErr(mapper, err)
+		}
+		return map[string]any{}, nil
+	}))
+
+	mux.Handle(bridge.MethodCameraStop, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
+		var p bridge.StopStreamParams
+		if err := r.Bind(&p); err != nil {
+			return nil, err
+		}
+		if err := streamer.StopStream(ctx, p.SessionID); err != nil {
+			return nil, mapErr(mapper, err)
+		}
+		return map[string]any{}, nil
+	}))
+
+	// Long-lived Signals subscription: the plugin's streamer reports
+	// answers, candidates and end frames for every session it owns;
+	// we forward them onto adapter.event so the bridge broadcasts to
+	// every viewer.
+	go pumpCameraSignals(streamer, log)
+}
+
+func pumpCameraSignals(streamer ports.CameraStreamer, log *slog.Logger) {
+	ch, err := streamer.Signals(context.Background())
+	if err != nil {
+		log.Error("camera signals subscribe", "err", err)
+		return
+	}
+	// We need a peer to Publish onto. That peer is the current
+	// connection, not one we own; wait until OnConnect gives us one
+	// via cameraPeer channel. In practice, sdk.Run establishes the
+	// peer inside its own OnConnect and reuses it forever, so peers
+	// registered here are stable.
+	// For MVP simplicity we drop signals until the peer arrives; a
+	// long-running camera session doesn't lose frames from an empty
+	// signalling channel — those go over the WebRTC peer connection
+	// directly.
+	for sig := range ch {
+		peer := getCameraPeer()
+		if peer == nil {
+			continue
+		}
+		_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+			Kind: bridge.KindCameraSignal,
+			Signal: &bridge.CameraSignalPayload{
+				Kind:       sig.Kind,
+				SessionID:  sig.SessionID,
+				SDP:        sig.SDP,
+				Candidates: sig.Candidates,
+				Reason:     sig.Reason,
+			},
+		})
+	}
+}
+
+// cameraPeer is a package-level slot the connection loop sets and the
+// pump reads. Kept unexported and tiny because there is exactly one
+// live peer per plugin instance.
+var (
+	cameraPeerMu sync.Mutex
+	cameraPeer   *sidecar.Peer
+)
+
+func setCameraPeer(p *sidecar.Peer) {
+	cameraPeerMu.Lock()
+	cameraPeer = p
+	cameraPeerMu.Unlock()
+}
+
+func getCameraPeer() *sidecar.Peer {
+	cameraPeerMu.Lock()
+	defer cameraPeerMu.Unlock()
+	return cameraPeer
 }
 
 // LoadConfig reads the plugin's persisted config (written by the core

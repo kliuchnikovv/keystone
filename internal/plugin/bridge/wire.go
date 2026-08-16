@@ -130,6 +130,40 @@ type DiscoverCommissionableResult struct {
 	Ended bool `json:"ended"`
 }
 
+// StartStreamParams asks the plugin to open a camera session against
+// the viewer's SDP offer.
+type StartStreamParams struct {
+	Ref domain.TransportRef `json:"ref"`
+	SDP string              `json:"sdp"`
+}
+
+// StartStreamResult carries the session id the camera allocated.
+type StartStreamResult struct {
+	SessionID int `json:"sessionId"`
+}
+
+// AddCandidatesParams forwards viewer ICE candidates to the camera.
+type AddCandidatesParams struct {
+	SessionID  int      `json:"sessionId"`
+	Candidates []string `json:"candidates"`
+}
+
+// StopStreamParams ends a session.
+type StopStreamParams struct {
+	SessionID int `json:"sessionId"`
+}
+
+// CameraSignalPayload mirrors ports.CameraSignal for the wire. Kind is
+// answer / offer / ice / end; the rest of the fields are populated
+// per kind so a caller can decode without an extra RPC.
+type CameraSignalPayload struct {
+	Kind       string   `json:"kind"`
+	SessionID  int      `json:"sessionId"`
+	SDP        string   `json:"sdp,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+}
+
 // CommissionableFoundPayload is what the plugin puts in EventPayload
 // when Kind = commissionable_found. Mirrors ports.CommissionableDevice
 // one-for-one so the bridge can translate without loss.
@@ -150,6 +184,22 @@ type CommissionableFoundPayload struct {
 // adapter.event with Kind = commissionable_found until the response
 // arrives.
 const MethodDiscoverCommissionable = "adapter.discoverCommissionable"
+
+// MethodCameraStart / MethodCameraAddCandidates / MethodCameraStop are
+// the three CameraStreamer entry points. A plugin whose transport
+// brokers WebRTC (Matter cameras, for now) answers these; anything
+// else returns unsupported. Signalling frames from the camera flow
+// back on adapter.event as Kind = camera_signal.
+const (
+	MethodCameraStart         = "adapter.camera.start"
+	MethodCameraAddCandidates = "adapter.camera.addCandidates"
+	MethodCameraStop          = "adapter.camera.stop"
+)
+
+// KindCameraSignal is a bridge-only event kind for one WebRTC
+// signalling frame — the camera's SDP answer, its ICE candidates, or
+// an "end" marker with a reason.
+const KindCameraSignal ports.TransportEventKind = "camera_signal"
 
 // KindCommissionableFound is a bridge-only event kind carrying a
 // device advertisement back to a discoverCommissionable caller. The
@@ -185,4 +235,7 @@ type EventPayload struct {
 	// Set only for commissionable_found. Kept as its own field so a
 	// plugin can push finds without borrowing Value's slot.
 	Found *CommissionableFoundPayload `json:"found,omitempty"`
+
+	// Set only for camera_signal.
+	Signal *CameraSignalPayload `json:"signal,omitempty"`
 }

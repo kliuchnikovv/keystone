@@ -70,6 +70,25 @@ func runStubAdapter() {
 		return map[string]string{}, nil
 	}))
 
+	mux.Handle(bridge.MethodCameraStart, sidecar.HandlerFunc(func(_ context.Context, r *sidecar.Request) (any, error) {
+		var p bridge.StartStreamParams
+		if err := r.Bind(&p); err != nil {
+			return nil, err
+		}
+		// Fake a session and push an "answer" signal back.
+		peer := r.Peer()
+		_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+			Kind: bridge.KindCameraSignal,
+			Signal: &bridge.CameraSignalPayload{
+				Kind: "answer", SessionID: 42, SDP: "v=0-fake",
+			},
+		})
+		return bridge.StartStreamResult{SessionID: 42}, nil
+	}))
+	mux.Handle(bridge.MethodCameraStop, sidecar.HandlerFunc(func(_ context.Context, _ *sidecar.Request) (any, error) {
+		return map[string]string{}, nil
+	}))
+
 	mux.Handle(bridge.MethodDiscoverCommissionable, sidecar.HandlerFunc(func(_ context.Context, r *sidecar.Request) (any, error) {
 		var p bridge.DiscoverCommissionableParams
 		if err := r.Bind(&p); err != nil {
@@ -261,6 +280,44 @@ func TestAdapter_CommissionProgress(t *testing.T) {
 		if i >= len(stages) || stages[i] != want[i] {
 			t.Fatalf("stages = %v, want %v", stages, want)
 		}
+	}
+}
+
+func TestAdapter_CameraSignalsFanOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, teardown := startStub(t)
+	defer teardown()
+
+	a := bridge.New(client, "stub", nil)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Subscribe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sig, err := a.Signals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := a.StartStream(ctx, "stub:cam1", "v=0-viewer")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if id != 42 {
+		t.Fatalf("sessionID = %d", id)
+	}
+	select {
+	case s := <-sig:
+		if s.Kind != "answer" || s.SessionID != 42 || s.SDP != "v=0-fake" {
+			t.Fatalf("unexpected signal: %+v", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no signal delivered")
 	}
 }
 
