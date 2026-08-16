@@ -1,0 +1,65 @@
+# Reference plugin — validates the SDK against a transport that has
+# nothing to do with Matter. Deployed to /etc/keystone/plugins/dirigera/
+# with the compiled binary at bin/dirigera-plugin.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: dirigera
+  displayName: IKEA DIRIGERA
+  version: 0.1.0
+  description: |
+    Direct LAN control of an IKEA DIRIGERA hub, no cloud round-trip.
+    Supports on/off and brightness on lights and plugs paired to the
+    hub. TLS-verified via CA PEM or a pinned SHA-256 leaf fingerprint
+    — the hub ships a self-signed certificate and this plugin refuses
+    to skip verification.
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  homepage: https://github.com/kliuchnikovv/keystone/tree/master/plugins/dirigera
+  category: transport
+  tags: [ikea, dirigera, zigbee]
+  trustTier: verified
+
+spec:
+  keystoneCoreMin: "0.5.0"
+
+  capabilities:
+    - transport.dirigera
+    - discover.mdns
+    - realtime.state-stream
+
+  permissions:
+    - network.lan
+    - secretstore.read: [dirigera.token]
+    - secretstore.write: [dirigera.token]
+
+  entrypoint:
+    exec: bin/dirigera-plugin
+
+  config:
+    schema: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "required": ["hubUrl", "token"],
+        "properties": {
+          "hubUrl": {
+            "type": "string",
+            "description": "Base URL of the DIRIGERA hub, e.g. https://192.168.1.10:8443",
+            "pattern": "^https://.+"
+          },
+          "token": {
+            "type": "string",
+            "description": "Per-app bearer token minted during pairing"
+          },
+          "caPem": {
+            "type": "string",
+            "description": "PEM-encoded certificate to trust as CA when validating the hub. Required unless pinnedSha256 is set."
+          },
+          "pinnedSha256": {
+            "type": "string",
+            "description": "Hex SHA-256 fingerprint of the hub's leaf certificate. Colons tolerated. Required unless caPem is set.",
+            "pattern": "^[0-9a-fA-F:]+$"
+          }
+        }
+      }
