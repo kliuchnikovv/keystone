@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
+	"github.com/kliuchnikovv/keystone/internal/plugin/store"
 )
 
 // Manager is the surface these handlers need. Kept minimal so tests can
@@ -43,6 +44,10 @@ type Manager interface {
 	// plugin dir after a graceful disable.
 	Install(ctx context.Context, req manager.InstallRequest) (string, string, error)
 	Uninstall(ctx context.Context, name string) error
+
+	// BrowseRegistry fetches a registry's index so the store UI can
+	// list what is available.
+	BrowseRegistry(ctx context.Context, url string) (*store.Index, error)
 }
 
 // Register attaches the /plugins/* routes to mux.
@@ -58,6 +63,23 @@ func Register(mux *http.ServeMux, mgr Manager) {
 	mux.HandleFunc("PUT /plugins/{name}/config", putConfigHandler(mgr))
 	mux.HandleFunc("POST /plugins/install", installHandler(mgr))
 	mux.HandleFunc("DELETE /plugins/{name}", uninstallHandler(mgr))
+	mux.HandleFunc("GET /plugins/registry", browseHandler(mgr))
+}
+
+func browseHandler(mgr Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		url := r.URL.Query().Get("url")
+		if url == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "url query param required"})
+			return
+		}
+		idx, err := mgr.BrowseRegistry(r.Context(), url)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, idx)
+	}
 }
 
 func installHandler(mgr Manager) http.HandlerFunc {

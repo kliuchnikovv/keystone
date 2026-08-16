@@ -12,6 +12,7 @@ import (
 	pluginmf "github.com/kliuchnikovv/keystone/internal/plugin"
 	"github.com/kliuchnikovv/keystone/internal/api/plugins"
 	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
+	"github.com/kliuchnikovv/keystone/internal/plugin/store"
 )
 
 type stubManager struct {
@@ -85,6 +86,9 @@ func (s *stubManager) Install(_ context.Context, req manager.InstallRequest) (st
 func (s *stubManager) Uninstall(_ context.Context, name string) error {
 	delete(s.items, name)
 	return nil
+}
+func (s *stubManager) BrowseRegistry(_ context.Context, _ string) (*store.Index, error) {
+	return &store.Index{Plugins: map[string]store.PluginEntry{}}, nil
 }
 
 func newServer(mgr plugins.Manager) *httptest.Server {

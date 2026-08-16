@@ -1,0 +1,181 @@
+.root {
+  min-height: 100vh;
+  padding: 16px 16px 96px;
+  background: var(--ks-color-bg);
+  color: var(--ks-color-text);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.back {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.back:hover {
+  background: var(--ks-color-surface-raised);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ks-color-text-muted);
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.installedRow,
+.browseRow {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--ks-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.name {
+  font-weight: 500;
+  font-size: 16px;
+}
+
+.version,
+.installedBadge {
+  font-size: 12px;
+  color: var(--ks-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.installedBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--ks-color-surface-raised);
+}
+
+.description {
+  margin: 0;
+  color: var(--ks-color-text-muted);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.rowActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.rowError {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--ks-color-danger) 15%, transparent);
+  color: var(--ks-color-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.browseForm {
+  display: flex;
+  gap: 8px;
+}
+
+.input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ks-color-border);
+  background: var(--ks-color-surface);
+  color: inherit;
+  font-size: 14px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--ks-color-accent);
+}
+
+.versionSelect {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--ks-color-border);
+  background: var(--ks-color-surface-raised);
+  color: inherit;
+  font-size: 13px;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: auto;
+}
+
+.badgeOk {
+  background: color-mix(in oklab, var(--ks-color-success) 20%, transparent);
+  color: var(--ks-color-success);
+}
+
+.badgeFail {
+  background: color-mix(in oklab, var(--ks-color-danger) 20%, transparent);
+  color: var(--ks-color-danger);
+}
+
+.badgeMuted {
+  background: var(--ks-color-surface-raised);
+  color: var(--ks-color-text-muted);
+}
+
+.muted {
+  margin: 0;
+  color: var(--ks-color-text-muted);
+  font-size: 14px;
+}
+
+.error {
+  margin: 0;
+  color: var(--ks-color-danger);
+  font-size: 14px;
+}

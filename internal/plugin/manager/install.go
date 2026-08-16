@@ -77,6 +77,23 @@ func (m *Manager) checkRegistryAllowlist(url string) error {
 	return fmt.Errorf("manager: registry %q is not in TrustedRegistries", url)
 }
 
+// BrowseRegistry fetches a registry's index so the store UI can list
+// what's available before an operator commits to installing anything.
+// The same allowlist and URL rules the install path uses apply here.
+func (m *Manager) BrowseRegistry(ctx context.Context, registryURL string) (*store.Index, error) {
+	if registryURL == "" {
+		return nil, errors.New("manager: BrowseRegistry: url is required")
+	}
+	if err := m.checkRegistryAllowlist(registryURL); err != nil {
+		return nil, err
+	}
+	reg, err := store.New(registryURL)
+	if err != nil {
+		return nil, err
+	}
+	return reg.FetchIndex(ctx)
+}
+
 // Uninstall stops a running plugin, drops its state entry, and removes
 // its install directory. The plugin's data dir is left in place —
 // removing it would lose secrets and history a re-install probably
