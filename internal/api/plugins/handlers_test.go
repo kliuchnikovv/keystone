@@ -79,6 +79,14 @@ func (s *stubManager) PutConfig(name string, cfg json.RawMessage) error {
 	return nil
 }
 
+func (s *stubManager) Install(_ context.Context, req manager.InstallRequest) (string, string, error) {
+	return req.Name, req.Version, nil
+}
+func (s *stubManager) Uninstall(_ context.Context, name string) error {
+	delete(s.items, name)
+	return nil
+}
+
 func newServer(mgr plugins.Manager) *httptest.Server {
 	mux := http.NewServeMux()
 	plugins.Register(mux, mgr)

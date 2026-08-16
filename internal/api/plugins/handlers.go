@@ -37,6 +37,12 @@ type Manager interface {
 	// PUT bodies against the manifest's spec.config.schema.
 	GetConfig(name string) (json.RawMessage, error)
 	PutConfig(name string, cfg json.RawMessage) error
+
+	// Install fetches a plugin tarball from a registry, verifies it,
+	// and unpacks into the plugins root. Uninstall removes an installed
+	// plugin dir after a graceful disable.
+	Install(ctx context.Context, req manager.InstallRequest) (string, string, error)
+	Uninstall(ctx context.Context, name string) error
 }
 
 // Register attaches the /plugins/* routes to mux.
@@ -50,6 +56,50 @@ func Register(mux *http.ServeMux, mgr Manager) {
 	mux.HandleFunc("GET /plugins/{name}/logs", logsHandler(mgr))
 	mux.HandleFunc("GET /plugins/{name}/config", getConfigHandler(mgr))
 	mux.HandleFunc("PUT /plugins/{name}/config", putConfigHandler(mgr))
+	mux.HandleFunc("POST /plugins/install", installHandler(mgr))
+	mux.HandleFunc("DELETE /plugins/{name}", uninstallHandler(mgr))
+}
+
+func installHandler(mgr Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name     string `json:"name"`
+			Version  string `json:"version,omitempty"`
+			Registry string `json:"registry"`
+			Force    bool   `json:"force,omitempty"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "reading body: " + err.Error()})
+			return
+		}
+		name, version, err := mgr.Install(r.Context(), manager.InstallRequest{
+			Name:     body.Name,
+			Version:  body.Version,
+			Registry: body.Registry,
+			Force:    body.Force,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		st, _ := mgr.Get(name)
+		writeJSON(w, http.StatusOK, map[string]any{"name": name, "version": version, "status": st})
+	}
+}
+
+func uninstallHandler(mgr Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if _, ok := mgr.Get(name); !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "plugin not found"})
+			return
+		}
+		if err := mgr.Uninstall(r.Context(), name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "name": name})
+	}
 }
 
 func listHandler(mgr Manager) http.HandlerFunc {
