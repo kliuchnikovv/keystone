@@ -19,6 +19,7 @@ import (
 	"github.com/kliuchnikovv/keystone-api/sidecar"
 	"github.com/kliuchnikovv/keystone/internal/plugin"
 	"github.com/kliuchnikovv/keystone/internal/plugin/registry"
+	"github.com/kliuchnikovv/keystone/internal/plugin/store"
 	"github.com/kliuchnikovv/keystone/internal/plugin/supervisor"
 )
 
@@ -50,6 +51,19 @@ type Options struct {
 	// daemon can bring them back up on restart. Nil disables persistence
 	// (useful for tests). Call RestoreEnabled after Discover to apply.
 	StateStore StateStore
+
+	// TrustedRegistries is an allowlist of registry base URLs. Empty
+	// means "no allowlist" — install accepts any URL that passes the
+	// store's own scheme+host validation, which is fine for
+	// development but should be filled on any shared deployment to
+	// prevent an operator (or an SSRF vector) from pointing install
+	// at an arbitrary host.
+	TrustedRegistries []string
+
+	// PluginVerifier gates every installed package. Defaults to
+	// store.SHA256Verifier — swap in store.Ed25519Verifier (or a
+	// future Sigstore verifier) for real signing.
+	PluginVerifier store.Verifier
 
 	// ClientOptions is the sidecar.CoreOptions template applied when a
 	// plugin is enabled. Version and Handler are overridden per-plugin;

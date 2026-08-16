@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -61,22 +62,156 @@ type Package struct {
 
 // Registry is a store client bound to one base URL.
 type Registry struct {
-	baseURL string
-	http    *http.Client
+	baseURL  string
+	http     *http.Client
+	verifier Verifier
 }
 
-// New builds a Registry against baseURL. baseURL is stored as-is; the
-// caller decides whether it should be https:// (recommended) or a
-// local file:// during development. The HTTP client defaults to a
-// DefaultTimeout per call.
+// New builds a Registry against baseURL. The URL is validated up front
+// (scheme, host, resolved IP) so an install attempt against a
+// dangerous address fails before any bytes leave the daemon.
+//
+// The default verifier only rechecks the sha256 the index already
+// declares. Callers who want signature enforcement swap it via
+// WithVerifier.
 func New(baseURL string) (*Registry, error) {
-	if _, err := url.Parse(baseURL); err != nil {
-		return nil, fmt.Errorf("store: invalid base URL: %w", err)
+	allowLoopback, err := validateURL(baseURL)
+	if err != nil {
+		return nil, err
 	}
 	return &Registry{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: DefaultTimeout},
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		http:     newSafeHTTPClient(allowLoopback),
+		verifier: SHA256Verifier{},
 	}, nil
+}
+
+// WithVerifier returns a copy of r with the given verifier. Called
+// from the manager once trusted keys are loaded from disk.
+func (r *Registry) WithVerifier(v Verifier) *Registry {
+	if v == nil {
+		v = SHA256Verifier{}
+	}
+	out := *r
+	out.verifier = v
+	return &out
+}
+
+// newSafeHTTPClient builds an HTTP client whose Dialer refuses to
+// connect to private / link-local / unspecified addresses. A registry
+// index whose package URLs redirect to an internal service cannot
+// slip past the initial validateURL check because the dialer
+// re-validates every dial.
+//
+// allowLoopback trickles down from the base URL: an explicit
+// loopback registry (e.g. http://localhost:18000) permits loopback
+// dials so local development still works, but every other registry
+// treats a loopback resolution as a DNS-rebinding attempt and
+// refuses.
+func newSafeHTTPClient(allowLoopback bool) *http.Client {
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	return &http.Client{
+		Timeout: DefaultTimeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				if err := checkHostForDial(host, allowLoopback); err != nil {
+					return nil, err
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+			},
+		},
+	}
+}
+
+// validateURL enforces the scheme and host rules for a registry base
+// URL: https:// always; http:// only for loopback hostnames (localhost,
+// 127.0.0.0/8, ::1) so local development still works. Returns
+// allowLoopback=true when the base URL itself is loopback — the HTTP
+// client uses that flag to keep the local development path open
+// without letting a public https URL smuggle in a loopback IP.
+func validateURL(raw string) (bool, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false, fmt.Errorf("store: invalid base URL: %w", err)
+	}
+	if u.Host == "" {
+		return false, errors.New("store: base URL is missing a host")
+	}
+	loopback := isLoopbackHost(u.Hostname())
+	switch u.Scheme {
+	case "https":
+		if err := checkHostForDial(u.Hostname(), false); err != nil {
+			return false, err
+		}
+		return false, nil
+	case "http":
+		if !loopback {
+			return false, fmt.Errorf("store: http:// is only permitted for loopback hosts; got %s", u.Host)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("store: unsupported URL scheme %q — use https://", u.Scheme)
+	}
+}
+
+// isLoopbackHost recognises the small set of names and literals that
+// mean "this machine". Anything else is treated as remote and forced
+// through https://.
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(host)
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+// checkHostForDial refuses to dial anything that would let an attacker
+// turn the daemon into an SSRF probe: private IP ranges, link-local,
+// or the unspecified address. Loopback is refused unless the caller
+// explicitly permitted it (i.e. the base URL was loopback) — that
+// defeats DNS-rebinding attempts against public hosts.
+func checkHostForDial(host string, allowLoopback bool) error {
+	if host == "" {
+		return errors.New("store: empty host")
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		if literal := net.ParseIP(host); literal != nil {
+			ips = []net.IP{literal}
+		} else {
+			return fmt.Errorf("store: resolve %s: %w", host, err)
+		}
+	}
+	for _, ip := range ips {
+		if err := checkResolvedIP(ip, allowLoopback); err != nil {
+			return fmt.Errorf("store: refusing to dial %s (%s): %w", host, ip, err)
+		}
+	}
+	return nil
+}
+
+func checkResolvedIP(ip net.IP, allowLoopback bool) error {
+	switch {
+	case ip.IsUnspecified():
+		return errors.New("unspecified address")
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return errors.New("link-local address")
+	case ip.IsPrivate():
+		return errors.New("private address")
+	case ip.IsLoopback():
+		if !allowLoopback {
+			return errors.New("loopback address")
+		}
+	}
+	return nil
 }
 
 // FetchIndex reads the registry's index.
@@ -163,6 +298,9 @@ func (r *Registry) Install(ctx context.Context, name, version, targetRoot string
 		return "", "", fmt.Errorf("store: read tarball: %w", err)
 	}
 	if err := verifySHA256(body, pkg.SHA256); err != nil {
+		return "", "", err
+	}
+	if err := r.verifier.Verify(body, pkg); err != nil {
 		return "", "", err
 	}
 	installed, err := pack.UnpackReader(bytes.NewReader(body), targetRoot, force)

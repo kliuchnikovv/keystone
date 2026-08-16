@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/kliuchnikovv/keystone/internal/plugin/pack"
 	"github.com/kliuchnikovv/keystone/internal/plugin/store"
@@ -35,9 +36,15 @@ func (m *Manager) Install(ctx context.Context, req InstallRequest) (string, stri
 	if req.Registry == "" {
 		return "", "", errors.New("manager: Install: Registry is required")
 	}
+	if err := m.checkRegistryAllowlist(req.Registry); err != nil {
+		return "", "", err
+	}
 	reg, err := store.New(req.Registry)
 	if err != nil {
 		return "", "", err
+	}
+	if m.opts.PluginVerifier != nil {
+		reg = reg.WithVerifier(m.opts.PluginVerifier)
 	}
 	root := m.opts.Registry.Root()
 	name, version, err := reg.Install(ctx, req.Name, req.Version, root, req.Force)
@@ -48,6 +55,26 @@ func (m *Manager) Install(ctx context.Context, req InstallRequest) (string, stri
 		return name, version, fmt.Errorf("manager: install ok but discover failed: %w", err)
 	}
 	return name, version, nil
+}
+
+// checkRegistryAllowlist enforces Options.TrustedRegistries when set.
+// Match is exact (after normalising a trailing slash) — a partial
+// match would let an attacker satisfy the check with a subdomain of a
+// trusted host. Empty list means the operator has not gated
+// registries; the store client's own scheme+host validation still
+// applies.
+func (m *Manager) checkRegistryAllowlist(url string) error {
+	list := m.opts.TrustedRegistries
+	if len(list) == 0 {
+		return nil
+	}
+	got := strings.TrimRight(url, "/")
+	for _, w := range list {
+		if strings.TrimRight(w, "/") == got {
+			return nil
+		}
+	}
+	return fmt.Errorf("manager: registry %q is not in TrustedRegistries", url)
 }
 
 // Uninstall stops a running plugin, drops its state entry, and removes
