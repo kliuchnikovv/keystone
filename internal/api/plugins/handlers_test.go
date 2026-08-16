@@ -93,6 +93,7 @@ func (s *stubManager) BrowseRegistry(_ context.Context, _ string) (*store.Index,
 func (s *stubManager) ConfigFlow(_ context.Context, _ string, _ []byte) ([]byte, error) {
 	return []byte(`{"type":"complete"}`), nil
 }
+func (s *stubManager) PluginDir(_ string) string { return "" }
 
 func newServer(mgr plugins.Manager) *httptest.Server {
 	mux := http.NewServeMux()

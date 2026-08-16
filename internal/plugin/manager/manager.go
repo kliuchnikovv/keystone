@@ -206,6 +206,19 @@ func (m *Manager) Get(name string) (PluginStatus, bool) {
 	return m.statusLocked(r), true
 }
 
+// PluginDir returns the directory the plugin was installed into, or
+// "" when the name is unknown. Used by the /plugins/{name}/ui/*
+// static server to resolve asset paths.
+func (m *Manager) PluginDir(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.entries[name]
+	if !ok {
+		return ""
+	}
+	return r.entry.Dir
+}
+
 // Client returns the live sidecar client for a running plugin, or nil.
 // Used by ports.PluginAdapter to route Adapter calls.
 func (m *Manager) Client(name string) *sidecar.Client {

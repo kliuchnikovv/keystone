@@ -5,6 +5,7 @@ import { ChevronLeft, Trash2 } from 'lucide-react';
 import styles from './DeviceDetailScreen.module.css';
 import { CameraView } from '../components/CameraView/CameraView';
 import { ButtonActivity } from '../components/ButtonActivity/ButtonActivity';
+import { PluginDetailSlot } from '../components/PluginDetailSlot/PluginDetailSlot';
 import { useDevicesStore, liveKey } from '../state/devicesStore';
 import { useDevices } from '../hooks/useDevices';
 import { useEventsStore } from '../state/eventsStore';
@@ -148,6 +149,8 @@ export function DeviceDetailScreen() {
           {[device.room, device.transport, 'Активна'].filter(Boolean).join(' · ')}
         </p>
       </header>
+
+      <PluginDetailSlot device={device} />
 
       <DeviceMainControl device={device} />
 

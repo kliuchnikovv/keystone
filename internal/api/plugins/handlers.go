@@ -12,7 +12,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
 	"github.com/kliuchnikovv/keystone/internal/plugin/store"
@@ -49,6 +51,11 @@ type Manager interface {
 	// list what is available.
 	BrowseRegistry(ctx context.Context, url string) (*store.Index, error)
 
+	// PluginDir returns the on-disk install directory for a plugin,
+	// or "" if unknown. Used by /plugins/{name}/ui/* to resolve
+	// Layer 3 assets safely.
+	PluginDir(name string) string
+
 	// ConfigFlow drives the Layer 2 setup wizard. body is the
 	// JSON-encoded ConfigFlowRequest; the reply is the JSON of the
 	// plugin's ConfigFlowStep, forwarded raw so the client and
@@ -71,6 +78,42 @@ func Register(mux *http.ServeMux, mgr Manager) {
 	mux.HandleFunc("DELETE /plugins/{name}", uninstallHandler(mgr))
 	mux.HandleFunc("GET /plugins/registry", browseHandler(mgr))
 	mux.HandleFunc("POST /plugins/{name}/flow", flowHandler(mgr))
+	mux.HandleFunc("GET /plugins/{name}/ui/{path...}", uiAssetHandler(mgr))
+}
+
+// uiAssetHandler serves files from <plugins-dir>/<name>/ui/. Layer 3
+// Web Component modules and their assets land here, plus the
+// eventual Layer 4 embed pages. Path traversal is refused; the plugin
+// name goes through the same safe-name check pack uses.
+func uiAssetHandler(mgr Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		rel := r.PathValue("path")
+		if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.Contains(rel, "..") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		dir := mgr.PluginDir(name)
+		if dir == "" {
+			http.NotFound(w, r)
+			return
+		}
+		uiRoot := filepath.Join(dir, "ui")
+		full := filepath.Join(uiRoot, filepath.FromSlash(rel))
+		// filepath.Rel confirms the resolved path stays under uiRoot
+		// even if filepath.Join collapsed something suspicious we
+		// haven't explicitly banned. Belt and braces.
+		relCheck, err := filepath.Rel(uiRoot, full)
+		if err != nil || strings.HasPrefix(relCheck, "..") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		http.ServeFile(w, r, full)
+	}
 }
 
 func flowHandler(mgr Manager) http.HandlerFunc {
