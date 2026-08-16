@@ -65,18 +65,28 @@ func (c *Client) WithClock(now func() time.Time) *Client {
 }
 
 // Refresh fetches timestamp → snapshot → targets from repoURL and
-// verifies each against the previously trusted metadata. Client
-// state (timestamp / snapshot / targets) is updated atomically:
-// either all three verify and land together, or none do. That keeps
-// a failed refresh from leaving a partial trust view where an
-// attacker's replayed timestamp is trusted next call but the
-// snapshot/targets under it are the old ones.
+// verifies each against the previously trusted metadata. Before the
+// role chain runs, it walks any newer root.json versions the repo
+// publishes and rotates the trusted root forward — a signing-key
+// compromise handled via a normal root rotation reaches every
+// installation without a manual re-pin.
+//
+// Client state (timestamp / snapshot / targets) is updated
+// atomically: either all three verify and land together, or none
+// do. Root rotation is a series of atomic swaps on its own; each
+// successful version-N+1 root becomes the trust anchor before
+// version N+2 is attempted.
 func (c *Client) Refresh(ctx context.Context, http *http.Client, repoURL string) error {
 	baseURL := strings.TrimRight(repoURL, "/")
 
+	if err := c.refreshRoot(ctx, http, baseURL); err != nil {
+		return err
+	}
+
 	// Refresh cannot proceed if the root the whole chain hangs off
-	// of has expired. loadInitialRoot checked expiry at load time;
-	// re-check here because time keeps moving between calls.
+	// of has expired. refreshRoot may have moved us forward; if the
+	// current trusted root is still expired, everything below is
+	// untrustworthy.
 	if err := notExpired(c.root.Signed.Expires, c.now()); err != nil {
 		return fmt.Errorf("tuf: trusted root expired: %w", err)
 	}
@@ -293,6 +303,104 @@ type SignedTimestamp struct {
 // ---------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------
+
+// refreshRoot walks 1.root.json, 2.root.json, … until the server
+// returns 404. Each newer root must be signed BOTH by the current
+// trusted root's role.root keys (so the previous root explicitly
+// approves the rotation) AND by the new root's own role.root keys
+// (so it is self-consistent). Version must increase by exactly one
+// per step — a skip would let an attacker replay an old signed
+// rotation that the current chain already superseded.
+//
+// A 404 is not an error: it means the server has no further root
+// versions, and the current trusted root is the current one. Any
+// other transport-level failure aborts refresh so a network glitch
+// mid-rotation cannot leave the client silently on an older root.
+func (c *Client) refreshRoot(ctx context.Context, http *http.Client, baseURL string) error {
+	// Bound the walk so a malicious repo cannot spin the client
+	// forever with a fake infinite chain of "next" roots. 128
+	// rotations is generous — Sigstore has done far fewer than
+	// that across its whole history — but still finite.
+	const maxRotations = 128
+
+	for i := 0; i < maxRotations; i++ {
+		nextVersion := c.root.Signed.Version + 1
+		url := baseURL + fmt.Sprintf("/%d.root.json", nextVersion)
+		data, status, err := fetchWithStatus(ctx, http, url)
+		if err != nil {
+			return fmt.Errorf("tuf: fetch %d.root.json: %w", nextVersion, err)
+		}
+		if status == 404 {
+			return nil // no more rotations pending
+		}
+		if status != 200 {
+			return fmt.Errorf("tuf: %d.root.json: HTTP %d", nextVersion, status)
+		}
+		next, err := c.verifyRootRotation(data, nextVersion)
+		if err != nil {
+			return err
+		}
+		c.root = next
+	}
+	return fmt.Errorf("tuf: root rotation exceeded %d steps — refusing to walk further", maxRotations)
+}
+
+// verifyRootRotation confirms a candidate next-version root satisfies
+// both trust anchors: the current trusted root and its own declared
+// keys. See TUF spec §5.3.
+func (c *Client) verifyRootRotation(data []byte, wantVersion int) (*SignedRoot, error) {
+	var env envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return nil, fmt.Errorf("tuf: parse next root: %w", err)
+	}
+	var spec RootSpec
+	if err := json.Unmarshal(env.Signed, &spec); err != nil {
+		return nil, fmt.Errorf("tuf: parse next root spec: %w", err)
+	}
+	if spec.Type != "root" {
+		return nil, fmt.Errorf("tuf: next root._type = %q", spec.Type)
+	}
+	if spec.Version != wantVersion {
+		// Skipping a version would allow replaying a signed rotation
+		// that the current chain has already superseded.
+		return nil, fmt.Errorf("tuf: next root version %d, want %d", spec.Version, wantVersion)
+	}
+	if err := notExpired(spec.Expires, c.now()); err != nil {
+		return nil, fmt.Errorf("tuf: next root expired: %w", err)
+	}
+	// Signed by the current trusted root's threshold — this is
+	// what makes the rotation an authorised action.
+	if err := verifySignedBy(env.Signed, env.Signatures, c.root.Signed.Keys, c.root.Signed.Roles["root"]); err != nil {
+		return nil, fmt.Errorf("tuf: next root not signed by trusted root: %w", err)
+	}
+	// Signed by its own declared root keys — self-consistency.
+	// Without this, a rotation could hand off to a spec that says
+	// "trust these new keys" but does not itself demonstrate
+	// possession of them.
+	if err := verifySignedBy(env.Signed, env.Signatures, spec.Keys, spec.Roles["root"]); err != nil {
+		return nil, fmt.Errorf("tuf: next root not self-signed: %w", err)
+	}
+	return &SignedRoot{Signed: spec, Raw: env.Signed, Signatures: env.Signatures}, nil
+}
+
+// fetchWithStatus is fetch's twin that surfaces the HTTP status so
+// refreshRoot can differentiate 404 (stop walking) from other codes.
+func fetchWithStatus(ctx context.Context, httpClient *http.Client, url string) ([]byte, int, error) {
+	req, err := makeReq(ctx, url)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
+}
 
 func (c *Client) loadInitialRoot(data []byte) error {
 	var env envelope
