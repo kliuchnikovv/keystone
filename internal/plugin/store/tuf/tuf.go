@@ -65,11 +65,21 @@ func (c *Client) WithClock(now func() time.Time) *Client {
 }
 
 // Refresh fetches timestamp → snapshot → targets from repoURL and
-// verifies each against the previously trusted metadata. baseHTTP
-// should be a client with sane timeouts and a URL-safety dialer —
-// the same shape store.newSafeHTTPClient produces.
+// verifies each against the previously trusted metadata. Client
+// state (timestamp / snapshot / targets) is updated atomically:
+// either all three verify and land together, or none do. That keeps
+// a failed refresh from leaving a partial trust view where an
+// attacker's replayed timestamp is trusted next call but the
+// snapshot/targets under it are the old ones.
 func (c *Client) Refresh(ctx context.Context, http *http.Client, repoURL string) error {
 	baseURL := strings.TrimRight(repoURL, "/")
+
+	// Refresh cannot proceed if the root the whole chain hangs off
+	// of has expired. loadInitialRoot checked expiry at load time;
+	// re-check here because time keeps moving between calls.
+	if err := notExpired(c.root.Signed.Expires, c.now()); err != nil {
+		return fmt.Errorf("tuf: trusted root expired: %w", err)
+	}
 
 	tsBytes, err := fetch(ctx, http, baseURL+"/timestamp.json")
 	if err != nil {
@@ -79,9 +89,16 @@ func (c *Client) Refresh(ctx context.Context, http *http.Client, repoURL string)
 	if err != nil {
 		return err
 	}
-	c.timestamp = ts
+	// A timestamp that does not name a snapshot version is a
+	// fail-open: verifySnapshot's cross-check reduces to "any
+	// version accepted". Require it explicitly so a stripped meta
+	// map cannot smuggle a version through.
+	tsSnapMeta, ok := ts.Signed.Meta["snapshot.json"]
+	if !ok || tsSnapMeta.Version < 1 {
+		return errors.New("tuf: timestamp meta missing snapshot.json version")
+	}
 
-	snapURL := baseURL + fmt.Sprintf("/%d.snapshot.json", ts.Signed.Meta["snapshot.json"].Version)
+	snapURL := baseURL + fmt.Sprintf("/%d.snapshot.json", tsSnapMeta.Version)
 	snapBytes, err := fetch(ctx, http, snapURL)
 	if err != nil {
 		return fmt.Errorf("tuf: fetch snapshot: %w", err)
@@ -90,10 +107,9 @@ func (c *Client) Refresh(ctx context.Context, http *http.Client, repoURL string)
 	if err != nil {
 		return err
 	}
-	c.snapshot = snap
 
 	targetsMeta, ok := snap.Signed.Meta["targets.json"]
-	if !ok {
+	if !ok || targetsMeta.Version < 1 {
 		return errors.New("tuf: snapshot missing targets.json meta")
 	}
 	tgURL := baseURL + fmt.Sprintf("/%d.targets.json", targetsMeta.Version)
@@ -105,6 +121,10 @@ func (c *Client) Refresh(ctx context.Context, http *http.Client, repoURL string)
 	if err != nil {
 		return err
 	}
+	// Atomic swap: everything verified against the trusted root, so
+	// the client's view moves forward in one step.
+	c.timestamp = ts
+	c.snapshot = snap
 	c.targets = tg
 	return nil
 }
@@ -145,6 +165,14 @@ func (c *Client) Fetch(ctx context.Context, http *http.Client, repoURL, name str
 		if err != nil {
 			return nil, err
 		}
+	}
+	// Length must match too. Otherwise an attacker could append
+	// garbage after a legitimate payload and hope the caller
+	// truncates on their own — or exhaust memory on a naive reader.
+	// The fetch cap already bounds the top; this enforces the
+	// author's declared size.
+	if t.Length > 0 && int64(len(data)) != t.Length {
+		return nil, fmt.Errorf("tuf: length mismatch on target %q (got %d, want %d)", name, len(data), t.Length)
 	}
 	sum := sha256.Sum256(data)
 	if hex.EncodeToString(sum[:]) != want {
