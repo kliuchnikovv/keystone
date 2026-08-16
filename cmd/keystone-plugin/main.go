@@ -19,6 +19,7 @@ Commands:
   build     Compile the plugin into bin/
   test      Validate manifest and run go test ./...
   publish   Pack the plugin into a distributable tarball
+  install   Copy a plugin (or unpack a tarball) into keystone's plugins-dir
   version   Print the CLI version
 
 Use "keystone-plugin <command> -h" for command-specific flags.`
@@ -41,6 +42,8 @@ func main() {
 		exit(runTest(args))
 	case "publish":
 		exit(runPublish(args))
+	case "install":
+		exit(runInstall(args))
 	case "version", "-v", "--version":
 		fmt.Println(Version)
 	case "help", "-h", "--help":
