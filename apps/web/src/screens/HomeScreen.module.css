@@ -8,10 +8,31 @@
 
 .header {
   padding: 20px 20px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .heading {
   min-width: 0;
+  flex: 1;
+}
+
+.pluginsBtn {
+  background: transparent;
+  border: none;
+  color: var(--ks-color-text-muted);
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pluginsBtn:hover {
+  background: var(--ks-color-surface-raised);
+  color: var(--ks-color-text);
 }
 
 .greeting {

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Plug } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import styles from './HomeScreen.module.css';
 import { useDevices } from '../hooks/useDevices';
@@ -143,6 +143,14 @@ export function HomeScreen() {
             {isLoading ? 'Ищем устройства…' : '22° · солнечно · дом просыпается'}
           </p>
         </div>
+        <button
+          type="button"
+          className={styles.pluginsBtn}
+          aria-label="Плагины"
+          onClick={() => nav('/plugins')}
+        >
+          <Plug size={20} />
+        </button>
       </header>
       <ConnectionBanner />
       <main className={styles.mainCol}>{content}</main>
