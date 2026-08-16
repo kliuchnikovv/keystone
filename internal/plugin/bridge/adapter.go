@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/kliuchnikovv/keystone-api/sidecar"
 
@@ -23,6 +25,17 @@ type Adapter struct {
 	client *sidecar.Client
 	kind   domain.TransportKind
 	log    *slog.Logger
+
+	// progressMu guards inFlight — commissions in progress, keyed by the
+	// per-call ProgressID the bridge minted. Subscribe's fan-out
+	// routine routes commission_progress events into these channels
+	// instead of emitting them as TransportEvents.
+	progressMu sync.Mutex
+	inFlight   map[string]chan<- progressUpdate
+}
+
+type progressUpdate struct {
+	stage, message string
 }
 
 // New builds an Adapter with a live sidecar client. kind is the transport
@@ -32,7 +45,12 @@ func New(client *sidecar.Client, kind domain.TransportKind, log *slog.Logger) *A
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Adapter{client: client, kind: kind, log: log}
+	return &Adapter{
+		client:   client,
+		kind:     kind,
+		log:      log,
+		inFlight: make(map[string]chan<- progressUpdate),
+	}
 }
 
 // Kind implements ports.Adapter.
@@ -89,8 +107,10 @@ func (a *Adapter) Discover(ctx context.Context) (<-chan ports.DiscoveredDevice, 
 	return out, nil
 }
 
-// Commission asks the plugin to add a device. Progress reporting is
-// deferred — req.Progress is dropped until the topic contract lands.
+// Commission asks the plugin to add a device. When req.Progress is set
+// the bridge subscribes to commission_progress events for the duration
+// of the call and forwards each one; a nil Progress skips that setup so
+// the plugin can skip publishing.
 func (a *Adapter) Commission(ctx context.Context, req ports.CommissionRequest) (domain.TransportRef, error) {
 	params := CommissionParams{
 		Payload:  req.Payload,
@@ -98,11 +118,65 @@ func (a *Adapter) Commission(ctx context.Context, req ports.CommissionRequest) (
 		WifiCred: req.WifiCred,
 		Extra:    req.Extra,
 	}
+
+	if req.Progress != nil {
+		id := sidecar.NewID()
+		params.ProgressID = id
+		ch := make(chan progressUpdate, 16)
+		a.progressMu.Lock()
+		a.inFlight[id] = ch
+		a.progressMu.Unlock()
+
+		fanoutDone := make(chan struct{})
+		go func() {
+			defer close(fanoutDone)
+			for u := range ch {
+				req.Progress(u.stage, u.message)
+			}
+		}()
+
+		defer func() {
+			// Give the Subscribe fan-out one tick to drain any progress
+			// frames that arrived on the wire between the last publish
+			// and the response — the client's read pump routes them
+			// asynchronously, so tearing the registration down the
+			// instant Call returns can lose the last update.
+			time.Sleep(50 * time.Millisecond)
+			a.progressMu.Lock()
+			delete(a.inFlight, id)
+			a.progressMu.Unlock()
+			close(ch)
+			<-fanoutDone
+		}()
+	}
+
 	var res CommissionResult
 	if err := a.client.Call(ctx, MethodCommission, params, &res); err != nil {
 		return "", fmt.Errorf("bridge: %s: %w", MethodCommission, err)
 	}
 	return res.Ref, nil
+}
+
+// deliverProgress routes a commission_progress event to the matching
+// in-flight commission. Returns true if a matching call was found; the
+// caller uses that to skip normal TransportEvent emission. Drops the
+// update if the destination channel is full — the caller will still
+// see subsequent updates.
+func (a *Adapter) deliverProgress(ev EventPayload) bool {
+	if ev.Kind != KindCommissionProgress || ev.CommissionID == "" {
+		return false
+	}
+	a.progressMu.Lock()
+	ch, ok := a.inFlight[ev.CommissionID]
+	a.progressMu.Unlock()
+	if !ok {
+		return true
+	}
+	select {
+	case ch <- progressUpdate{stage: ev.Stage, message: ev.Message}:
+	default:
+	}
+	return true
 }
 
 // ReadState fetches one attribute.
@@ -160,6 +234,9 @@ func (a *Adapter) Subscribe(ctx context.Context) (<-chan ports.TransportEvent, e
 				var ev EventPayload
 				if err := json.Unmarshal(p.Payload, &ev); err != nil {
 					a.log.Warn("bridge: dropping malformed event", "err", err)
+					continue
+				}
+				if a.deliverProgress(ev) {
 					continue
 				}
 				select {

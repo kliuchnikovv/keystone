@@ -147,17 +147,28 @@ func registerHandlers(mux *sidecar.Mux, adapter *matter.Adapter, log *slog.Logge
 		if err := r.Bind(&p); err != nil {
 			return nil, err
 		}
+		var progress func(stage, message string)
+		if p.ProgressID != "" {
+			peer := r.Peer()
+			progress = func(stage, message string) {
+				log.Info("commission progress", "stage", stage, "message", message)
+				if peer == nil {
+					return
+				}
+				_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+					Kind:         bridge.KindCommissionProgress,
+					CommissionID: p.ProgressID,
+					Stage:        stage,
+					Message:      message,
+				})
+			}
+		}
 		ref, err := adapter.Commission(ctx, ports.CommissionRequest{
 			Payload:  p.Payload,
 			WifiSSID: p.WifiSSID,
 			WifiCred: p.WifiCred,
 			Extra:    p.Extra,
-			Progress: func(stage, message string) {
-				// Progress streaming across the bridge is not yet
-				// modelled. Log locally so the operator can still see
-				// pairing progress in plugin logs.
-				log.Info("commission progress", "stage", stage, "message", message)
-			},
+			Progress: progress,
 		})
 		if err != nil {
 			return nil, mapError(err)

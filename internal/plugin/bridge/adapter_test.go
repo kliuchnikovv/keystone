@@ -44,6 +44,17 @@ func runStubAdapter() {
 		if err := r.Bind(&p); err != nil {
 			return nil, err
 		}
+		if p.ProgressID != "" {
+			peer := r.Peer()
+			for _, stage := range []string{"pase", "attestation", "operational"} {
+				_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+					Kind:         bridge.KindCommissionProgress,
+					CommissionID: p.ProgressID,
+					Stage:        stage,
+					Message:      "step " + stage,
+				})
+			}
+		}
 		return bridge.CommissionResult{Ref: domain.TransportRef("stub:" + p.Payload)}, nil
 	}))
 	mux.Handle(bridge.MethodReadState, sidecar.HandlerFunc(func(_ context.Context, _ *sidecar.Request) (any, error) {
@@ -188,6 +199,50 @@ func TestAdapter_RoundTrip(t *testing.T) {
 
 	if err := a.Stop(ctx); err != nil {
 		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestAdapter_CommissionProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, teardown := startStub(t)
+	defer teardown()
+
+	a := bridge.New(client, "stub", nil)
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Subscribe must be running so bridge routes progress events.
+	if _, err := a.Subscribe(ctx); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	var stages []string
+	_, err := a.Commission(ctx, ports.CommissionRequest{
+		Payload: "42",
+		Progress: func(stage, _ string) {
+			stages = append(stages, stage)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commission: %v", err)
+	}
+	// Give the fan-out goroutine a moment to drain — deferred close waits
+	// on it, but the value collection happens outside of that.
+	time.Sleep(100 * time.Millisecond)
+	if len(stages) == 0 {
+		t.Fatal("no progress delivered")
+	}
+	// Order matters — the plugin publishes deterministically.
+	want := []string{"pase", "attestation", "operational"}
+	for i := range want {
+		if i >= len(stages) || stages[i] != want[i] {
+			t.Fatalf("stages = %v, want %v", stages, want)
+		}
 	}
 }
 

@@ -57,14 +57,20 @@ type DiscoveredDevice struct {
 	Metadata     map[string]string   `json:"metadata,omitempty"`
 }
 
-// CommissionParams carries pairing input. Progress reporting is not yet
-// modelled; adapters that need it will push to a per-session topic once
-// the contract picks one.
+// CommissionParams carries pairing input.
+//
+// ProgressID, when non-empty, asks the plugin to publish progress
+// updates onto adapter.event with Kind = "commission_progress" and
+// CommissionID = ProgressID. The bridge subscribes for the duration of
+// the call and fires ports.CommissionRequest.Progress on each match.
+// An empty ProgressID means the caller does not want progress and the
+// plugin can skip the extra pushes.
 type CommissionParams struct {
-	Payload  string            `json:"payload,omitempty"`
-	WifiSSID string            `json:"wifiSsid,omitempty"`
-	WifiCred string            `json:"wifiCred,omitempty"`
-	Extra    map[string]string `json:"extra,omitempty"`
+	Payload    string            `json:"payload,omitempty"`
+	WifiSSID   string            `json:"wifiSsid,omitempty"`
+	WifiCred   string            `json:"wifiCred,omitempty"`
+	Extra      map[string]string `json:"extra,omitempty"`
+	ProgressID string            `json:"progressId,omitempty"`
 }
 
 // CommissionResult is what the plugin returns after joining the device.
@@ -108,14 +114,29 @@ type DecommissionParams struct {
 	Ref domain.TransportRef `json:"ref"`
 }
 
+// KindCommissionProgress is a bridge-only event kind that carries
+// pairing progress back to the caller. It sits alongside the
+// ports.TransportEventKind values on the same topic because it uses the
+// same transport, but the bridge routes it to a per-call progress
+// channel instead of the ports.TransportEvent stream.
+const KindCommissionProgress ports.TransportEventKind = "commission_progress"
+
 // EventPayload is what the plugin puts on the adapter.event topic. Each
 // field maps to ports.TransportEvent so the bridge can translate with no
 // loss. Kind is the primary switch: state_changed, event_fired,
-// online, offline, added, removed, adapter_status.
+// online, offline, added, removed, adapter_status, or the bridge-only
+// commission_progress (see KindCommissionProgress).
+//
+// CommissionID / Stage / Message are set only for commission_progress
+// events; every other kind leaves them empty.
 type EventPayload struct {
 	Ref     domain.TransportRef      `json:"ref,omitempty"`
 	Kind    ports.TransportEventKind `json:"kind"`
 	Feature domain.FeatureKey        `json:"feature,omitempty"`
 	Key     string                   `json:"key,omitempty"`
 	Value   any                      `json:"value,omitempty"`
+
+	CommissionID string `json:"commissionId,omitempty"`
+	Stage        string `json:"stage,omitempty"`
+	Message      string `json:"message,omitempty"`
 }
