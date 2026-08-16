@@ -104,15 +104,29 @@ func uiAssetHandler(mgr Manager) http.HandlerFunc {
 		}
 		uiRoot := filepath.Join(dir, "ui")
 		full := filepath.Join(uiRoot, filepath.FromSlash(rel))
-		// filepath.Rel confirms the resolved path stays under uiRoot
-		// even if filepath.Join collapsed something suspicious we
-		// haven't explicitly banned. Belt and braces.
-		relCheck, err := filepath.Rel(uiRoot, full)
-		if err != nil || strings.HasPrefix(relCheck, "..") {
+		// Resolve symlinks on both sides before the containment check.
+		// A lexical filepath.Rel is not enough — a plugin author (or a
+		// hostile install path) could drop a symlink inside ui/ that
+		// points at /etc/passwd; the lexical rel would still say
+		// "pwned", but http.ServeFile follows the link and serves the
+		// wrong file. EvalSymlinks resolves each side to a canonical
+		// absolute path so the comparison is against reality.
+		uiRootReal, err := filepath.EvalSymlinks(uiRoot)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		fullReal, err := filepath.EvalSymlinks(full)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		relCheck, err := filepath.Rel(uiRootReal, fullReal)
+		if err != nil || relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-		http.ServeFile(w, r, full)
+		http.ServeFile(w, r, fullReal)
 	}
 }
 

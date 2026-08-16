@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Download, Play, Square, RefreshCw, Settings, Trash2, Search, Wand2 } from 'lucide-react';
+import { ChevronLeft, Download, ExternalLink, Play, Square, RefreshCw, Settings, Trash2, Search, Wand2 } from 'lucide-react';
 import styles from './PluginsScreen.module.css';
 import { Button } from '../components/Button/Button';
 import { ConfigFlow } from '../components/ConfigFlow/ConfigFlow';
@@ -148,6 +148,16 @@ export function PluginsScreen() {
                     aria-label="Мастер настройки"
                   >
                     <Wand2 size={14} />
+                  </Button>
+                )}
+                {p.manifest && ((p.manifest as any).UI?.embed || (p.manifest as any).ui?.embed) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => nav(`/plugins/${encodeURIComponent(p.name)}/embed`)}
+                    aria-label="Открыть UI плагина"
+                  >
+                    <ExternalLink size={14} />
                   </Button>
                 )}
                 <Button
