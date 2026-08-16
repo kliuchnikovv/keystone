@@ -74,8 +74,12 @@ type RekorInclusionProof struct {
 }
 
 // verifyRekor runs the transparency-log checks. Called from
-// SigstoreVerifier.Verify when Rekor is set.
-func (p *RekorPolicy) verifyRekor(bundle SigstoreBundle) error {
+// SigstoreVerifier.Verify when Rekor is set. artifactSHA256 is the
+// digest of the tarball we are about to install — the check that
+// binds Rekor's "we recorded a signature" to "we recorded a
+// signature *over this artifact*", closing the gap where an attacker
+// could mint a valid SET for a different payload and reuse it.
+func (p *RekorPolicy) verifyRekor(bundle SigstoreBundle, artifactSHA256 []byte) error {
 	if p.PublicKey == nil {
 		return errors.New("store/rekor: PublicKey is required")
 	}
@@ -96,8 +100,11 @@ func (p *RekorPolicy) verifyRekor(bundle SigstoreBundle) error {
 	if err := p.verifySET(entry); err != nil {
 		return err
 	}
+	if err := verifyEntryBindsArtifact(entry, artifactSHA256); err != nil {
+		return err
+	}
 	if p.VerifyInclusion {
-		if err := verifyInclusion(entry); err != nil {
+		if err := p.verifyInclusion(entry); err != nil {
 			return err
 		}
 	}
@@ -140,14 +147,71 @@ func canonicalSETEnvelope(e RekorLogEntry) []byte {
 	return b
 }
 
+// verifyEntryBindsArtifact checks that the rekord/hashedrekord body
+// Rekor signed carries the same sha256 digest as the artifact we
+// intend to install. Without this, an attacker could replay a valid
+// SET (over a body they control) to make it look like any tarball
+// was recorded in the transparency log.
+//
+// The body is base64 in the entry; its decoded JSON follows the
+// hashedrekord schema: spec.data.hash.value is the hex sha256 of
+// the artifact Rekor recorded.
+func verifyEntryBindsArtifact(entry RekorLogEntry, artifactSHA256 []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(entry.Body)
+	if err != nil {
+		return fmt.Errorf("store/rekor: body decode: %w", err)
+	}
+	var body struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			Data struct {
+				Hash struct {
+					Algorithm string `json:"algorithm"`
+					Value     string `json:"value"`
+				} `json:"hash"`
+			} `json:"data"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return fmt.Errorf("store/rekor: parse body: %w", err)
+	}
+	if body.Kind != "" && body.Kind != "hashedrekord" && body.Kind != "rekord" {
+		// Bodies we don't know how to bind are refused rather than
+		// silently accepted — an unrecognised kind is exactly the
+		// shape a bypass would take.
+		return fmt.Errorf("store/rekor: unsupported entry kind %q", body.Kind)
+	}
+	if body.Spec.Data.Hash.Algorithm != "sha256" {
+		return fmt.Errorf("store/rekor: entry hash algorithm %q is not sha256", body.Spec.Data.Hash.Algorithm)
+	}
+	recorded, err := hexDecode(body.Spec.Data.Hash.Value)
+	if err != nil {
+		return fmt.Errorf("store/rekor: entry hash decode: %w", err)
+	}
+	if !bytesEqualCT(recorded, artifactSHA256) {
+		return errors.New("store/rekor: entry hash does not match artifact — SET is for a different payload")
+	}
+	return nil
+}
+
 // verifyInclusion walks the Merkle path from leaf to root and
-// compares to the stored root hash. Rekor's leaf hash is
-// sha256(0x00 || body); interior nodes are sha256(0x01 || left ||
-// right). This matches RFC 6962.
-func verifyInclusion(entry RekorLogEntry) error {
+// compares to a root hash we trust — meaning the checkpoint that
+// signed it validates under Rekor's public key. Using the bundle's
+// own rootHash as the trust anchor would be circular; an attacker
+// could construct any tree and claim its root is genuine.
+//
+// Rekor's leaf hash is sha256(0x00 || body); interior nodes are
+// sha256(0x01 || left || right). This matches RFC 6962.
+func (p *RekorPolicy) verifyInclusion(entry RekorLogEntry) error {
 	proof := entry.Verification.InclusionProof
 	if proof.RootHash == "" {
 		return errors.New("store/rekor: inclusion proof missing rootHash")
+	}
+	// Before trusting rootHash, make sure Rekor actually signed it
+	// via the checkpoint. Without this the whole proof is worthless
+	// — an attacker can synthesise any tree.
+	if err := p.verifyCheckpoint(proof); err != nil {
+		return err
 	}
 	body, err := base64.StdEncoding.DecodeString(entry.Body)
 	if err != nil {
@@ -185,6 +249,134 @@ func verifyInclusion(entry RekorLogEntry) error {
 		return errors.New("store/rekor: inclusion proof does not chain to rootHash")
 	}
 	return nil
+}
+
+// verifyCheckpoint parses the signed note that Rekor emits on top of
+// each inclusion proof and confirms the rootHash we're chaining to
+// is the one Rekor actually signed. The note format is:
+//
+//	<origin>\n
+//	<treeSize>\n
+//	<base64 rootHash>\n
+//	\n
+//	— <keyID> <base64 signature>\n
+//
+// The signature covers the four-line body (through the empty line).
+// Rekor signs with the same ECDSA key we already trust for the SET.
+func (p *RekorPolicy) verifyCheckpoint(proof RekorInclusionProof) error {
+	if proof.Checkpoint == "" {
+		return errors.New("store/rekor: inclusion proof missing checkpoint; refusing to trust a self-attested root")
+	}
+	// Split the note into body and signature block. The blank line
+	// between them is part of the body per the sigstore/note spec.
+	sepIdx := indexOf(proof.Checkpoint, "\n\n")
+	if sepIdx < 0 {
+		return errors.New("store/rekor: malformed checkpoint (no blank-line separator)")
+	}
+	body := proof.Checkpoint[:sepIdx+1] // include the trailing newline of the third line
+	signatures := proof.Checkpoint[sepIdx+2:]
+
+	// Parse the third line's rootHash and confirm it matches what
+	// the inclusion proof asks us to trust.
+	bodyLines := splitLines(body)
+	if len(bodyLines) < 3 {
+		return errors.New("store/rekor: checkpoint has fewer than 3 lines")
+	}
+	signedRoot, err := base64.StdEncoding.DecodeString(bodyLines[2])
+	if err != nil {
+		return fmt.Errorf("store/rekor: checkpoint rootHash decode: %w", err)
+	}
+	proofRoot, err := hexDecode(proof.RootHash)
+	if err != nil {
+		return fmt.Errorf("store/rekor: proof rootHash decode: %w", err)
+	}
+	if !bytesEqualCT(signedRoot, proofRoot) {
+		return errors.New("store/rekor: checkpoint's signed root does not match the inclusion proof's rootHash")
+	}
+
+	// Verify at least one signature line matches Rekor's public key.
+	sig, err := findCheckpointSignature(signatures)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(body))
+	if !ecdsa.VerifyASN1(p.PublicKey, digest[:], sig) {
+		return errors.New("store/rekor: checkpoint signature does not verify under Rekor's public key")
+	}
+	return nil
+}
+
+// findCheckpointSignature scans the signature block for a line
+// starting with "— " (or "- ", tolerated) followed by "<keyID>
+// <base64 signature>", and returns the first valid base64 signature.
+// The keyID hint is not verified — we only care that Rekor's public
+// key can validate the signature; multiple co-signers would each get
+// their own line.
+func findCheckpointSignature(block string) ([]byte, error) {
+	for _, line := range splitLines(block) {
+		trimmed := line
+		// Signature lines start with U+2014 EM DASH or a plain dash.
+		if hasPrefix(trimmed, "— ") {
+			trimmed = trimmed[len("— "):]
+		} else if hasPrefix(trimmed, "- ") {
+			trimmed = trimmed[len("- "):]
+		} else {
+			continue
+		}
+		// After the marker: "<keyID> <base64 sig>". Take the last
+		// token as the signature.
+		sp := lastIndex(trimmed, " ")
+		if sp < 0 {
+			continue
+		}
+		sig, err := base64.StdEncoding.DecodeString(trimmed[sp+1:])
+		if err != nil {
+			continue
+		}
+		// Rekor's per-key signature block: first 4 bytes are the
+		// truncated key hint, remainder is the raw ECDSA-ASN1 sig.
+		if len(sig) > 4 {
+			return sig[4:], nil
+		}
+	}
+	return nil, errors.New("store/rekor: no signature line found in checkpoint")
+}
+
+// Tiny string helpers, kept private to avoid pulling "strings" for
+// four call sites that all know exactly what they want.
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func hasPrefix(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
+
+func lastIndex(s, sub string) int {
+	for i := len(s) - len(sub); i >= 0; i-- {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 func rfc6962Hash(prefix []byte, parts ...[]byte) []byte {

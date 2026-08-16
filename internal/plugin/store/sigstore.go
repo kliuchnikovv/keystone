@@ -134,7 +134,7 @@ func (v SigstoreVerifier) Verify(data []byte, pkg Package) error {
 		return fmt.Errorf("store/sigstore: signature: %w", err)
 	}
 	if v.Rekor != nil {
-		if err := v.Rekor.verifyRekor(bundle); err != nil {
+		if err := v.Rekor.verifyRekor(bundle, digest[:]); err != nil {
 			return err
 		}
 	}
