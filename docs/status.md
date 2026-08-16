@@ -65,7 +65,7 @@ Runtime уже готов в `keystone-api/sidecar` (`sidecar.RunPlugin`, `sidec
 6. **`plugins/matter/`** — extract готов. `main.go` использует `sidecar.RunPlugin`, оборачивает `internal/adapters/matter` через bridge-vocabulary, `parseMatterURL` вынесена в `matter.ParseSidecarURL`. Manifest `plugin.yaml` описывает TS `matter-server` как declared sidecar. **Smoke-тест на живом keystone проходит**: `POST /plugins/matter/enable` → state=running/connected=true, adapter регистрируется, `POST /plugins/matter/disable` → clean teardown.
 7. **`service.DeviceService.RegisterAdapter/UnregisterAdapter`** — thread-safe хук для runtime-mount плагинов через RWMutex.
 
-`-matter-sidecar` в `cmd/keystone` объявлен deprecated. In-tree adapter пока остаётся как fallback — удалим его вместе с `domain.TransportMatter` после того, как плагин отработает на живом железе.
+**Core больше не говорит Matter напрямую:** `-matter-sidecar` флаг удалён, `internal/adapters/matter` из `cmd/keystone` не импортируется, `matter.KindOf`/`IsRetryable` в commission-progress handler заменены на generic `sidecar.CodeOf`/`sidecar.IsRetryable`. Пакет `internal/adapters/matter` остаётся — это библиотека, которую использует плагин. `domain.TransportMatter` тоже остаётся — used by matter package + tests, никакой matter-специфики в ядре нет.
 
 ---
 

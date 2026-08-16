@@ -23,7 +23,6 @@ import (
 
 	"github.com/kliuchnikovv/keystone-api/sidecar"
 
-	"github.com/kliuchnikovv/keystone/internal/adapters/matter"
 	"github.com/kliuchnikovv/keystone/internal/adapters/virtual"
 	pluginsapi "github.com/kliuchnikovv/keystone/internal/api/plugins"
 	"github.com/kliuchnikovv/keystone/internal/api/ws"
@@ -46,8 +45,7 @@ func main() {
 	dataDir := flag.String("data", "./keystone-data", "data directory for persistence")
 	uiDir := flag.String("ui-dir", "./site", "directory served at /ui/ (dashboard + landing); empty to disable")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
-	matterAddr := flag.String("matter-sidecar", "", "deprecated: matter.js sidecar URL for the in-tree adapter (e.g. ws://localhost:5580). Prefer running Matter as a plugin — install plugins/matter/ under -plugins-dir and POST /plugins/matter/enable")
-	pluginsDir := flag.String("plugins-dir", "./keystone-data/plugins", "directory scanned for installed plugins; empty = disabled")
+	pluginsDir := flag.String("plugins-dir", "./keystone-data/plugins", "directory scanned for installed plugins; empty = disabled. Matter lives here as plugins/matter — install it and POST /plugins/matter/enable")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -93,24 +91,9 @@ func main() {
 	defer func() { _ = virt.Stop(context.Background()) }()
 	adapters = append(adapters, virt)
 
-	// Matter over a matter.js sidecar. Optional — if -matter-sidecar is empty
-	// or the sidecar is unreachable at boot, we log the reason and continue
-	// without Matter so keystone still starts on a bare host.
-	if *matterAddr != "" {
-		cfg, err := matter.ParseSidecarURL(*matterAddr)
-		if err != nil {
-			log.Error("matter sidecar url", "value", *matterAddr, "err", err)
-			os.Exit(1)
-		}
-		wsc := matter.NewWSClient(cfg.URL(), log.With("component", "matter-ws"))
-		mad := matter.New(log.With("component", "matter"), cfg, wsc)
-		if err := mad.Start(ctx); err != nil {
-			log.Warn("matter adapter start failed, continuing without matter", "err", err)
-		} else {
-			defer func() { _ = mad.Stop(context.Background()) }()
-			adapters = append(adapters, mad)
-		}
-	}
+	// Matter is no longer wired in-tree — it lives in plugins/matter and
+	// is mounted at runtime by the plugin manager. See
+	// docs/plugin-store-architecture.md and /plugins/matter/enable.
 
 	devSvc := service.NewDeviceService(log, reg, bus, adapters)
 
@@ -519,10 +502,12 @@ func handleCommission(svc *service.DeviceService, persist func(*domain.Device)) 
 				if res.err != nil {
 					// Attach the transport's error category so the UI can show a
 					// sentence a person can act on instead of a wrapped Go error.
+					// Sidecar plugins surface sidecar.Error; anything else comes
+					// through with just the message, which is still useful.
 					frame := map[string]any{"stage": "error", "message": res.err.Error()}
-					if kind := matter.KindOf(res.err); kind != "" {
-						frame["kind"] = string(kind)
-						frame["retryable"] = matter.IsRetryable(res.err)
+					if code := sidecar.CodeOf(res.err); code != "" {
+						frame["kind"] = string(code)
+						frame["retryable"] = sidecar.IsRetryable(res.err)
 					}
 					emit(frame)
 					return
@@ -550,7 +535,10 @@ func handleDiscoverCommissionable(svc *service.DeviceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		transport := r.URL.Query().Get("transport")
 		if transport == "" {
-			transport = string(domain.TransportMatter)
+			// Historical default — the UI has always assumed Matter when
+			// nothing is specified. Kept as a literal now that the core no
+			// longer knows about the matter transport at compile time.
+			transport = "matter"
 		}
 		window := 10 * time.Second
 		if raw := r.URL.Query().Get("timeout"); raw != "" {
