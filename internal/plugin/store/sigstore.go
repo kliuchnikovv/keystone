@@ -65,6 +65,13 @@ type SigstoreVerifier struct {
 	// Kept injectable so tests can pin against a specific issuance
 	// window.
 	Now func() time.Time
+
+	// Rekor, when set, enforces transparency-log presence. The SET
+	// signature is always verified when the policy is present;
+	// inclusion-proof verification kicks in when
+	// Rekor.VerifyInclusion is true. Nil skips the log check
+	// entirely — useful for setup, unwise in production.
+	Rekor *RekorPolicy
 }
 
 // SigstoreBundle is the on-wire shape SigstoreVerifier consumes.
@@ -126,9 +133,11 @@ func (v SigstoreVerifier) Verify(data []byte, pkg Package) error {
 	if err := verifyDigest(cert.PublicKey, digest[:], sig); err != nil {
 		return fmt.Errorf("store/sigstore: signature: %w", err)
 	}
-	// Rekor inclusion verification is deferred; a policy that
-	// requires transparency-log presence should also verify the
-	// inclusion proof here once we wire it.
+	if v.Rekor != nil {
+		if err := v.Rekor.verifyRekor(bundle); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
