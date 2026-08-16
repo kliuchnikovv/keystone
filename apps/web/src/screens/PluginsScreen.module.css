@@ -179,3 +179,10 @@
   color: var(--ks-color-danger);
   font-size: 14px;
 }
+
+.configPanel {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--ks-color-surface-raised);
+  border: 1px solid var(--ks-color-border);
+}

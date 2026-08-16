@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Download, Play, Square, RefreshCw, Trash2, Search } from 'lucide-react';
+import { ChevronLeft, Download, Play, Square, RefreshCw, Settings, Trash2, Search } from 'lucide-react';
 import styles from './PluginsScreen.module.css';
 import { Button } from '../components/Button/Button';
+import { SchemaForm, type JSONSchema } from '../components/SchemaForm/SchemaForm';
 import {
   browseRegistry,
   disablePlugin,
   enablePlugin,
+  getPluginConfig,
   installPlugin,
   listPlugins,
+  putPluginConfig,
   restartPlugin,
   uninstallPlugin,
   type PluginState,
@@ -46,6 +49,8 @@ export function PluginsScreen() {
   const restartMut = useMutation({ mutationFn: restartPlugin, onSuccess: refresh });
   const uninstallMut = useMutation({ mutationFn: uninstallPlugin, onSuccess: refresh });
 
+  const [configOpen, setConfigOpen] = useState<string | null>(null);
+
   const installMut = useMutation({
     mutationFn: installPlugin,
     onSuccess: () => {
@@ -81,6 +86,13 @@ export function PluginsScreen() {
                 <StateBadge state={p.state} connected={p.connected} />
               </div>
               {p.last_error && <p className={styles.rowError}>{p.last_error}</p>}
+              {configOpen === p.name && (
+                <ConfigPanel
+                  name={p.name}
+                  schemaSource={p.manifest?.Spec?.Config?.Schema}
+                  onClose={() => setConfigOpen(null)}
+                />
+              )}
               <div className={styles.rowActions}>
                 {p.state !== 'running' ? (
                   <Button
@@ -110,6 +122,16 @@ export function PluginsScreen() {
                 >
                   <RefreshCw size={14} />
                 </Button>
+                {p.manifest?.Spec?.Config?.Schema && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfigOpen(configOpen === p.name ? null : p.name)}
+                    aria-label="Настройки"
+                  >
+                    <Settings size={14} />
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -212,6 +234,56 @@ function BrowseRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+function ConfigPanel({
+  name,
+  schemaSource,
+  onClose,
+}: {
+  name: string;
+  schemaSource?: string;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const config = useQuery({
+    queryKey: ['plugin-config', name],
+    queryFn: () => getPluginConfig(name),
+  });
+  const putMut = useMutation({
+    mutationFn: (value: unknown) => putPluginConfig(name, value),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plugin-config', name] });
+      onClose();
+    },
+  });
+
+  const schema: JSONSchema | null = (() => {
+    if (!schemaSource) return null;
+    try {
+      return JSON.parse(schemaSource) as JSONSchema;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (!schema) {
+    return <p className={styles.rowError}>Не удалось разобрать схему конфигурации.</p>;
+  }
+  if (config.isLoading) return <p className={styles.muted}>Загружаем настройки…</p>;
+  if (config.error) return <p className={styles.rowError}>Не удалось загрузить конфиг: {String(config.error)}</p>;
+
+  return (
+    <div className={styles.configPanel}>
+      <SchemaForm
+        schema={schema}
+        value={(config.data as Record<string, unknown>) ?? {}}
+        onSubmit={(v) => putMut.mutate(v)}
+        submitting={putMut.isPending}
+      />
+      {putMut.error && <p className={styles.rowError}>{String(putMut.error)}</p>}
+    </div>
   );
 }
 

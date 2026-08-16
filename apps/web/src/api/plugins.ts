@@ -2,12 +2,26 @@ import { apiFetch } from './client';
 
 export type PluginState = 'discovered' | 'running' | 'stopped' | 'failed';
 
+export interface ManifestConfig {
+  Schema?: string;
+}
+
+export interface ManifestSpec {
+  Config?: ManifestConfig | null;
+}
+
+export interface Manifest {
+  Metadata?: { Name?: string; Description?: string };
+  Spec?: ManifestSpec;
+}
+
 export interface PluginStatus {
   name: string;
   version: string;
   state: PluginState;
   connected: boolean;
   last_error?: string;
+  manifest?: Manifest;
 }
 
 interface ListResponse {
@@ -67,4 +81,19 @@ export interface RegistryIndex {
 
 export function browseRegistry(url: string): Promise<RegistryIndex> {
   return apiFetch<RegistryIndex>(`/plugins/registry?url=${encodeURIComponent(url)}`);
+}
+
+export function getPlugin(name: string): Promise<PluginStatus> {
+  return apiFetch<PluginStatus>(`/plugins/${encodeURIComponent(name)}`);
+}
+
+export function getPluginConfig(name: string): Promise<Record<string, unknown>> {
+  return apiFetch<Record<string, unknown>>(`/plugins/${encodeURIComponent(name)}/config`);
+}
+
+export function putPluginConfig(name: string, value: unknown): Promise<unknown> {
+  return apiFetch(`/plugins/${encodeURIComponent(name)}/config`, {
+    method: 'PUT',
+    body: JSON.stringify(value),
+  });
 }

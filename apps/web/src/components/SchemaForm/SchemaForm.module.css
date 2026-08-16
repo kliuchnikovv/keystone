@@ -1,0 +1,75 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ks-color-text);
+}
+
+.description {
+  font-size: 12px;
+  color: var(--ks-color-text-muted);
+  line-height: 1.4;
+}
+
+.input,
+.textarea {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ks-color-border);
+  background: var(--ks-color-surface-raised);
+  color: inherit;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--ks-color-accent);
+}
+
+.checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--ks-color-accent);
+}
+
+.submit {
+  align-self: flex-start;
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: none;
+  background: var(--ks-color-accent);
+  color: var(--ks-color-on-accent);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  margin: 0;
+  color: var(--ks-color-danger);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
