@@ -60,8 +60,11 @@ func installFromDir(src, targetRoot string, force bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("install: %w", err)
 	}
+	if err := safePluginName(mf.Metadata.Name); err != nil {
+		return "", err
+	}
 	dest := filepath.Join(targetRoot, mf.Metadata.Name)
-	if err := prepareDest(dest, force); err != nil {
+	if err := prepareDest(dest, targetRoot, force); err != nil {
 		return "", err
 	}
 
@@ -107,8 +110,11 @@ func installFromTarball(tarPath, targetRoot string, force bool) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("install: manifest in tarball: %w", err)
 	}
+	if err := safePluginName(mf.Metadata.Name); err != nil {
+		return "", err
+	}
 	dest := filepath.Join(targetRoot, mf.Metadata.Name)
-	if err := prepareDest(dest, force); err != nil {
+	if err := prepareDest(dest, targetRoot, force); err != nil {
 		return "", err
 	}
 	for name, data := range entries {
@@ -129,17 +135,60 @@ func installFromTarball(tarPath, targetRoot string, force bool) (string, error) 
 	return mf.Metadata.Name, nil
 }
 
+// safePluginName rejects a manifest.name that could escape the target
+// dir. The schema already restricts names to ^[a-z][a-z0-9-]{1,38}[a-z0-9]$
+// so this is defense in depth — if a future schema change or a code path
+// that skips validation slips one in, we refuse to touch the filesystem
+// with it.
+func safePluginName(name string) error {
+	if name == "" {
+		return fmt.Errorf("install: manifest.metadata.name is empty")
+	}
+	if name != filepath.Base(name) || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("install: refusing unsafe plugin name %q", name)
+	}
+	return nil
+}
+
 // prepareDest ensures a fresh target directory exists. Overwrites an
 // existing one only when force is set; the default is to refuse and
-// let the caller decide.
-func prepareDest(dest string, force bool) error {
-	if _, err := os.Stat(dest); err == nil {
+// let the caller decide. Before any destructive step, it confirms
+// dest is a plain directory strictly under targetRoot — a symlink or
+// a traversal-escaping name is refused rather than followed.
+func prepareDest(dest, targetRoot string, force bool) error {
+	// Resolve targetRoot up front so a comparison later is against a
+	// stable absolute path.
+	absRoot, err := filepath.Abs(targetRoot)
+	if err != nil {
+		return fmt.Errorf("install: resolve target: %w", err)
+	}
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("install: resolve dest: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absDest)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return fmt.Errorf("install: destination %s escapes target %s", dest, targetRoot)
+	}
+
+	// If dest exists, it must be a real directory, not a symlink pointing
+	// elsewhere — otherwise RemoveAll would follow the link and nuke the
+	// wrong tree.
+	info, err := os.Lstat(dest)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("install: %s is a symlink; refusing to overwrite", dest)
+	case err == nil && !info.IsDir():
+		return fmt.Errorf("install: %s exists and is not a directory", dest)
+	case err == nil:
 		if !force {
 			return fmt.Errorf("install: %s already exists; pass --force to overwrite", dest)
 		}
 		if err := os.RemoveAll(dest); err != nil {
 			return err
 		}
+	case !os.IsNotExist(err):
+		return err
 	}
 	return os.MkdirAll(dest, 0o755)
 }

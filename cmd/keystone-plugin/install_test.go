@@ -92,6 +92,30 @@ func TestInstall_NotifyDiscover(t *testing.T) {
 	}
 }
 
+func TestSafePluginName_Rejects(t *testing.T) {
+	bad := []string{"", "../evil", "sub/dir", ".hidden", `back\slash`}
+	for _, n := range bad {
+		if err := safePluginName(n); err == nil {
+			t.Errorf("safePluginName(%q) should error", n)
+		}
+	}
+	if err := safePluginName("demo"); err != nil {
+		t.Errorf("safePluginName(\"demo\") errored: %v", err)
+	}
+}
+
+func TestPrepareDest_RefusesSymlinkTarget(t *testing.T) {
+	targetRoot := t.TempDir()
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(targetRoot, "demo")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	err := prepareDest(filepath.Join(targetRoot, "demo"), targetRoot, true)
+	if err == nil {
+		t.Fatal("prepareDest should refuse a symlink target — RemoveAll would follow it")
+	}
+}
+
 // scaffoldForInstall builds a minimal but valid plugin dir the install
 // path can consume.
 func scaffoldForInstall(t *testing.T) string {
