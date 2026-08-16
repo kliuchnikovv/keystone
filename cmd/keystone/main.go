@@ -46,7 +46,7 @@ func main() {
 	dataDir := flag.String("data", "./keystone-data", "data directory for persistence")
 	uiDir := flag.String("ui-dir", "./site", "directory served at /ui/ (dashboard + landing); empty to disable")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
-	matterAddr := flag.String("matter-sidecar", "", "matter.js sidecar URL (e.g. ws://localhost:5580); empty = disabled")
+	matterAddr := flag.String("matter-sidecar", "", "deprecated: matter.js sidecar URL for the in-tree adapter (e.g. ws://localhost:5580). Prefer running Matter as a plugin — install plugins/matter/ under -plugins-dir and POST /plugins/matter/enable")
 	pluginsDir := flag.String("plugins-dir", "./keystone-data/plugins", "directory scanned for installed plugins; empty = disabled")
 	flag.Parse()
 
@@ -97,7 +97,7 @@ func main() {
 	// or the sidecar is unreachable at boot, we log the reason and continue
 	// without Matter so keystone still starts on a bare host.
 	if *matterAddr != "" {
-		cfg, err := parseMatterURL(*matterAddr)
+		cfg, err := matter.ParseSidecarURL(*matterAddr)
 		if err != nil {
 			log.Error("matter sidecar url", "value", *matterAddr, "err", err)
 			os.Exit(1)
@@ -942,19 +942,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// parseMatterURL accepts either a bare host:port or a full ws:// URL and
-// returns a matter.Config the adapter can dial.
-func parseMatterURL(raw string) (matter.Config, error) {
-	s := strings.TrimSpace(raw)
-	s = strings.TrimPrefix(s, "ws://")
-	s = strings.TrimPrefix(s, "wss://")
-	host, portStr, ok := strings.Cut(s, ":")
-	if !ok || host == "" || portStr == "" {
-		return matter.Config{}, fmt.Errorf("expected host:port or ws://host:port, got %q", raw)
-	}
-	var port int
-	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil || port <= 0 {
-		return matter.Config{}, fmt.Errorf("invalid port in %q", raw)
-	}
-	return matter.Config{Host: host, Port: port}, nil
-}

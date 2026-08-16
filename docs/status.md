@@ -13,7 +13,7 @@
 
 ## 0. TL;DR
 
-**Phase A → B переход.** Matter-adapter доведён до прод-качества, параллельно построена основа plugin-архитектуры. Дальше — plugin-manager в ядре и extraction Matter как первого нативного плагина.
+**Phase B закрыта end-to-end.** Plugin runtime построен (supervisor + registry + manager + HTTP `/plugins/*` + bridge). Matter extract'нут в `plugins/matter/` — идентичный in-tree adapter, но живёт отдельным процессом; enable/disable через `/plugins/matter/enable` работает на живом keystone, smoke-тест проходит. Дальше — Phase D (git-registry, Store UI) и удаление in-tree Matter, когда плагин обкатается в проде.
 
 ---
 
@@ -53,35 +53,28 @@
 
 ---
 
-## 2. Что в работе
+## 2. Что закрыто в этой сессии (Phase B финиш)
 
-- **[Plugin] Plugin manager в ядре** — Ready. Стартовали: `go.work` + `replace` для `keystone-api/sidecar` подключены, build проходит.
-- **[Plugin] HTTP API endpoints `/plugins/*`** — Ready.
-- **[Plugin] Extract Matter → `plugins/matter/`** — Ready. Решено: жить в этой же репе (`plugins/matter/`), не в отдельной. В отдельный репозиторий вынесем в фазе Store вместе с plugin-registry.
+Runtime уже готов в `keystone-api/sidecar` (`sidecar.RunPlugin`, `sidecar.Connect`, NDJSON codec, symmetric Peer, seq/replay ringbuf, heartbeat, backoff, topic matcher, structured errors) — фаза «Runtime» пропущена. Все остальные слои Phase B реализованы:
 
-### Ключевая находка: runtime **уже готов** в `keystone-api/sidecar`
+1. **`internal/plugin/supervisor`** — spawn entrypoint (`os/exec.CommandContext` под supervisor-owned ctx, чтобы жизнь ребёнка не привязывалась к Enable-request-ctx), listen UDS на `$KEYSTONE_PLUGIN_SOCKET`, connect, keep-alive с RestartOnFailure policy, log capture.
+2. **`internal/plugin/registry`** — walk `-plugins-dir`, load+validate манифесты, sort по `spec.dependsOn`, broken-entry surfacing.
+3. **`internal/plugin/manager`** — FSM (`Discovered/Running/Stopped/Failed`), `Discover/Enable/Disable/List/Get/Client`, callback-хуки `OnEnable`/`OnDisable` для интеграции с DeviceService.
+4. **`internal/api/plugins`** — `/plugins`, `/plugins/discover`, `/plugins/{name}`, `/plugins/{name}/enable`, `/plugins/{name}/disable`.
+5. **`internal/plugin/bridge`** — `ports.Adapter` поверх `*sidecar.Client` + wire-контракт (`adapter.start/stop/discover/commission/readState/writeState/invokeAction/decommission` методы + `adapter.event` topic).
+6. **`plugins/matter/`** — extract готов. `main.go` использует `sidecar.RunPlugin`, оборачивает `internal/adapters/matter` через bridge-vocabulary, `parseMatterURL` вынесена в `matter.ParseSidecarURL`. Manifest `plugin.yaml` описывает TS `matter-server` как declared sidecar. **Smoke-тест на живом keystone проходит**: `POST /plugins/matter/enable` → state=running/connected=true, adapter регистрируется, `POST /plugins/matter/disable` → clean teardown.
+7. **`service.DeviceService.RegisterAdapter/UnregisterAdapter`** — thread-safe хук для runtime-mount плагинов через RWMutex.
 
-Обе стороны sidecar-protocol-v1 реализованы, тестированы, стабильны:
-- Plugin-side: `sidecar.RunPlugin(ctx, opts)` — hello/ping/subscribe/unsubscribe/resume «из коробки».
-- Core-side: `sidecar.Connect(ctx, path, opts) *Client` — dial UDS, handshake, request/push API.
-- Внутри: NDJSON codec, symmetric Peer, seq/replay ringbuf, heartbeat, backoff, topic matcher, structured errors.
-
-Фаза «Runtime» из плана Phase B **пропускается** — писать нечего. Осталось:
-1. **`internal/plugin/supervisor`** — spawn entrypoint (`os/exec`), listen UDS на `$KEYSTONE_PLUGIN_SOCKET`, connect, keep-alive c restart policy, log capture.
-2. **`internal/plugin/registry`** — walk `/etc/keystone/plugins/`, load+validate манифесты.
-3. **`internal/plugin/manager`** — FSM (`Discover→Configured→Running`), owns registry+supervisor+client.
-4. **`internal/api/plugins.go`** (или где HTTP сейчас) — `/plugins/*` endpoints.
-5. **`ports.PluginAdapter`** — `ports.Adapter` поверх `*sidecar.Client`. Убирает необходимость менять `service.DeviceService`.
-6. **`plugins/matter/`** — новый бинарь: `sidecar.RunPlugin` + бизнес-логика из `internal/adapters/matter`. Пере-експорт `parseMatterURL`, `KindOf`, `IsRetryable`. Из `domain.TransportKind` убрать `TransportMatter` — плагин сообщает свой kind в `hello`.
+`-matter-sidecar` в `cmd/keystone` объявлен deprecated. In-tree adapter пока остаётся как fallback — удалим его вместе с `domain.TransportMatter` после того, как плагин отработает на живом железе.
 
 ---
 
 ## 3. Что дальше
 
-**Phase B продолжение:**
-- Plugin manager в ядре (lifecycle, sandbox, restart, health-check по heartbeat)
-- HTTP API endpoints `/plugins/*` (list / install / uninstall / logs / config / health)
-- Extract Matter в `keystone-plugin-matter` — первое живое использование plugin-manager'а, валидация модели
+**Валидация на живом железе:**
+- Прогнать `plugins/matter/` против реального WARMBLIXT — commission/read/write/invoke/decommission по всей цепочке core→bridge→plugin→matter-server.
+- После — удалить in-tree Matter из `cmd/keystone/main.go` и `internal/adapters/matter` (или оставить как `pkg/matter` для плагина), убрать `domain.TransportMatter` и `-matter-sidecar` флаг.
+- Опционально: перенести `matter.KindOf`/`matter.IsRetryable` вызовы из `cmd/keystone/main.go` в service-level generic error taxonomy, чтобы progress-frames работали и с plugin-errors.
 
 **Phase D параллельно:**
 - Git-based plugin registry (`plugin-registry` репа с Homebrew-style tap)

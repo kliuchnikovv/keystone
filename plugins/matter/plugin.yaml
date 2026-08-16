@@ -1,0 +1,75 @@
+# Manifest for keystone-plugin-matter, the extracted Matter transport.
+# Deployed into /etc/keystone/plugins/matter/ (or the -plugins-dir target)
+# with the compiled binary at bin/matter-plugin and the matter-server
+# sidecar bundled under sidecars/matter-server.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: matter
+  displayName: Matter
+  version: 0.1.0
+  description: |
+    Multi-admin Matter controller via matter.js. Supports commissioning,
+    control, and subscription for lights, plugs, sensors, valves,
+    thermostats and Matter 1.4 cameras (WebRTC).
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  homepage: https://github.com/kliuchnikovv/keystone/tree/master/plugins/matter
+  category: transport
+  tags: [matter, thread, wifi, official]
+  trustTier: core
+
+spec:
+  keystoneCoreMin: "0.5.0"
+  keystoneCoreMax: "1.x"
+
+  capabilities:
+    - transport.matter
+    - discover.passive
+    - commission.setup-code
+    - commission.qr-code
+    - realtime.state-stream
+
+  permissions:
+    - network.lan
+    - network.multicast
+    - storage.persistent
+    - secretstore.read: [matter.fabric-key]
+    - secretstore.write: [matter.fabric-key]
+
+  resources:
+    memory: 256Mi
+    cpu: 100m
+    disk: 500Mi
+
+  entrypoint:
+    exec: bin/matter-plugin
+    env:
+      # Points at the TS matter-server sidecar declared below. Operators
+      # who run matter-server elsewhere (e.g. inside docker on the LAN)
+      # override this via /plugins/matter/config once that surface lands.
+      KEYSTONE_MATTER_SIDECAR_URL: "ws://localhost:5580"
+
+  sidecars:
+    - name: matter-server
+      exec: sidecars/matter-server/dist/index.js
+      runtime: node20
+      args: []
+      env:
+        KEYSTONE_MATTER_STORAGE: "$KEYSTONE_PLUGIN_DATA/matter-fabric"
+      restart: on-failure
+
+  config:
+    schema: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "sidecarUrl": {
+            "type": "string",
+            "default": "ws://localhost:5580",
+            "description": "WebSocket URL of the matter.js sidecar"
+          },
+          "fabricLabel": {"type": "string", "default": "Keystone"}
+        }
+      }

@@ -85,6 +85,14 @@ type Supervisor struct {
 	// client is stable across restarts — sidecar.Client reconnects itself.
 	client *sidecar.Client
 
+	// life is the supervisor's own context, cancelled by Stop. It backs
+	// exec.CommandContext and the watch-loop backoff so a plugin's life is
+	// tied to the supervisor itself, not to the caller of Start (whose
+	// context — often a request context — cancels the moment the HTTP
+	// handler returns).
+	life       context.Context
+	lifeCancel context.CancelFunc
+
 	mu        sync.Mutex
 	proc      *os.Process
 	stopped   bool
@@ -116,32 +124,38 @@ func New(cfg Config) (*Supervisor, error) {
 
 // Start allocates the socket, spawns the child, and returns a connected
 // sidecar client. The returned client stays alive across restarts.
+//
+// ctx is used only for the first dial to the child — once the handshake
+// completes, the plugin lives under the supervisor's own context, which
+// only Stop cancels. This decouples plugin life from the request that
+// asked to enable it.
 func (s *Supervisor) Start(ctx context.Context) (*sidecar.Client, error) {
+	s.life, s.lifeCancel = context.WithCancel(context.Background())
+
 	dir, err := os.MkdirTemp(s.cfg.SocketDir, "keystone-plugin-"+sanitize(s.cfg.Name)+"-*")
 	if err != nil {
+		s.lifeCancel()
 		return nil, fmt.Errorf("supervisor: creating socket dir: %w", err)
 	}
 	s.dir = dir
 	s.socket = filepath.Join(dir, "socket")
 
-	if err := s.spawn(ctx); err != nil {
+	if err := s.spawn(); err != nil {
+		s.lifeCancel()
 		s.cleanupDir()
 		return nil, err
 	}
 
-	// Client dials the socket. Plugin creates it on startup; the child may
-	// still be racing to listen, so DialUnix retry lives inside the child
-	// watcher — Connect itself only tries once, so we retry the first dial
-	// here with a short backoff.
 	client, err := s.dialWithRetry(ctx)
 	if err != nil {
 		s.stopChild()
+		s.lifeCancel()
 		s.cleanupDir()
 		return nil, err
 	}
 	s.client = client
 
-	go s.watch(ctx)
+	go s.watch()
 	return client, nil
 }
 
@@ -158,6 +172,9 @@ func (s *Supervisor) Stop(_ context.Context) error {
 	s.stopped = true
 	s.mu.Unlock()
 
+	if s.lifeCancel != nil {
+		s.lifeCancel()
+	}
 	s.stopChild()
 	if s.client != nil {
 		_ = s.client.Close()
@@ -171,8 +188,8 @@ func (s *Supervisor) Stop(_ context.Context) error {
 func (s *Supervisor) Done() <-chan struct{} { return s.done }
 
 // spawn launches one child process. Requires s.socket set.
-func (s *Supervisor) spawn(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, s.cfg.Exec[0], s.cfg.Exec[1:]...)
+func (s *Supervisor) spawn() error {
+	cmd := exec.CommandContext(s.life, s.cfg.Exec[0], s.cfg.Exec[1:]...)
 	cmd.Dir = s.cfg.WorkDir
 	env := append(os.Environ(), s.cfg.Env...)
 	env = append(env, sidecar.SocketEnvVar+"="+s.socket)
@@ -211,7 +228,8 @@ func (s *Supervisor) spawn(ctx context.Context) error {
 
 // watch waits on the child, restarts per policy, and closes s.done when it
 // gives up.
-func (s *Supervisor) watch(ctx context.Context) {
+func (s *Supervisor) watch() {
+	ctx := s.life
 	defer close(s.done)
 	backoff := sidecar.NewBackoff()
 
@@ -247,7 +265,7 @@ func (s *Supervisor) watch(ctx context.Context) {
 			s.lastError = ctx.Err()
 			return
 		}
-		if err := s.spawn(ctx); err != nil {
+		if err := s.spawn(); err != nil {
 			s.log.Error("plugin respawn failed", "err", err)
 			s.lastError = err
 			return
