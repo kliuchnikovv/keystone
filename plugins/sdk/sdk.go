@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kliuchnikovv/keystone-api/sidecar"
 
@@ -254,6 +255,42 @@ func registerHandlers(mux *sidecar.Mux, adapter Adapter, mapper ErrorMapper, log
 		}
 		return map[string]any{}, nil
 	}))
+
+	if scanner, ok := adapter.(ports.CommissionableDiscoverer); ok {
+		mux.Handle(bridge.MethodDiscoverCommissionable, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
+			var p bridge.DiscoverCommissionableParams
+			if err := r.Bind(&p); err != nil {
+				return nil, err
+			}
+			window := time.Duration(p.TimeoutMs) * time.Millisecond
+			if window <= 0 {
+				window = 10 * time.Second
+			}
+			ch, err := scanner.DiscoverCommissionable(ctx, window)
+			if err != nil {
+				return nil, mapErr(mapper, err)
+			}
+			peer := r.Peer()
+			for d := range ch {
+				if peer == nil {
+					continue
+				}
+				_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+					Kind: bridge.KindCommissionableFound,
+					Found: &bridge.CommissionableFoundPayload{
+						ScanID:        p.ScanID,
+						Ref:           d.Ref,
+						Name:          d.Name,
+						Type:          d.Type,
+						VendorID:      d.VendorID,
+						ProductID:     d.ProductID,
+						Discriminator: d.Discriminator,
+					},
+				})
+			}
+			return bridge.DiscoverCommissionableResult{Ended: true}, nil
+		}))
+	}
 }
 
 // LoadConfig reads the plugin's persisted config (written by the core

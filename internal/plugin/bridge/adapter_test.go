@@ -70,6 +70,24 @@ func runStubAdapter() {
 		return map[string]string{}, nil
 	}))
 
+	mux.Handle(bridge.MethodDiscoverCommissionable, sidecar.HandlerFunc(func(_ context.Context, r *sidecar.Request) (any, error) {
+		var p bridge.DiscoverCommissionableParams
+		if err := r.Bind(&p); err != nil {
+			return nil, err
+		}
+		peer := r.Peer()
+		for _, ref := range []string{"stub:a", "stub:b"} {
+			_ = peer.Publish(sidecar.Topic(bridge.TopicEvent), bridge.EventPayload{
+				Kind: bridge.KindCommissionableFound,
+				Found: &bridge.CommissionableFoundPayload{
+					ScanID: p.ScanID,
+					Ref:    ref,
+				},
+			})
+		}
+		return bridge.DiscoverCommissionableResult{Ended: true}, nil
+	}))
+
 	opts := sidecar.PluginOptions{
 		Name:    "stub-adapter",
 		Version: "0.0.1",
@@ -243,6 +261,37 @@ func TestAdapter_CommissionProgress(t *testing.T) {
 		if i >= len(stages) || stages[i] != want[i] {
 			t.Fatalf("stages = %v, want %v", stages, want)
 		}
+	}
+}
+
+func TestAdapter_DiscoverCommissionable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, teardown := startStub(t)
+	defer teardown()
+
+	a := bridge.New(client, "stub", nil)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Subscribe must be running so find events route into the scan channel.
+	if _, err := a.Subscribe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := a.DiscoverCommissionable(ctx, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for d := range ch {
+		got = append(got, d.Ref)
+	}
+	if len(got) != 2 || got[0] != "stub:a" || got[1] != "stub:b" {
+		t.Fatalf("unexpected finds: %v", got)
 	}
 }
 

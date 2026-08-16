@@ -114,6 +114,48 @@ type DecommissionParams struct {
 	Ref domain.TransportRef `json:"ref"`
 }
 
+// DiscoverCommissionableParams bounds a scan and identifies which
+// per-scan channel finds should stream onto. ScanID is minted by the
+// bridge before the call and echoed back on every event.
+type DiscoverCommissionableParams struct {
+	TimeoutMs int64  `json:"timeoutMs"`
+	ScanID    string `json:"scanId"`
+}
+
+// DiscoverCommissionableResult is the RPC's terminal frame; the actual
+// devices flow as adapter.event pushes with Kind = commissionable_found.
+// A plugin that ran the scan to completion returns Ended=true so a
+// caller can distinguish "window elapsed" from "canceled".
+type DiscoverCommissionableResult struct {
+	Ended bool `json:"ended"`
+}
+
+// CommissionableFoundPayload is what the plugin puts in EventPayload
+// when Kind = commissionable_found. Mirrors ports.CommissionableDevice
+// one-for-one so the bridge can translate without loss.
+type CommissionableFoundPayload struct {
+	ScanID        string            `json:"scanId"`
+	Ref           string            `json:"ref"`
+	Name          string            `json:"name,omitempty"`
+	Type          domain.DeviceType `json:"type,omitempty"`
+	VendorID      int               `json:"vendorId,omitempty"`
+	ProductID     int               `json:"productId,omitempty"`
+	Discriminator int               `json:"discriminator,omitempty"`
+}
+
+// MethodDiscoverCommissionable is optional. A plugin whose transport
+// scans for devices ready to pair (Matter, Zigbee via
+// permit-join) implements it; anything else returns unsupported. The
+// scan runs for the caller's window and streams finds onto
+// adapter.event with Kind = commissionable_found until the response
+// arrives.
+const MethodDiscoverCommissionable = "adapter.discoverCommissionable"
+
+// KindCommissionableFound is a bridge-only event kind carrying a
+// device advertisement back to a discoverCommissionable caller. The
+// scan id is set so multiple concurrent scans stay separate.
+const KindCommissionableFound ports.TransportEventKind = "commissionable_found"
+
 // KindCommissionProgress is a bridge-only event kind that carries
 // pairing progress back to the caller. It sits alongside the
 // ports.TransportEventKind values on the same topic because it uses the
@@ -139,4 +181,8 @@ type EventPayload struct {
 	CommissionID string `json:"commissionId,omitempty"`
 	Stage        string `json:"stage,omitempty"`
 	Message      string `json:"message,omitempty"`
+
+	// Set only for commissionable_found. Kept as its own field so a
+	// plugin can push finds without borrowing Value's slot.
+	Found *CommissionableFoundPayload `json:"found,omitempty"`
 }

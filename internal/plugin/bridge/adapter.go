@@ -32,10 +32,23 @@ type Adapter struct {
 	// instead of emitting them as TransportEvents.
 	progressMu sync.Mutex
 	inFlight   map[string]chan<- progressUpdate
+
+	// scanMu guards scans — per-scan channels for
+	// DiscoverCommissionable results. Same routing pattern as
+	// inFlight: Subscribe's fan-out sees a commissionable_found
+	// event and hands the payload to the matching channel.
+	scanMu sync.Mutex
+	scans  map[string]scanSlot
 }
 
 type progressUpdate struct {
 	stage, message string
+}
+
+// scanSlot is a per-scan registration used by DiscoverCommissionable:
+// the Subscribe fan-out routes finds by ScanID into ch.
+type scanSlot struct {
+	ch chan<- ports.CommissionableDevice
 }
 
 // New builds an Adapter with a live sidecar client. kind is the transport
@@ -50,6 +63,7 @@ func New(client *sidecar.Client, kind domain.TransportKind, log *slog.Logger) *A
 		kind:     kind,
 		log:      log,
 		inFlight: make(map[string]chan<- progressUpdate),
+		scans:    make(map[string]scanSlot),
 	}
 }
 
@@ -239,6 +253,9 @@ func (a *Adapter) Subscribe(ctx context.Context) (<-chan ports.TransportEvent, e
 				if a.deliverProgress(ev) {
 					continue
 				}
+				if a.deliverFound(ev) {
+					continue
+				}
 				select {
 				case out <- ports.TransportEvent{
 					Ref:     ev.Ref,
@@ -254,6 +271,74 @@ func (a *Adapter) Subscribe(ctx context.Context) (<-chan ports.TransportEvent, e
 		}
 	}()
 	return out, nil
+}
+
+// DiscoverCommissionable implements ports.CommissionableDiscoverer.
+// A plugin that does not answer adapter.discoverCommissionable
+// surfaces as method-unsupported, which the caller can differentiate
+// from a real failure.
+func (a *Adapter) DiscoverCommissionable(ctx context.Context, window time.Duration) (<-chan ports.CommissionableDevice, error) {
+	scanID := sidecar.NewID()
+	out := make(chan ports.CommissionableDevice, 16)
+
+	a.scanMu.Lock()
+	a.scans[scanID] = scanSlot{ch: out}
+	a.scanMu.Unlock()
+
+	// Fire the RPC in the background so callers can start reading
+	// immediately. The response fires when the scan window ends or the
+	// plugin fails — either way we close the channel.
+	go func() {
+		defer func() {
+			// Same rationale as Commission's teardown delay: pushes
+			// travel through client.Pushes()'s fan-out asynchronously,
+			// and closing the scan slot the instant Call returns loses
+			// the last few finds. A short grace gives the fan-out
+			// time to drain.
+			time.Sleep(50 * time.Millisecond)
+			a.scanMu.Lock()
+			delete(a.scans, scanID)
+			a.scanMu.Unlock()
+			close(out)
+		}()
+		var res DiscoverCommissionableResult
+		err := a.client.Call(ctx, MethodDiscoverCommissionable, DiscoverCommissionableParams{
+			TimeoutMs: window.Milliseconds(),
+			ScanID:    scanID,
+		}, &res)
+		if err != nil {
+			a.log.Warn("bridge: discoverCommissionable failed", "err", err)
+		}
+	}()
+	return out, nil
+}
+
+// deliverFound routes a commissionable_found event to the matching
+// scan channel and returns true so the Subscribe fan-out doesn't
+// re-emit it as a TransportEvent. A find with no matching scan is a
+// late arrival from a scan that already closed — silently drop it.
+func (a *Adapter) deliverFound(ev EventPayload) bool {
+	if ev.Kind != KindCommissionableFound || ev.Found == nil {
+		return false
+	}
+	a.scanMu.Lock()
+	slot, ok := a.scans[ev.Found.ScanID]
+	a.scanMu.Unlock()
+	if !ok {
+		return true
+	}
+	select {
+	case slot.ch <- ports.CommissionableDevice{
+		Ref:           ev.Found.Ref,
+		Name:          ev.Found.Name,
+		Type:          ev.Found.Type,
+		VendorID:      ev.Found.VendorID,
+		ProductID:     ev.Found.ProductID,
+		Discriminator: ev.Found.Discriminator,
+	}:
+	default:
+	}
+	return true
 }
 
 // Decommission removes a device from the plugin's fabric.
