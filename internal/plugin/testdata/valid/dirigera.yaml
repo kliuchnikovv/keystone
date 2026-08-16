@@ -1,0 +1,30 @@
+# Smallest useful manifest: a single Go binary, no sidecars, no config form.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: dirigera
+  displayName: IKEA DIRIGERA
+  version: 0.9.0
+  description: Direct LAN control of an IKEA DIRIGERA hub, no cloud round-trip.
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  category: transport
+  tags: [ikea, dirigera, zigbee]
+  trustTier: verified
+
+spec:
+  keystoneCoreMin: "0.5.0"
+
+  capabilities:
+    - transport.dirigera
+    - discover.mdns
+    - realtime.state-stream
+
+  permissions:
+    - network.lan
+    - secretstore.read: [dirigera.token]
+    - secretstore.write: [dirigera.token]
+
+  entrypoint:
+    exec: go/dirigera-plugin
+    args: ["--socket", "$KEYSTONE_PLUGIN_SOCKET"]

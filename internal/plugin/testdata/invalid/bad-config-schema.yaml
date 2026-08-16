@@ -1,0 +1,24 @@
+# The embedded config schema is an opaque string to yaml, so a broken one
+# would otherwise only surface when the settings form is rendered.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: bad-config
+  displayName: Bad Config
+  version: 1.0.0
+  description: Manifest whose embedded config schema is not valid JSON Schema.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: utility
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [utility.noop]
+  entrypoint:
+    exec: bin/demo
+  config:
+    schema: |
+      {
+        "type": "objekt",
+        "properties": {"apiKey": {"type": "string"}}
+      }

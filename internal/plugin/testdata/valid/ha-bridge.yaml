@@ -1,0 +1,70 @@
+# Heavyweight case: bundled Python runtime, large footprint, its own store.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: ha-bridge
+  displayName: Home Assistant Bridge
+  version: 0.4.1
+  description: |
+    Runs a headless Home Assistant Core as a sidecar and re-exports its
+    integrations as keystone devices. Powered by Home Assistant Core, Apache 2.0.
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  homepage: https://github.com/keystone/plugin-ha-bridge
+  category: transport
+  tags: [home-assistant, bridge, official]
+  trustTier: core
+
+spec:
+  keystoneCoreMin: "0.6.0"
+  keystoneCoreMax: "1.x"
+
+  capabilities:
+    - transport.ha-bridge
+    - discover.passive
+    - realtime.state-stream
+    - store.nested
+
+  permissions:
+    - network.lan
+    - network.internet
+    - storage.persistent
+    - process.spawn
+    - secretstore.read: [ha-bridge.long-lived-token]
+    - secretstore.write: [ha-bridge.long-lived-token]
+
+  resources:
+    memory: 512Mi
+    cpu: 500m
+    disk: 2Gi
+
+  entrypoint:
+    exec: go/ha-bridge-plugin
+    args: ["--socket", "$KEYSTONE_PLUGIN_SOCKET"]
+
+  sidecars:
+    - name: hass
+      exec: sidecars/hass/bin/hass
+      runtime: python312
+      args: ["--config", "$KEYSTONE_PLUGIN_DATA/config", "--skip-pip"]
+      env:
+        HASS_KEYSTONE_SOCKET: "$KEYSTONE_PLUGIN_DATA/hass.sock"
+        PYTHONUNBUFFERED: "1"
+      restart: always
+
+  config:
+    schema: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "haVersion": {"type": "string", "default": "2024.12"},
+          "exposeAll": {"type": "boolean", "default": false}
+        }
+      }
+
+ui:
+  customPages:
+    - path: store
+      title: Home Assistant integrations
+      source: ui/store.html

@@ -1,0 +1,19 @@
+# "autor" is a typo for "maintainer". Silently ignoring it would ship a plugin
+# with no contact, so additionalProperties is closed everywhere.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: typo
+  displayName: Typo
+  version: 1.0.0
+  description: Manifest with a misspelled field.
+  autor: someone <someone@example.org>
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: utility
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [utility.noop]
+  entrypoint:
+    exec: bin/typo

@@ -1,0 +1,18 @@
+# exec paths are resolved against the plugin directory; escaping it would let
+# a manifest point the supervisor at an arbitrary host binary.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: escapee
+  displayName: Escapee
+  version: 1.0.0
+  description: Manifest whose exec path climbs out of the plugin directory.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: utility
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [utility.noop]
+  entrypoint:
+    exec: ../../usr/bin/env

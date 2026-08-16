@@ -1,0 +1,2 @@
+6:3: metadata: missing properties 'license', 'trustTier'
+13:3: spec: missing property 'capabilities'

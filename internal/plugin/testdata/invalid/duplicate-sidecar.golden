@@ -1,0 +1,1 @@
+23:13: spec.sidecars[1].name: duplicate sidecar name "worker", already declared at spec.sidecars[0]

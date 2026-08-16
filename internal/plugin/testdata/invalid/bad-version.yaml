@@ -1,0 +1,17 @@
+# version must be full SemVer; "1.2" would break registry version ordering.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: loose-version
+  displayName: Loose Version
+  version: "1.2"
+  description: Manifest whose version is not SemVer.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: utility
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [utility.noop]
+  entrypoint:
+    exec: bin/loose

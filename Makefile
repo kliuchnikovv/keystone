@@ -1,6 +1,8 @@
-.PHONY: build build-grpc run test tidy fmt lint clean proto proto-check
+.PHONY: build build-grpc run test tidy fmt lint clean proto proto-check \
+	build-plugin-validate validate-manifests
 
 BINARY := bin/keystone
+PLUGIN_VALIDATE := bin/keystone-plugin-validate
 PROTO_SRC := $(shell find proto -name '*.proto' 2>/dev/null)
 PROTO_OUT := gen/go/keystone/v1
 
@@ -16,6 +18,16 @@ build-grpc: proto
 
 run: build
 	./$(BINARY)
+
+build-plugin-validate:
+	@mkdir -p bin
+	go build -o $(PLUGIN_VALIDATE) ./cmd/keystone-plugin-validate
+
+# Manifest gate for CI. Point it at plugin directories with MANIFESTS=...;
+# by default it re-checks the reference manifests shipped with the validator.
+MANIFESTS ?= internal/plugin/testdata/valid/*.yaml
+validate-manifests: build-plugin-validate
+	./$(PLUGIN_VALIDATE) $(MANIFESTS)
 
 test:
 	go test ./...

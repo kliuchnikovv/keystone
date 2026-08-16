@@ -1,0 +1,21 @@
+# Pre-v1 spelling: capabilities as single-key mappings. v1 uses the same
+# dotted ids as the sidecar hello handshake, so this must be rejected rather
+# than silently translated.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: legacy-caps
+  displayName: Legacy Capabilities
+  version: 1.0.0
+  description: Manifest using the old map-shaped capability list.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: transport
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities:
+    - transport: matter
+    - commission: qr-code
+  entrypoint:
+    exec: bin/legacy

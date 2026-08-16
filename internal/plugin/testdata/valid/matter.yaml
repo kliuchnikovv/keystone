@@ -1,0 +1,63 @@
+# Reference manifest — this is the plugin.yaml that keystone-plugin-matter
+# ships once Matter is extracted from the core (Phase C).
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: matter
+  displayName: Matter
+  version: 1.2.0
+  description: |
+    Multi-admin Matter controller via matter.js. Supports commissioning,
+    control, and subscription for lights, plugs, and sensors.
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  homepage: https://github.com/keystone/plugin-matter
+  category: transport
+  tags: [matter, thread, wifi, official]
+  trustTier: core
+
+spec:
+  keystoneCoreMin: "0.5.0"
+  keystoneCoreMax: "1.x"
+
+  capabilities:
+    - transport.matter
+    - discover.passive
+    - commission.setup-code
+    - commission.qr-code
+    - realtime.state-stream
+
+  permissions:
+    - network.lan
+    - network.multicast
+    - storage.persistent
+    - secretstore.read: [matter.fabric-key]
+    - secretstore.write: [matter.fabric-key]
+
+  resources:
+    memory: 256Mi
+    cpu: 100m
+    disk: 500Mi
+
+  entrypoint:
+    exec: go/matter-plugin
+    args: ["--socket", "$KEYSTONE_PLUGIN_SOCKET"]
+
+  sidecars:
+    - name: matter-server
+      exec: sidecars/matter-server/dist/index.js
+      runtime: node20
+      args: []
+      env:
+        KEYSTONE_MATTER_STORAGE: "$KEYSTONE_PLUGIN_DATA/matter-fabric"
+      restart: on-failure
+
+  config:
+    schema: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "fabricLabel": {"type": "string", "default": "Keystone"}
+        }
+      }

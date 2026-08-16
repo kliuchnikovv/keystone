@@ -1,0 +1,15 @@
+# Neither a process nor a ui: block — plugin-manager would have nothing to do.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: inert
+  displayName: Inert
+  version: 1.0.0
+  description: Manifest that declares no entrypoint and contributes no UI.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: utility
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [utility.noop]

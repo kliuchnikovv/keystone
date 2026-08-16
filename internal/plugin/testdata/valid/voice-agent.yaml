@@ -1,0 +1,72 @@
+# Several sidecars at once, a dependency on another plugin, and a config form.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: voice-agent
+  displayName: Voice Agent
+  version: 0.3.0-beta.2
+  description: Local wake-word, speech-to-text and intent routing for spoken control.
+  maintainer: keystone team <core@keystone.io>
+  license: Apache-2.0
+  homepage: https://github.com/keystone/plugin-voice-agent
+  category: ai
+  tags: [voice, whisper, local]
+  trustTier: verified
+
+spec:
+  keystoneCoreMin: "0.7.0"
+  keystoneCoreMax: "1.2.x"
+
+  capabilities:
+    - agent.voice
+    - realtime.state-stream
+
+  dependsOn:
+    - matter
+
+  permissions:
+    - audio.capture
+    - storage.persistent
+    - state.read
+    - action.invoke
+
+  resources:
+    memory: 1Gi
+    cpu: "2"
+    disk: 4Gi
+
+  entrypoint:
+    exec: go/voice-agent
+    args: ["--socket", "$KEYSTONE_PLUGIN_SOCKET"]
+    env:
+      VOICE_AGENT_MODELS: "$KEYSTONE_PLUGIN_DATA/models"
+
+  sidecars:
+    - name: wakeword
+      exec: sidecars/wakeword/wakeword
+      runtime: native
+      restart: always
+    - name: whisper
+      exec: sidecars/whisper/serve.py
+      runtime: python311
+      args: ["--model", "small"]
+      env:
+        WHISPER_CACHE: "$KEYSTONE_PLUGIN_DATA/whisper"
+      restart: on-failure
+    - name: intent-router
+      exec: sidecars/intent-router/dist/index.js
+      runtime: node22
+      restart: never
+
+  config:
+    schema: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "required": ["language"],
+        "properties": {
+          "language": {"type": "string", "enum": ["en", "ru", "de"], "default": "en"},
+          "wakeWord": {"type": "string", "default": "hey keystone"},
+          "sensitivity": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.5}
+        }
+      }

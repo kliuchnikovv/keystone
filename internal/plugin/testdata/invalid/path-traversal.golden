@@ -1,0 +1,1 @@
+18:11: spec.entrypoint.exec: exec path "../../usr/bin/env" must stay inside the plugin directory

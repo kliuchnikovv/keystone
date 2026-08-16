@@ -1,0 +1,2 @@
+18:7: spec.capabilities[0]: got object, want string
+19:7: spec.capabilities[1]: got object, want string

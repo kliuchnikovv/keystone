@@ -1,0 +1,15 @@
+# Several required fields absent at once: the report must list all of them,
+# each pointing at the block it is missing from.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: sparse
+  displayName: Sparse
+  version: 1.0.0
+  description: Manifest missing trustTier, license and capabilities.
+  maintainer: someone <someone@example.org>
+  category: utility
+spec:
+  keystoneCoreMin: "0.5.0"
+  entrypoint:
+    exec: bin/sparse

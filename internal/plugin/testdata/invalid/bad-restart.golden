@@ -1,0 +1,1 @@
+22:16: spec.sidecars[0].restart: value must be one of 'always', 'on-failure', 'never'

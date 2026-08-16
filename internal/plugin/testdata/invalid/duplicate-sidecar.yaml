@@ -1,0 +1,25 @@
+# Sidecar names key their data dir, logs and health entries, so they must be
+# unique within a plugin.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: twins
+  displayName: Twins
+  version: 1.0.0
+  description: Manifest declaring two sidecars under the same name.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: transport
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [transport.demo]
+  entrypoint:
+    exec: bin/demo
+  sidecars:
+    - name: worker
+      exec: sidecars/worker-a/index.js
+      runtime: node20
+    - name: worker
+      exec: sidecars/worker-b/index.js
+      runtime: node20

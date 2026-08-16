@@ -1,0 +1,22 @@
+# "sometimes" is not a supervisor policy; §5 allows always/on-failure/never.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: bad-restart
+  displayName: Bad Restart
+  version: 1.0.0
+  description: Manifest with an unknown sidecar restart policy.
+  maintainer: someone <someone@example.org>
+  license: MIT
+  category: transport
+  trustTier: experimental
+spec:
+  keystoneCoreMin: "0.5.0"
+  capabilities: [transport.demo]
+  entrypoint:
+    exec: bin/demo
+  sidecars:
+    - name: helper
+      exec: sidecars/helper/index.js
+      runtime: node20
+      restart: sometimes

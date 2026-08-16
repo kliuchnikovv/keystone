@@ -1,0 +1,1 @@
+20:13: spec.config.schema: config schema is not a valid JSON Schema: at '/type': value must be one of 'array', 'boolean', 'integer', 'null', 'number', 'object', 'string'

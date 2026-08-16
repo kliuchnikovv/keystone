@@ -1,0 +1,40 @@
+# UI-only plugin: no process of its own, so no spec.entrypoint. It is valid
+# precisely because it contributes a top-level ui: block instead.
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: energy-dashboard
+  displayName: Energy Dashboard
+  version: 0.2.3
+  description: Consumption charts and cost breakdown for power-metering devices.
+  maintainer: community <hi@example.org>
+  license: MIT
+  category: ui
+  tags: [energy, dashboard, charts]
+  trustTier: experimental
+
+spec:
+  keystoneCoreMin: "0.6.0"
+
+  capabilities:
+    - ui.custom-page
+    - ui.device-card
+
+  permissions:
+    - state.read
+
+ui:
+  customPages:
+    - path: energy
+      title: Energy
+      icon: chart-line
+      source: ui/energy.html
+  deviceCard:
+    - matchFeature: power_meter
+      element: ks-energy-card
+      source: ui/energy-card.js
+  i18n:
+    default: en
+    messages:
+      en: ui/i18n/en.json
+      ru: ui/i18n/ru.json
