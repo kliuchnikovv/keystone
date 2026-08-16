@@ -1,0 +1,22 @@
+apiVersion: keystone.plugin/v1
+kind: Plugin
+metadata:
+  name: {{.Name}}
+  displayName: {{.DisplayName}}
+  version: 0.1.0
+  description: |
+    {{.Description}}
+  maintainer: you <you@example.com>
+  license: Apache-2.0
+  category: transport
+  tags: [{{.Transport}}]
+  trustTier: experimental
+
+spec:
+  keystoneCoreMin: "0.5.0"
+
+  capabilities:
+    - transport.{{.Transport}}
+
+  entrypoint:
+    exec: bin/{{.Name}}-plugin

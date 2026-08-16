@@ -1,0 +1,22 @@
+# {{.DisplayName}}
+
+{{.Description}}
+
+## Develop
+
+```
+keystone-plugin test    # validate manifest + run go test ./...
+keystone-plugin build   # produce bin/{{.Name}}-plugin
+keystone-plugin publish # pack into {{.Name}}-<version>.tgz
+```
+
+## Install locally
+
+Drop the built binary and `plugin.yaml` into keystone's `-plugins-dir`,
+then `POST /plugins/{{.Name}}/enable`.
+
+## Contract
+
+The plugin implements `ports.Adapter` — see
+`internal/{{.Name}}/adapter.go`. Everything else (wire, event pump,
+progress) is the SDK's problem.

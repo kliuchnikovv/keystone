@@ -1,0 +1,11 @@
+module {{.Module}}
+
+go 1.23
+
+// The SDK, sidecar-protocol, and domain types the scaffold imports live
+// in these two modules. Bump the versions when you upgrade — semver
+// contracts apply.
+require (
+	github.com/kliuchnikovv/keystone v0.0.0
+	github.com/kliuchnikovv/keystone-api/sidecar v0.0.0
+)
