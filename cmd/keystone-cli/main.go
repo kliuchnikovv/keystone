@@ -29,6 +29,12 @@ Groups:
   system     Daemon health and info
   self       This CLI's version
   stream     Follow the live event stream (NDJSON)
+  rule       List / get / create / delete / enable / disable / history / validate
+  room       List / create / rename / delete / devices
+  scene      List / create / apply / delete
+  config     Get / set / unset / validate
+  store      Browse / search / info / tap / untap / taps / categories
+  secret     Set (stdin) / unset / list / rotate
 
 Global flags:
   --host <url>         keystone HTTP endpoint (default $KEYSTONE_HOST or http://localhost:7777)
@@ -70,6 +76,18 @@ func main() {
 		cli.Exit(cli.SelfRoot(args))
 	case "stream":
 		cli.Exit(cli.StreamRoot(args))
+	case "rule":
+		cli.Exit(cli.RuleRoot(args))
+	case "room":
+		cli.Exit(cli.RoomRoot(args))
+	case "scene":
+		cli.Exit(cli.SceneRoot(args))
+	case "config":
+		cli.Exit(cli.ConfigRoot(args))
+	case "store":
+		cli.Exit(cli.StoreRoot(args))
+	case "secret":
+		cli.Exit(cli.SecretRoot(args))
 
 	case "help", "--help", "-h":
 		fmt.Println(usage)
