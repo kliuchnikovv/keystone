@@ -2,6 +2,7 @@ package dirigera
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,13 +13,8 @@ import (
 	"github.com/kliuchnikovv/keystone/internal/ports"
 )
 
-// Adapter implements ports.Adapter on top of a DIRIGERA HTTP client.
-//
-// Realtime updates are intentionally out of scope for v0: DIRIGERA's
-// WebSocket stream needs a separate goroutine and a small routing
-// table, and its absence does not prevent commissioning, control, or
-// state reads. Subscribe currently emits only the adapter status
-// change on Start/Stop so subscribers can tell "hub down" from "quiet".
+// Adapter implements ports.Adapter on top of a DIRIGERA HTTP client
+// and its WebSocket event stream.
 type Adapter struct {
 	client *Client
 	log    *slog.Logger
@@ -27,6 +23,9 @@ type Adapter struct {
 	events   chan ports.TransportEvent
 	started  bool
 	stopping chan struct{}
+	// wsCancel stops the WatchEvents goroutine when the adapter
+	// stops. Nil before Start and after Stop.
+	wsCancel context.CancelFunc
 }
 
 // New builds an Adapter around a preconfigured Client.
@@ -49,6 +48,12 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.events = make(chan ports.TransportEvent, 32)
 	a.stopping = make(chan struct{})
 	a.started = true
+
+	// Own our own context for the WS goroutine so Stop can cancel it
+	// without touching whatever context Start was called with.
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	a.wsCancel = wsCancel
+
 	// Cheap health probe: a single ListDevices confirms the token and
 	// TLS pinning both work. A failure here is not fatal — the hub may
 	// come online later — so we publish adapter_status=false and let
@@ -57,9 +62,19 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if _, err := a.client.ListDevices(ctx); err != nil {
 		a.log.Warn("dirigera: initial probe failed — hub reachable later?", "err", err)
 		a.publish(ctx, ports.TransportEvent{Kind: ports.TransportEventAdapterStatus, Value: false})
+	} else {
+		a.publish(ctx, ports.TransportEvent{Kind: ports.TransportEventAdapterStatus, Value: true})
+	}
+
+	// Open the realtime stream. The WS goroutine reconnects with
+	// backoff on its own, so a hub that becomes reachable later
+	// starts feeding events without a plugin restart.
+	stream, err := a.client.WatchEvents(wsCtx, a.log)
+	if err != nil {
+		a.log.Warn("dirigera: watchEvents failed", "err", err)
 		return nil
 	}
-	a.publish(ctx, ports.TransportEvent{Kind: ports.TransportEventAdapterStatus, Value: true})
+	go a.forwardEvents(wsCtx, stream)
 	return nil
 }
 
@@ -71,10 +86,72 @@ func (a *Adapter) Stop(_ context.Context) error {
 	if !a.started {
 		return nil
 	}
+	if a.wsCancel != nil {
+		a.wsCancel()
+		a.wsCancel = nil
+	}
 	close(a.stopping)
 	close(a.events)
 	a.started = false
 	return nil
+}
+
+// forwardEvents translates hub WebSocket frames into ports.TransportEvent
+// values and publishes them on the adapter's event channel. Runs for
+// the life of the WS goroutine (which owns its own reconnect logic).
+func (a *Adapter) forwardEvents(ctx context.Context, stream <-chan Event) {
+	for ev := range stream {
+		switch ev.Type {
+		case "deviceStateChanged":
+			var payload DeviceStateChanged
+			if err := json.Unmarshal(ev.Data, &payload); err != nil {
+				a.log.Debug("dirigera: bad deviceStateChanged payload", "err", err)
+				continue
+			}
+			for attr, value := range payload.Attributes {
+				feature, key, ok := featureKeyFor(attr)
+				if !ok {
+					continue
+				}
+				a.publish(ctx, ports.TransportEvent{
+					Ref:     domain.TransportRef(payload.ID),
+					Kind:    ports.TransportEventStateChanged,
+					Feature: feature,
+					Key:     string(key),
+					Value:   value,
+				})
+			}
+		case "deviceAdded":
+			var payload struct{ ID string `json:"id"` }
+			if err := json.Unmarshal(ev.Data, &payload); err == nil && payload.ID != "" {
+				a.publish(ctx, ports.TransportEvent{
+					Ref:  domain.TransportRef(payload.ID),
+					Kind: ports.TransportEventAdded,
+				})
+			}
+		case "deviceRemoved":
+			var payload struct{ ID string `json:"id"` }
+			if err := json.Unmarshal(ev.Data, &payload); err == nil && payload.ID != "" {
+				a.publish(ctx, ports.TransportEvent{
+					Ref:  domain.TransportRef(payload.ID),
+					Kind: ports.TransportEventRemoved,
+				})
+			}
+		}
+	}
+}
+
+// featureKeyFor is the reverse of attributeFor: given a DIRIGERA
+// attribute name, return the (feature, key) tuple the core expects,
+// or false if this attribute has no mapping today.
+func featureKeyFor(attr string) (domain.FeatureKey, domain.StateKey, bool) {
+	switch attr {
+	case "isOn":
+		return domain.FeatureOnOff, domain.StateOnOff, true
+	case "lightLevel":
+		return domain.FeatureBrightness, domain.StateLevel, true
+	}
+	return "", "", false
 }
 
 // Discover reports every device the hub currently knows about.
