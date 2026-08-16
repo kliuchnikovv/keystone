@@ -83,8 +83,15 @@ func runStubAdapter() {
 // gives us a live sidecar.Client without pulling in supervisor+manager.
 func startStub(t *testing.T) (*sidecar.Client, func()) {
 	t.Helper()
-	dir := t.TempDir()
-	socket := filepath.Join(dir, "socket")
+	// Darwin caps Unix socket paths at 104 chars, so t.TempDir() (which
+	// embeds the full test name) can exceed the limit for long test
+	// names. A short prefix here keeps every case comfortably under.
+	dir, err := os.MkdirTemp("", "ks-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, os.Args[0])

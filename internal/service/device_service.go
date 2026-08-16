@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/kliuchnikovv/keystone/internal/domain"
@@ -21,7 +22,11 @@ type DeviceService struct {
 	log      *slog.Logger
 	registry *registry.Registry
 	bus      ports.EventBus
-	adapters map[domain.TransportKind]ports.Adapter
+
+	// adapters is guarded by adaptersMu — a plugin coming up at runtime
+	// races with in-flight HTTP calls that resolve their transport here.
+	adaptersMu sync.RWMutex
+	adapters   map[domain.TransportKind]ports.Adapter
 
 	// confirms watches that commands actually changed something. Accepting a
 	// command and acting on it are different things in Matter, and only the
@@ -49,6 +54,37 @@ func NewDeviceService(log *slog.Logger, reg *registry.Registry, bus ports.EventB
 // shutdown so a timer cannot fire into a closed bus.
 func (s *DeviceService) StopConfirmations() { s.confirms.stop() }
 
+// adapterFor returns the adapter for a transport kind, or (nil, false).
+// All lookups go through here so the RWMutex stays honest.
+func (s *DeviceService) adapterFor(kind domain.TransportKind) (ports.Adapter, bool) {
+	s.adaptersMu.RLock()
+	a, ok := s.adapters[kind]
+	s.adaptersMu.RUnlock()
+	return a, ok
+}
+
+// RegisterAdapter adds an adapter at runtime. Fails if another adapter for
+// the same transport kind is already registered — a plugin should never
+// silently replace a live one.
+func (s *DeviceService) RegisterAdapter(a ports.Adapter) error {
+	s.adaptersMu.Lock()
+	defer s.adaptersMu.Unlock()
+	kind := a.Kind()
+	if _, exists := s.adapters[kind]; exists {
+		return fmt.Errorf("adapter for transport %q already registered", kind)
+	}
+	s.adapters[kind] = a
+	return nil
+}
+
+// UnregisterAdapter removes an adapter, e.g. when its owning plugin is
+// disabled. No-op when the kind is not registered.
+func (s *DeviceService) UnregisterAdapter(kind domain.TransportKind) {
+	s.adaptersMu.Lock()
+	delete(s.adapters, kind)
+	s.adaptersMu.Unlock()
+}
+
 // List returns every device currently in the registry.
 func (s *DeviceService) List() []*domain.Device {
 	return s.registry.List()
@@ -72,7 +108,7 @@ func (s *DeviceService) Get(id domain.DeviceID) (*domain.Device, error) {
 // Commission asks the specified transport to add a new device, then
 // registers it locally.
 func (s *DeviceService) Commission(ctx context.Context, transport domain.TransportKind, req ports.CommissionRequest, name string, deviceType domain.DeviceType) (*domain.Device, error) {
-	adapter, ok := s.adapters[transport]
+	adapter, ok := s.adapterFor(transport)
 	if !ok {
 		return nil, fmt.Errorf("no adapter registered for transport %q", transport)
 	}
@@ -144,7 +180,7 @@ func (s *DeviceService) Decommission(ctx context.Context, id domain.DeviceID) er
 	if err != nil {
 		return err
 	}
-	adapter, ok := s.adapters[d.Transport]
+	adapter, ok := s.adapterFor(d.Transport)
 	if !ok {
 		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
@@ -168,7 +204,7 @@ func (s *DeviceService) DiscoverCommissionable(
 	transport domain.TransportKind,
 	window time.Duration,
 ) (<-chan ports.CommissionableDevice, error) {
-	adapter, ok := s.adapters[transport]
+	adapter, ok := s.adapterFor(transport)
 	if !ok {
 		return nil, fmt.Errorf("no adapter registered for transport %q", transport)
 	}
@@ -187,7 +223,7 @@ func (s *DeviceService) CameraStreamer(id domain.DeviceID) (ports.CameraStreamer
 	if err != nil {
 		return nil, nil, err
 	}
-	adapter, ok := s.adapters[d.Transport]
+	adapter, ok := s.adapterFor(d.Transport)
 	if !ok {
 		return nil, nil, fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
@@ -274,7 +310,7 @@ func (s *DeviceService) InvokeAction(ctx context.Context, id domain.DeviceID, fe
 	if err != nil {
 		return err
 	}
-	adapter, ok := s.adapters[d.Transport]
+	adapter, ok := s.adapterFor(d.Transport)
 	if !ok {
 		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
@@ -300,7 +336,7 @@ func (s *DeviceService) WriteState(ctx context.Context, id domain.DeviceID, feat
 	if err != nil {
 		return err
 	}
-	adapter, ok := s.adapters[d.Transport]
+	adapter, ok := s.adapterFor(d.Transport)
 	if !ok {
 		return fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}
@@ -369,7 +405,7 @@ func (s *DeviceService) ReadState(ctx context.Context, id domain.DeviceID, featu
 	if err != nil {
 		return nil, err
 	}
-	adapter, ok := s.adapters[d.Transport]
+	adapter, ok := s.adapterFor(d.Transport)
 	if !ok {
 		return nil, fmt.Errorf("no adapter registered for transport %q", d.Transport)
 	}

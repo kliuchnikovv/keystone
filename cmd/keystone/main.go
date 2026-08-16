@@ -17,8 +17,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/kliuchnikovv/keystone-api/sidecar"
 
 	"github.com/kliuchnikovv/keystone/internal/adapters/matter"
 	"github.com/kliuchnikovv/keystone/internal/adapters/virtual"
@@ -26,6 +29,8 @@ import (
 	"github.com/kliuchnikovv/keystone/internal/api/ws"
 	"github.com/kliuchnikovv/keystone/internal/domain"
 	"github.com/kliuchnikovv/keystone/internal/eventbus"
+	"github.com/kliuchnikovv/keystone/internal/plugin"
+	"github.com/kliuchnikovv/keystone/internal/plugin/bridge"
 	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
 	pluginregistry "github.com/kliuchnikovv/keystone/internal/plugin/registry"
 	"github.com/kliuchnikovv/keystone/internal/ports"
@@ -191,6 +196,8 @@ func main() {
 	// directory scan at startup — installed plugins are Discovered, not
 	// Running, until someone POSTs enable.
 	var pluginMgr *manager.Manager
+	pluginIngressCancels := make(map[string]context.CancelFunc)
+	var pluginIngressMu sync.Mutex
 	if *pluginsDir != "" {
 		reg := pluginregistry.New(*pluginsDir, log.With("component", "plugin-registry"))
 		m, err := manager.New(manager.Options{
@@ -198,6 +205,44 @@ func main() {
 			Logger:   log.With("component", "plugin-manager"),
 			OnPluginLog: func(name, stream, line string) {
 				log.Info("plugin log", "plugin", name, "stream", stream, "line", line)
+			},
+			OnEnable: func(startCtx context.Context, name string, mf *plugin.Manifest, client *sidecar.Client) error {
+				kind, err := transportKindFromManifest(mf)
+				if err != nil {
+					return err
+				}
+				bridgeAdapter := bridge.New(client, kind, log.With("component", "plugin-adapter", "plugin", name))
+				if err := bridgeAdapter.Start(startCtx); err != nil {
+					return fmt.Errorf("bridge start: %w", err)
+				}
+				if err := devSvc.RegisterAdapter(bridgeAdapter); err != nil {
+					_ = bridgeAdapter.Stop(context.Background())
+					return err
+				}
+				loopCtx, cancel := context.WithCancel(ctx)
+				pluginIngressMu.Lock()
+				pluginIngressCancels[name] = cancel
+				pluginIngressMu.Unlock()
+				go func() {
+					if err := devSvc.IngressLoop(loopCtx, bridgeAdapter); err != nil && !errors.Is(err, context.Canceled) {
+						log.Error("plugin ingress loop", "plugin", name, "err", err)
+					}
+				}()
+				log.Info("plugin adapter registered", "plugin", name, "transport", kind)
+				return nil
+			},
+			OnDisable: func(name string, mf *plugin.Manifest) {
+				pluginIngressMu.Lock()
+				cancel, ok := pluginIngressCancels[name]
+				delete(pluginIngressCancels, name)
+				pluginIngressMu.Unlock()
+				if ok {
+					cancel()
+				}
+				if kind, err := transportKindFromManifest(mf); err == nil {
+					devSvc.UnregisterAdapter(kind)
+					log.Info("plugin adapter unregistered", "plugin", name, "transport", kind)
+				}
 			},
 		})
 		if err != nil {
@@ -864,6 +909,31 @@ func handleListRuns(eng *rules.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"runs": eng.Runs(50)})
 	}
+}
+
+// transportKindFromManifest pulls the transport identifier from a plugin's
+// declared capabilities. The convention is exactly one "transport.<kind>"
+// entry — a plugin that advertises none has nothing to plug into the
+// adapter surface (it must be a pure service plugin), and one that
+// advertises several would leave the core guessing which one is primary.
+func transportKindFromManifest(mf *plugin.Manifest) (domain.TransportKind, error) {
+	if mf == nil {
+		return "", fmt.Errorf("nil manifest")
+	}
+	var found string
+	for _, cap := range mf.Spec.Capabilities {
+		if !strings.HasPrefix(cap, "transport.") {
+			continue
+		}
+		if found != "" {
+			return "", fmt.Errorf("manifest declares multiple transport capabilities: %s and %s", found, cap)
+		}
+		found = cap
+	}
+	if found == "" {
+		return "", fmt.Errorf("manifest has no transport.* capability")
+	}
+	return domain.TransportKind(strings.TrimPrefix(found, "transport.")), nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

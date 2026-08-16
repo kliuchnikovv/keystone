@@ -11,6 +11,7 @@ import (
 
 	"github.com/kliuchnikovv/keystone-api/sidecar"
 
+	pluginmf "github.com/kliuchnikovv/keystone/internal/plugin"
 	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
 	"github.com/kliuchnikovv/keystone/internal/plugin/registry"
 )
@@ -102,6 +103,81 @@ func TestManager_DiscoverEnableCallDisable(t *testing.T) {
 	st, _ = mgr.Get(name)
 	if st.State != manager.StateStopped {
 		t.Fatalf("expected stopped, got %s", st.State)
+	}
+}
+
+func TestManager_OnEnableDisableCallbacks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	root := t.TempDir()
+	name := "stub"
+	writeStubManifest(t, root, name, os.Args[0])
+
+	var enabled, disabled []string
+	mgr, err := manager.New(manager.Options{
+		Registry: registry.New(root, nil),
+		OnEnable: func(_ context.Context, n string, _ *pluginmf.Manifest, c *sidecar.Client) error {
+			if c == nil {
+				t.Fatal("OnEnable client was nil")
+			}
+			enabled = append(enabled, n)
+			return nil
+		},
+		OnDisable: func(n string, _ *pluginmf.Manifest) {
+			disabled = append(disabled, n)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := mgr.Enable(ctx, name); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if err := mgr.Disable(ctx, name); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0] != name {
+		t.Fatalf("OnEnable not fired: %v", enabled)
+	}
+	if len(disabled) != 1 || disabled[0] != name {
+		t.Fatalf("OnDisable not fired: %v", disabled)
+	}
+}
+
+func TestManager_OnEnableErrorRollsBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	root := t.TempDir()
+	name := "stub"
+	writeStubManifest(t, root, name, os.Args[0])
+
+	mgr, err := manager.New(manager.Options{
+		Registry: registry.New(root, nil),
+		OnEnable: func(_ context.Context, _ string, _ *pluginmf.Manifest, _ *sidecar.Client) error {
+			return fmt.Errorf("nope")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Discover(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := mgr.Enable(ctx, name); err == nil {
+		t.Fatal("Enable should have failed")
+	}
+	st, _ := mgr.Get(name)
+	if st.State != manager.StateFailed {
+		t.Fatalf("state should be Failed, got %s", st.State)
 	}
 }
 

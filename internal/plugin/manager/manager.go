@@ -48,6 +48,18 @@ type Options struct {
 	// OnPluginLog receives one log line at a time from each running
 	// plugin, tagged with the plugin name and stream. Nil discards.
 	OnPluginLog func(pluginName, stream, line string)
+
+	// OnEnable fires once a plugin's handshake completes. Returning a
+	// non-nil error rolls the enable back — the supervisor is stopped
+	// and the plugin lands in Failed. Used by the daemon to plug the
+	// plugin's client into service.DeviceService as an adapter.
+	OnEnable func(ctx context.Context, name string, manifest *plugin.Manifest, client *sidecar.Client) error
+
+	// OnDisable fires when a plugin transitions out of Running (Disable,
+	// Shutdown, or a Failed transition). Called with the manifest so the
+	// daemon can look the plugin's kind up again without touching the
+	// registry. Called after the supervisor is stopped.
+	OnDisable func(name string, manifest *plugin.Manifest)
 }
 
 // PluginStatus is the public view exposed via /plugins.
@@ -240,6 +252,17 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 		return err
 	}
 
+	if m.opts.OnEnable != nil {
+		if err := m.opts.OnEnable(ctx, name, r.entry.Manifest, client); err != nil {
+			// Roll back: the plugin process is up but the daemon refused
+			// to adopt it. Landing in Failed is the honest signal — the
+			// operator can retry after fixing the mount error.
+			_ = sv.Stop(context.Background())
+			m.markFailed(name, err)
+			return fmt.Errorf("manager: OnEnable %q: %w", name, err)
+		}
+	}
+
 	m.mu.Lock()
 	r = m.entries[name]
 	r.sv = sv
@@ -259,9 +282,11 @@ func (m *Manager) Disable(ctx context.Context, name string) error {
 		return fmt.Errorf("manager: unknown plugin %q", name)
 	}
 	sv := r.sv
+	wasRunning := r.state == StateRunning
+	manifest := r.entry.Manifest
 	r.sv = nil
 	r.client = nil
-	if r.state == StateRunning {
+	if wasRunning {
 		r.state = StateStopped
 	}
 	m.mu.Unlock()
@@ -269,7 +294,11 @@ func (m *Manager) Disable(ctx context.Context, name string) error {
 	if sv == nil {
 		return nil
 	}
-	return sv.Stop(ctx)
+	err := sv.Stop(ctx)
+	if wasRunning && m.opts.OnDisable != nil {
+		m.opts.OnDisable(name, manifest)
+	}
+	return err
 }
 
 // Shutdown disables every running plugin. Best-effort — errors are logged
