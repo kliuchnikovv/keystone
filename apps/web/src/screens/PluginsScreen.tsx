@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Download, Play, Square, RefreshCw, Settings, Trash2, Search } from 'lucide-react';
+import { ChevronLeft, Download, Play, Square, RefreshCw, Settings, Trash2, Search, Wand2 } from 'lucide-react';
 import styles from './PluginsScreen.module.css';
 import { Button } from '../components/Button/Button';
+import { ConfigFlow } from '../components/ConfigFlow/ConfigFlow';
 import { SchemaForm, type JSONSchema } from '../components/SchemaForm/SchemaForm';
 import {
   browseRegistry,
@@ -50,6 +51,7 @@ export function PluginsScreen() {
   const uninstallMut = useMutation({ mutationFn: uninstallPlugin, onSuccess: refresh });
 
   const [configOpen, setConfigOpen] = useState<string | null>(null);
+  const [flowOpen, setFlowOpen] = useState<string | null>(null);
 
   const installMut = useMutation({
     mutationFn: installPlugin,
@@ -93,6 +95,12 @@ export function PluginsScreen() {
                   onClose={() => setConfigOpen(null)}
                 />
               )}
+              {flowOpen === p.name && (
+                <ConfigFlow
+                  plugin={p.name}
+                  onClose={() => setFlowOpen(null)}
+                />
+              )}
               <div className={styles.rowActions}>
                 {p.state !== 'running' ? (
                   <Button
@@ -130,6 +138,16 @@ export function PluginsScreen() {
                     aria-label="Настройки"
                   >
                     <Settings size={14} />
+                  </Button>
+                )}
+                {p.state === 'running' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setFlowOpen(flowOpen === p.name ? null : p.name)}
+                    aria-label="Мастер настройки"
+                  >
+                    <Wand2 size={14} />
                   </Button>
                 )}
                 <Button

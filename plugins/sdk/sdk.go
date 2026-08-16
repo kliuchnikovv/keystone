@@ -62,6 +62,12 @@ type Options struct {
 	// sidecar.Error can omit this.
 	ErrorMapper ErrorMapper
 
+	// ConfigFlow, when non-nil, wires the Layer 2 setup wizard. The
+	// SDK registers adapter.configFlow so /plugins/{name}/flow
+	// posts land here. A plugin that returns nil skips the wizard —
+	// the UI falls back to the Layer 1 auto-form.
+	ConfigFlow func(ctx context.Context, req bridge.ConfigFlowRequest) (*bridge.ConfigFlowStep, error)
+
 	// Logger defaults to a stderr JSON handler at info.
 	Logger *slog.Logger
 }
@@ -86,6 +92,19 @@ func Run(ctx context.Context, opts Options) error {
 
 	mux := sidecar.NewMux()
 	registerHandlers(mux, opts.Adapter, opts.ErrorMapper, log)
+	if opts.ConfigFlow != nil {
+		mux.Handle(bridge.MethodConfigFlow, sidecar.HandlerFunc(func(ctx context.Context, r *sidecar.Request) (any, error) {
+			var req bridge.ConfigFlowRequest
+			if err := r.Bind(&req); err != nil {
+				return nil, err
+			}
+			step, err := opts.ConfigFlow(ctx, req)
+			if err != nil {
+				return nil, mapErr(opts.ErrorMapper, err)
+			}
+			return step, nil
+		}))
+	}
 
 	po := sidecar.PluginOptions{
 		Name:         opts.Name,

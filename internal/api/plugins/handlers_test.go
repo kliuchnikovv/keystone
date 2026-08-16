@@ -90,6 +90,9 @@ func (s *stubManager) Uninstall(_ context.Context, name string) error {
 func (s *stubManager) BrowseRegistry(_ context.Context, _ string) (*store.Index, error) {
 	return &store.Index{Plugins: map[string]store.PluginEntry{}}, nil
 }
+func (s *stubManager) ConfigFlow(_ context.Context, _ string, _ []byte) ([]byte, error) {
+	return []byte(`{"type":"complete"}`), nil
+}
 
 func newServer(mgr plugins.Manager) *httptest.Server {
 	mux := http.NewServeMux()

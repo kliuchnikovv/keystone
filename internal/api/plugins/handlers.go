@@ -48,6 +48,12 @@ type Manager interface {
 	// BrowseRegistry fetches a registry's index so the store UI can
 	// list what is available.
 	BrowseRegistry(ctx context.Context, url string) (*store.Index, error)
+
+	// ConfigFlow drives the Layer 2 setup wizard. body is the
+	// JSON-encoded ConfigFlowRequest; the reply is the JSON of the
+	// plugin's ConfigFlowStep, forwarded raw so the client and
+	// plugin share a schema without a translation layer.
+	ConfigFlow(ctx context.Context, name string, body []byte) ([]byte, error)
 }
 
 // Register attaches the /plugins/* routes to mux.
@@ -64,6 +70,30 @@ func Register(mux *http.ServeMux, mgr Manager) {
 	mux.HandleFunc("POST /plugins/install", installHandler(mgr))
 	mux.HandleFunc("DELETE /plugins/{name}", uninstallHandler(mgr))
 	mux.HandleFunc("GET /plugins/registry", browseHandler(mgr))
+	mux.HandleFunc("POST /plugins/{name}/flow", flowHandler(mgr))
+}
+
+func flowHandler(mgr Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if _, ok := mgr.Get(name); !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "plugin not found"})
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "reading body: " + err.Error()})
+			return
+		}
+		step, err := mgr.ConfigFlow(r.Context(), name, body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(step)
+	}
 }
 
 func browseHandler(mgr Manager) http.HandlerFunc {

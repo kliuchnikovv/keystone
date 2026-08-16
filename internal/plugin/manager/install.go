@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -75,6 +76,26 @@ func (m *Manager) checkRegistryAllowlist(url string) error {
 		}
 	}
 	return fmt.Errorf("manager: registry %q is not in TrustedRegistries", url)
+}
+
+// ConfigFlow forwards a Layer 2 wizard step to the running plugin
+// via the sidecar client. The core does not interpret the request or
+// response — session state is the plugin's problem — and passes JSON
+// through in both directions so schemas stay in one place.
+func (m *Manager) ConfigFlow(ctx context.Context, name string, body []byte) ([]byte, error) {
+	client := m.Client(name)
+	if client == nil {
+		return nil, fmt.Errorf("manager: plugin %q is not running", name)
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("manager: parse flow request: %w", err)
+	}
+	var resp json.RawMessage
+	if err := client.Call(ctx, "adapter.configFlow", req, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // BrowseRegistry fetches a registry's index so the store UI can list

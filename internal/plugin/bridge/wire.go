@@ -196,6 +196,88 @@ const (
 	MethodCameraStop          = "adapter.camera.stop"
 )
 
+// MethodConfigFlow drives Layer 2 setup wizards. The plugin returns
+// the next step to render given the current step id and the data
+// the user submitted. The core is a thin proxy — session state
+// lives in the plugin.
+const MethodConfigFlow = "adapter.configFlow"
+
+// ConfigFlowRequest is what /plugins/{name}/flow POSTs. Step is the
+// id the plugin sent last (or "init" on the first call); Data is
+// whatever the user submitted on that step's UI.
+type ConfigFlowRequest struct {
+	Step string         `json:"step"`
+	Data map[string]any `json:"data,omitempty"`
+}
+
+// ConfigFlowStep is the plugin's reply. Type dispatches the UI:
+// info / form / oauth / qr-scan / progress / confirm / pick-device /
+// manual-action / error / complete. Not every field is used by every
+// type — the plugin sets what applies.
+type ConfigFlowStep struct {
+	// Type controls the renderer. Must be one of the step types
+	// listed in docs/plugin-ui-integration.md §4.3.
+	Type string `json:"type"`
+
+	// ID is what the client sends back as ConfigFlowRequest.Step
+	// on the next call. Empty when the flow has terminated.
+	ID string `json:"id,omitempty"`
+
+	// Next is the id the flow moves to when the user commits this
+	// step. Set on form / confirm / manual-action / qr-scan / pick-device.
+	Next string `json:"next,omitempty"`
+
+	// Human-facing title and body. Always safe to set.
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
+
+	// form: JSON Schema for the fields; the client renders with the
+	// same SchemaForm the plugin config uses.
+	Schema string `json:"schema,omitempty"`
+
+	// oauth: browser opens AuthURL; RedirectURI is where the
+	// provider redirects. The client captures the code from the
+	// redirect and posts it back as {code: "..."} for Next.
+	AuthURL     string `json:"authUrl,omitempty"`
+	RedirectURI string `json:"redirectUri,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+
+	// qr-scan: an optional hint for the client which QR format to
+	// expect (e.g. "matter" for MT: strings). Empty means any.
+	QRHint string `json:"qrHint,omitempty"`
+
+	// progress: 0..1 progress bar with a message. The client polls
+	// (or subscribes, when the push topic lands in a follow-on) to
+	// refresh.
+	Progress float64 `json:"progress,omitempty"`
+
+	// confirm: a plain accept/decline. Next fires on accept; Cancel
+	// (optional) fires on decline.
+	Cancel string `json:"cancel,omitempty"`
+
+	// pick-device: list of candidates the user picks from. Each
+	// entry's value is what lands in data[Field] for the Next call.
+	Field   string          `json:"field,omitempty"`
+	Options []ConfigFlowOpt `json:"options,omitempty"`
+
+	// manual-action: instruction plus a "Готово" button that
+	// commits to Next.
+	Instruction string `json:"instruction,omitempty"`
+
+	// error: red icon, message, optional Retry step id.
+	Message string `json:"message,omitempty"`
+	Retry   string `json:"retry,omitempty"`
+
+	// complete: message shown to the user before the wizard closes.
+}
+
+// ConfigFlowOpt is one entry in a pick-device or select field.
+type ConfigFlowOpt struct {
+	Label       string `json:"label"`
+	Value       string `json:"value"`
+	Description string `json:"description,omitempty"`
+}
+
 // KindCameraSignal is a bridge-only event kind for one WebRTC
 // signalling frame — the camera's SDP answer, its ICE candidates, or
 // an "end" marker with a reason.

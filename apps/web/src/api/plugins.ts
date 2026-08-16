@@ -97,3 +97,57 @@ export function putPluginConfig(name: string, value: unknown): Promise<unknown> 
     body: JSON.stringify(value),
   });
 }
+
+// Layer 2 — Config Flow wizard. State is client-driven: on the first
+// step the client sends {step: "init", data: {}}; subsequent calls
+// echo whatever ConfigFlowStep.next the plugin returned and carry
+// the user's submitted data.
+export type ConfigFlowStepType =
+  | 'info'
+  | 'form'
+  | 'oauth'
+  | 'qr-scan'
+  | 'progress'
+  | 'confirm'
+  | 'pick-device'
+  | 'manual-action'
+  | 'error'
+  | 'complete';
+
+export interface ConfigFlowOption {
+  label: string;
+  value: string;
+  description?: string;
+}
+
+export interface ConfigFlowStep {
+  type: ConfigFlowStepType;
+  id?: string;
+  next?: string;
+  title?: string;
+  body?: string;
+  schema?: string;
+  authUrl?: string;
+  redirectUri?: string;
+  provider?: string;
+  qrHint?: string;
+  progress?: number;
+  cancel?: string;
+  field?: string;
+  options?: ConfigFlowOption[];
+  instruction?: string;
+  message?: string;
+  retry?: string;
+}
+
+export interface ConfigFlowRequest {
+  step: string;
+  data?: Record<string, unknown>;
+}
+
+export function configFlow(name: string, req: ConfigFlowRequest): Promise<ConfigFlowStep> {
+  return apiFetch<ConfigFlowStep>(`/plugins/${encodeURIComponent(name)}/flow`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}

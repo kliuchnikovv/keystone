@@ -427,6 +427,19 @@ func (a *Adapter) deliverSignal(ev EventPayload) bool {
 	return true
 }
 
+// ConfigFlow drives the plugin's setup wizard. The core is a
+// pass-through: it forwards the current step id and any data the
+// user submitted and returns whatever the plugin responds with. A
+// plugin that has no wizard returns method-unsupported and the UI
+// falls back to the Layer 1 auto-form.
+func (a *Adapter) ConfigFlow(ctx context.Context, req ConfigFlowRequest) (*ConfigFlowStep, error) {
+	var res ConfigFlowStep
+	if err := a.client.Call(ctx, MethodConfigFlow, req, &res); err != nil {
+		return nil, fmt.Errorf("bridge: %s: %w", MethodConfigFlow, err)
+	}
+	return &res, nil
+}
+
 // Decommission removes a device from the plugin's fabric.
 func (a *Adapter) Decommission(ctx context.Context, ref domain.TransportRef) error {
 	if err := a.client.Call(ctx, MethodDecommission, DecommissionParams{Ref: ref}, nil); err != nil {
