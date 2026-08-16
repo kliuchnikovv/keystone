@@ -22,9 +22,12 @@ import (
 
 	"github.com/kliuchnikovv/keystone/internal/adapters/matter"
 	"github.com/kliuchnikovv/keystone/internal/adapters/virtual"
+	pluginsapi "github.com/kliuchnikovv/keystone/internal/api/plugins"
 	"github.com/kliuchnikovv/keystone/internal/api/ws"
 	"github.com/kliuchnikovv/keystone/internal/domain"
 	"github.com/kliuchnikovv/keystone/internal/eventbus"
+	"github.com/kliuchnikovv/keystone/internal/plugin/manager"
+	pluginregistry "github.com/kliuchnikovv/keystone/internal/plugin/registry"
 	"github.com/kliuchnikovv/keystone/internal/ports"
 	"github.com/kliuchnikovv/keystone/internal/registry"
 	"github.com/kliuchnikovv/keystone/internal/rules"
@@ -39,6 +42,7 @@ func main() {
 	uiDir := flag.String("ui-dir", "./site", "directory served at /ui/ (dashboard + landing); empty to disable")
 	demo := flag.Bool("demo", true, "seed a virtual demo scene on first run")
 	matterAddr := flag.String("matter-sidecar", "", "matter.js sidecar URL (e.g. ws://localhost:5580); empty = disabled")
+	pluginsDir := flag.String("plugins-dir", "./keystone-data/plugins", "directory scanned for installed plugins; empty = disabled")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -181,6 +185,32 @@ func main() {
 		}
 	}()
 
+	// --- Plugin manager ---
+	// A disabled plugins dir leaves the manager nil; the HTTP routes stay
+	// off and the core behaves exactly as before. Enabling it costs one
+	// directory scan at startup — installed plugins are Discovered, not
+	// Running, until someone POSTs enable.
+	var pluginMgr *manager.Manager
+	if *pluginsDir != "" {
+		reg := pluginregistry.New(*pluginsDir, log.With("component", "plugin-registry"))
+		m, err := manager.New(manager.Options{
+			Registry: reg,
+			Logger:   log.With("component", "plugin-manager"),
+			OnPluginLog: func(name, stream, line string) {
+				log.Info("plugin log", "plugin", name, "stream", stream, "line", line)
+			},
+		})
+		if err != nil {
+			log.Error("plugin manager", "err", err)
+			os.Exit(1)
+		}
+		if err := m.Discover(); err != nil {
+			log.Warn("plugin discover", "err", err)
+		}
+		pluginMgr = m
+		defer m.Shutdown(context.Background())
+	}
+
 	// --- HTTP API ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +232,10 @@ func main() {
 	mux.HandleFunc("DELETE /rules/{id}", handleDeleteRule(engine))
 	mux.HandleFunc("GET /rules/runs", handleListRuns(engine))
 	mux.HandleFunc("GET /stream", ws.Handler(bus, log.With("component", "ws")))
+
+	if pluginMgr != nil {
+		pluginsapi.Register(mux, pluginMgr)
+	}
 
 	// Static UI (dashboard for testing, landing page).
 	// Served from a directory on disk so it can be edited without rebuilding.
