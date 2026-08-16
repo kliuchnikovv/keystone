@@ -8,3 +8,4 @@ keystone-data/
 matter-data/
 # Generated protobuf/gRPC stubs — regenerate with `make proto`.
 gen/
+node_modules/
