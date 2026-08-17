@@ -497,52 +497,69 @@ TypeScript-декларации публикуются вместе с design sy
 
 ## 8. Design System — детали
 
-Отдельный репозиторий `github.com/keystone/design-system`:
+Живёт как yarn workspace `packages/design/` в monorepo keystone — **не отдельная репа**, **не inline в apps/web**. Публикуется как npm package `@keystone/design` в общий scope `@keystone/*` (см. `plugin-store-architecture.md` §14 «npm scope и cross-repo publishing»).
 
 ```
-design-system/
-├── tokens/
-│   ├── tokens.css              # CSS custom properties
-│   ├── tokens.js               # JS export для программной сборки
-│   ├── tokens.figma.json       # Figma tokens plugin
-│   └── themes/
-│       ├── dark.css
-│       └── light.css
-├── components/
-│   ├── button.js
-│   ├── input.js
-│   ├── select.js
-│   ├── toggle.js
-│   ├── slider.js
-│   ├── icon.js
-│   ├── card.js
-│   ├── modal.js
-│   ├── toast.js
-│   ├── tabs.js
-│   ├── list.js
-│   ├── spinner.js
-│   ├── label.js
-│   ├── badge.js
-│   ├── color-picker.js
-│   ├── temperature-picker.js
-│   ├── time-picker.js
-│   ├── schedule-grid.js
-│   ├── device-icon.js
-│   ├── room-picker.js
-│   ├── feature-control.js
-│   └── ...
-├── deps/                       # vendored deps для CDN
-│   └── lit.js
-├── storybook/                  # интерактивная документация
-├── index.js                    # entry point для import maps
-├── package.json
-└── README.md
+keystone/                          (monorepo, yarn workspaces)
+├── package.json                    { "workspaces": ["apps/*", "packages/*"] }
+├── apps/
+│   └── web/                        deps: { "@keystone/design": "workspace:*" }
+└── packages/
+    └── design/
+        ├── package.json            name: "@keystone/design"
+        ├── tokens/
+        │   ├── tokens.css          CSS custom properties (единственный источник tokens)
+        │   ├── tokens.js           JS export для программной сборки
+        │   ├── tokens.figma.json   Figma tokens plugin (v0.2)
+        │   └── themes/
+        │       ├── dark.css        v0.1: базовая тема
+        │       └── light.css       v0.2 follow-up
+        ├── components/             Web Components на lit (см. scope ниже)
+        ├── utilities.css           .ks-label и другие CSS utility classes
+        ├── deps/lit.js             vendored для CDN
+        ├── storybook/              интерактивная документация
+        ├── index.js                entry point
+        └── README.md
 ```
 
-- Публикуется как npm package `@keystone/design` + CDN на `cdn.keystone.io/design/vX/`.
-- SemVer-версии, keystone-core bundles the exact minor version.
-- Backward compat в мажоре, breaking changes = major bump.
-- Storybook на `design.keystone.io` — reference для авторов, live playground.
+### 8.1 Scope v0.1
+
+Восемь Web Components + одна CSS utility class:
+
+- **Web Components:** `<ks-button>`, `<ks-toggle>`, `<ks-slider>`, `<ks-input>`, `<ks-chip>`, `<ks-icon>`, `<ks-section-header>`, `<ks-spinner>`
+- **Utility class:** `.ks-label` в `utilities.css` (11px + letter-spacing + uppercase + muted color — 4 CSS декларации не оправдывают shadow DOM)
+- **Формы:** `<ks-input>`, `<ks-toggle>`, `<ks-slider>` — form-associated через ElementInternals с самого начала (`static formAssociated = true`, `setFormValue`, `setValidity`). Retrofit позже = breaking change для существующих потребителей.
+- **Темы:** dark-only. `[data-theme="light"]` overrides — v0.2 follow-up.
+- **Типография:** 4 канонических размера из `ui-design-brief.md` §6. При миграции все font-size в apps/web (сейчас 14 разных значений) мапятся к ближайшему из 4.
+
+### 8.2 Обязательные consumer-migrations в apps/web
+
+Настоящий validator — не Storybook в изоляции, а живой `apps/web`. Пять consumer-мест, миграция которых входит в DoD v0.1:
+
+- **Toggle в DeviceTile** — сохранить zustand-selectors + optimistic-pending logic intact
+- **Slider в DeviceTile** — то же
+- **Chip в FoundDeviceItem**
+- **SectionHeader в DeviceDetailScreen + DeviceSettingsSection**
+- **Button + Input в AddDeviceScreen** (setup-code flow)
+
+Остальные использования — только token-migration через `--ks-*`, без принудительной замены React-компонент.
+
+### 8.3 v0.2+ backlog
+
+Не входят в v0.1, добавляются волной когда появятся конкретные плагин-потребители:
+
+- `<ks-card>` — после того как понятна факторизация DeviceTile/RoomTile
+- `<ks-select>`, `<ks-modal>`, `<ks-toast>`, `<ks-tabs>`, `<ks-list>`, `<ks-badge>`, `<ks-tooltip>`
+- Domain-specific: `<ks-color-picker>`, `<ks-temperature-picker>`, `<ks-time-picker>`, `<ks-schedule-grid>`, `<ks-device-icon>`, `<ks-room-picker>`, `<ks-feature-control>`
+- Light theme (`[data-theme="light"]` overrides)
+- Figma tokens sync (`tokens.figma.json`)
+
+### 8.4 Дистрибуция
+
+- **Публикация:** `yarn publish` из `packages/design/` при tag'е → npm package `@keystone/design`. CI-задача (post-Phase G).
+- **CDN:** `cdn.keystone.io/design/vX/` — mirror npm, для плагинов которые не билдят.
+- **SemVer:** major-версии несовместимы, minor+patch — backward-compatible. Deprecation window 2 major (см. §15).
+- **Storybook:** deploy на `design.keystone.io` (GitHub Pages из `packages/design/storybook/`).
 
 ## 9. Testing UI из плагина
 

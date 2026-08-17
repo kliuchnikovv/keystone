@@ -1,116 +1,83 @@
 # Keystone — статус
 
-**Дата:** 2026-08-17
+**Дата:** 2026-08-16
 **Обновляется** на переходах между фазами, а не при каждом коммите.
 
 **Куда смотреть за деталями:**
 - Задачи по фазам → https://github.com/users/kliuchnikovv/projects/5
-- Author-facing docs → `docs/portal/README.md`
 - Архитектура → `docs/plugin-store-architecture.md`, `docs/sidecar-protocol-v1.md`, `docs/plugin-ui-integration.md`, `docs/plugin-sdk-guide.md`, `docs/keystone-cli-spec.md`
 - Технический прогресс → `git log`, PR'ы
 - Что не работает в Matter → `docs/matter-implementation-gaps.md`
+- Developer portal → `docs/portal/`
 
 ---
 
 ## 0. TL;DR
 
-**Phase B–G closed.** Plugin runtime, store с sigstore-keyless-подписью через TUF, SDK+CLI, четыре слоя UI runtime и author-facing docs portal — всё поднято end-to-end. Ветка `plugin/manifest-v1` содержит 57 коммитов над `master`, всё запушено. Осталось живое железо для верификации `plugins/matter` + Phase F (HA Bridge) + `[CLI] keystone` command surface.
+**Phase B → K закрыты за одну волну.** 25 из 33 задач Done. Ядро плагин-архитектуры, Matter как out-of-process плагин, plugin store с полным Sigstore/Rekor/TUF-стеком, SDK + CLI, UI runtime Layer 1-4, developer portal, CLI command surface — всё в коммитах. Остались верификация Matter, HA Bridge, robustness-мелочи.
 
 ---
 
 ## 1. Что закрыто
 
-### Phase A — Matter hardening
+**Phase A — Matter hardening.** Realtime state via StateStream, reconnect + heartbeat, structured error taxonomy (7 ErrorKind), BasicInformation + DeviceTypeList, BLE transport + Wi-Fi credentials, Camera WebRTC, full device-type coverage через CSA data model generator, fabric hygiene, command confirmation. Детали и оставшиеся gaps — `docs/matter-implementation-gaps.md`.
 
-- ✅ Realtime state push, BasicInformation, reconnect/heartbeat, error taxonomy, Coverage wave 1 (+ bonus: valves / temp control / mode select / buttons / WebRTC camera).
+**Phase B — Plugin architecture.** Plugin manifest v1 schema + validator (`internal/plugin/`), plugin supervisor / registry / manager runtime lifecycle, `/plugins/*` HTTP API endpoints, bridge adapter (`ports.Adapter` поверх sidecar-plugin), declared sidecars + persistent enabled state, restart + tailable logs + validated config over HTTP.
 
-⚠️ В `In progress` на борде (нужна hardware-верификация):
-- Auto-subscribe after commission
-- Per-feature endpoint mapping
-- Read initial state after commission
+**Phase C — Matter extraction.** Matter вынесен в out-of-process плагин, in-tree Matter wiring убран из ядра, bridge extensions для commission progress / CommissionableDiscoverer / CameraStreamer.
 
-### Phase B — Plugin architecture (end-to-end)
+**Phase D — Store.** Store UI (browse registries + install), registry install/uninstall over HTTP, pluggable signing + SSRF hardening, полный Sigstore keyless + Rekor transparency log + SET-artifact binding, минимальный TUF-клиент для trust bundle, root rotation, 4 fail-open closures в TUF refresh/fetch.
 
-- ✅ **Sidecar Protocol v1** — отдельный репо `keystone-api` (private, есть на GitHub).
-- ✅ **Plugin manifest v1 + validator** — `internal/plugin/*`, JSON Schema, CLI.
-- ✅ **Plugin manager** — supervisor + registry + FSM + declared sidecars + persistent enabled state, `internal/plugin/{supervisor,registry,manager}`.
-- ✅ **HTTP `/plugins/*`** — list/get/enable/disable/restart/logs/config/install/discover/uninstall/registry/flow/ui, `internal/api/plugins`.
-- ✅ **Bridge** (`internal/plugin/bridge`) — реализация `ports.Adapter` поверх `*sidecar.Client`. Плюс `CommissionableDiscoverer` и `CameraStreamer` — оба опциональных интерфейса `ports.Adapter` работают через bridge.
-- ✅ **Extract Matter** — `plugins/matter/` работает как отдельный процесс; in-tree Matter из `cmd/keystone` удалён (`refactor(core): drop the in-tree Matter wiring`).
-- ✅ **UI Design System v0.1** (token layer) — `apps/web/src/theme/tokens.css` + 418 использований `--ks-*`.
+**Phase E — SDK + CLI dev.** `sdk-go` v0.1, reference plugin-dirigera с WebSocket realtime, CLI `keystone-plugin new/build/test/publish/install` с defense-in-depth.
 
-### Phase D — Store
+**Phase G-K — UI runtime.** Layer 1 config-flow auto-form из JSON Schema, Layer 2 wizard end-to-end, Layer 3 Web Components loader + `window.keystone`, Layer 4 iframe embed + postMessage bridge, plugins nav в home header.
 
-- ✅ **Git-based plugin registry** — HTTP client `internal/plugin/store`, index.json format, `POST /plugins/install` + `DELETE /plugins/{name}`.
-- ✅ **Signing** — трёхуровневый `Verifier` интерфейс:
-  - `SHA256Verifier` (default)
-  - `Ed25519Verifier` (detached sig под trusted public keys)
-  - `SigstoreVerifier` — Fulcio cert chain + SAN identity allowlist + signature over sha256 digest + Rekor SET binding + inclusion proof (verified checkpoint, не self-attested root) + artifact binding через hashedrekord body.
-- ✅ **TUF client** — `internal/plugin/store/tuf/`. Trusted-once initial root, atomic Refresh, cross-role integrity (timestamp→snapshot→targets), rollback защита, expiry re-check, length + sha256 gates, **root rotation** (rolling-key chain: current-root sig + self-sig + strict N+1 version + 128 step backstop).
-- ✅ **SSRF hardening** — `TrustedRegistries` allowlist + scheme+host validation + IP resolution refusing private/link-local/loopback (кроме explicit loopback base).
-- ✅ **Store UI** (React) — browse registry + install / enable / disable / restart / uninstall / logs / config + nav-link из HomeScreen.
-- ✅ **Config-flow parser Layer 1** — `SchemaForm` компонент.
+**CLI — Phase 1-2.** Base command surface (plugin/device/system/self/stream), full surface (rule/room/scene/config/store/secret).
 
-### Phase E — SDK
-
-- ✅ **`sdk-go v0.1`** — `plugins/sdk` — обёртка вокруг `sidecar.RunPlugin`, автоматическая регистрация 8 базовых методов + опциональные `CommissionableDiscoverer`/`CameraStreamer`, `Options.ConfigFlow` handler, `LoadConfig`, `ErrorMapper`.
-- ✅ **CLI `keystone-plugin`** — `new/build/test/install/publish` — embedded templates, tarball round-trip с exec-битом, `--reload http://...` для discover после install, defense-in-depth path safety.
-- ✅ **Reference plugin: `plugin-dirigera`** — HTTPS REST client с TLS pinning (CA PEM или SHA-256 fingerprint, **не** `InsecureSkipVerify`), WebSocket realtime → `TransportEvent`, error mapping в sidecar codes.
-- ✅ **Docs portal** — 7 chapters plain markdown в `docs/portal/`: quick start / manifest / SDK / UI layers / publishing / security. Всё против реального кода в дереве.
-
-### Phase G — UI runtime (все 4 слоя)
-
-- ✅ **Layer 1** — JSON Schema → auto-form (`SchemaForm`).
-- ✅ **Layer 2** — Declarative Config Flow — bridge method + `sdk.Options.ConfigFlow` handler + HTTP proxy + React wizard с 9 step types (info/form/oauth/qr-scan/progress/confirm/pick-device/manual-action/error/complete).
-- ✅ **Layer 3** — Web Components loader — `GET /plugins/{name}/ui/*` static serve (symlink-resolving path safety), `window.keystone` API, `PluginDetailSlot` монтирует custom element с валидацией tag name по WHATWG regex.
-- ✅ **Layer 4** — Iframe embed + postMessage bridge — `keystone-embed.js` bootstrap для плагина, `attachEmbedBridge` в parent, sandbox `allow-scripts allow-same-origin`, 64-sub cap.
-
-### Bonus (сверх плана)
-
-- **Compromised-SET binding fix** (security review) — `rekor.verifyEntryBindsArtifact` парсит hashedrekord body и cross-checks с `sha256(payload)` до принятия signature.
-- **Self-attested-root fix** (security review) — Rekor checkpoint verifier, отказ от bundle's own rootHash без Rekor-signed checkpoint.
-- **4 fail-open windows в TUF** (security review) — atomic Refresh, snapshot meta required, root expiry re-check, target length gate.
-- **Symlink bypass fix в UI static serve** — `filepath.EvalSymlinks` перед containment check.
+**Foundation.** JS workspace hoisted к repo root (yarn workspaces), theme переведён на plain CSS custom properties, `packages/design/` workspace scaffold, developer portal под `docs/portal/`.
 
 ---
 
 ## 2. Что в работе
 
-Только hardware-верификация:
-- Три Matter-задачи в `In progress` на борде (auto-subscribe / per-feature endpoint / initial state read).
-- Полный e2e `plugins/matter/` против живого WARMBLIXT.
-- `plugins/dirigera/` против живого хаба IKEA (TLS pin + WebSocket realtime).
+**Matter verification** (3, ждут физического WARMBLIXT):
+- Auto-subscribe peers after commission — код полагается на matter.js 0.17 auto-subscribe, нужен реальный прогон
+- Per-feature endpoint mapping — логика есть, `defaultEndpoint = 1` остался как fallback, multi-endpoint не тестировался
+- Read initial state after commission — заменён на command-confirmation слой (`confirm.go`), нужен визуальный тест «UI не показывает неизвестно после commission»
+
+**Design System v0.1** — `packages/design/` workspace создан с package.json (name `@keystone/design`), tsconfig, vite.config, но `src/index.ts` пока пуст: «компоненты появляются здесь по мере готовности». Skeleton есть, наполнение — следующий шаг.
 
 ---
 
-## 3. Что дальше
+## 3. Что дальше — Backlog (5 задач)
 
-**Phase F — HA Bridge:**
-- HA Bridge plugin skeleton
-- Store 2 UI внутри ha-bridge
-- Config-flow parser HA → keystone Layer 2
+1. **HA Bridge plugin skeleton** — Phase F, крупный кусок. Bundle Python + HA Core + `keystone_bridge` custom_component.
+2. **HA Bridge — Store 2 UI** внутри плагина ha-bridge.
+3. **HA Bridge — config-flow parser** HA voluptuous → keystone Layer 2 steps.
+4. **Matter snapshot re-fetch + seq/replay** — robustness. Пиковая ценность после первого прод-инцидента.
+5. **CLI dev commands + shell completions** — completions (bash/zsh/fish), plugin CLI extensions namespace.
 
-**Phase — CLI `keystone` command surface** (три задачи в Backlog):
-- Базовая поверхность: plugin/device/system/self/stream
-- Полный набор: rule/room/scene/config/store/secret
-- Dev commands + shell completions + extensions
-
-**Matter Backlog:**
-- Snapshot re-fetch after reconnect + seq/replay
+Плюс наполнение `packages/design/` до восьмёрки Web Components + `.ks-label` utility (см. `plugin-ui-integration.md` §8).
 
 ---
 
 ## 4. Repo hygiene
 
-**Всё запушено** (`plugin/manifest-v1` = 57 коммитов над `master`, `master` sync с `origin/master`). `keystone-api` опубликован приватно.
+**Ветки keystone:**
+- `master` — база, не двигается
+- `feat/matter-hardening` (@ 703e211) — 44 коммита Phase A
+- `plugin/manifest-v1` (@ bfc5842) — 60 коммитов, содержит Phase A-K, developer portal, CLI
 
-Uncommitted misc в working tree: `.claude/`, `create-project-tasks.py`, пустой `packages/design/` — не относится к plugin-стеку.
+**Ветки keystone-api:**
+- `main` — 9 коммитов, Sidecar Protocol v1 + gRPC миграция + cross-language conformance
+
+Всё запушено на origin (`git@github.com:kliuchnikovv/keystone.git` и `git@github.com:kliuchnikovv/keystone-api.git`). PR'ы под отдельное решение — сейчас master не движется, работа идёт в feature-веткax.
 
 ---
 
 ## 5. Известные gaps
 
-- **Sandboxing** — плагины бегут как обычные child-процессы под user'ом daemon'а. cgroups/rlimit enforcement `spec.resources`, no-network / read-only-fs sandboxing, UID mapping — не сделано. Открыто описано в `docs/portal/06-security.md`.
-- **Permissions enforcement** — `spec.permissions` пока advisory (schema-валидируется, store UI показывает, но runtime не гейтит). См. `docs/portal/06-security.md`.
-- **Matter coverage wave 2** — Thermostat, FanControl, Air quality, SmokeCoAlarm — отложено.
-- **Voice/ML плагины** — Post-v1.
+- Matter — 3 verification-задачи + snapshot/replay + robustness-мелочи. Детали в `docs/matter-implementation-gaps.md`.
+- Design System — 8 Web Components + form-associated ElementInternals + 5 consumer-migrations в apps/web. Скоуп зафиксирован в карточке доски и `docs/plugin-ui-integration.md` §8.
+- HA Bridge — вся Phase F не начата.
+- Voice/ML плагины — Post-v1.

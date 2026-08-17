@@ -35,7 +35,7 @@
 |---|---|---|---|
 | 8 | `plugin-registry` | `github.com/keystone/plugin-registry` | Официальный git-based tap |
 | 9 | `protocol` | `github.com/keystone/protocol` | JSON Schemas, protobuf-эквиваленты |
-| 10 | `design-system` | `github.com/keystone/design-system` | Web Components + CSS-tokens |
+| 10 | `design` | `keystone/packages/design/` (workspace) → npm `@keystone/design` | Web Components + CSS-tokens; см. `plugin-ui-integration.md` §8 |
 
 ## 3. SDK-Go — центральный API
 

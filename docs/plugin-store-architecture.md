@@ -356,7 +356,47 @@ CLI, HTTP API и gRPC — три равноправные точки входа 
 
 **Итого до keystone 1.0 с полным store'ом:** ~11 недель после текущей точки.
 
-## 13. Открытые вопросы
+## 14. npm scope и cross-repo publishing
+
+Плагин-авторы получают все публичные артефакты keystone через единый npm scope `@keystone/*`, независимо от того из какой физической репы каждый пакет собирается. Одна точка discovery, разные release cadences и владельцы.
+
+### 14.1 Карта пакетов
+
+| npm package | Что даёт | Публикуется из |
+|---|---|---|
+| `@keystone/sidecar-protocol` | Wire protocol для плагинов (TS runtime + types) | `keystone-api/ts/sidecar/` |
+| `@keystone/core-api` | gRPC/HTTP клиенты для внешних агентов (CLI, UI, LLM) | `keystone-api/core/gen/ts/` |
+| `@keystone/design` | Tokens + Web Components + utility classes | `keystone/packages/design/` |
+| `@keystone/ui-runtime` *(post-Phase G)* | `window.keystone` TypeScript types + iframe postMessage bridge | `keystone/packages/ui-runtime/` |
+| `@keystone/types` | Aggregated TypeScript type-declarations | все три выше |
+
+### 14.2 Почему в разных репах
+
+- **`keystone-api`** — wire protocols (backend contracts). Медленный release cadence, breaking changes через deprecation windows. Изоляция от frontend-косметики.
+- **`keystone` monorepo** — frontend toolkit. Быстрый iteration с `apps/web` через atomic commits «токен + его потребитель». Не привязан к protocol-версиям.
+
+Смешивать эти два жизненных цикла в одну репу = тормозить design или разлагать protocol stability. Разделяя источники, но сводя в один npm scope, получаем concerns separated + discoverability preserved.
+
+### 14.3 Cross-linking
+
+- `keystone-api/README.md` — секция «UI Development» ссылается на `@keystone/design` в npm и на исходники в `keystone/packages/design/`
+- `keystone/README.md` — упоминает `@keystone/sidecar-protocol` для плагин-авторов, ссылка на `keystone-api`
+- `docs.keystone.io` (Phase E) — единый портал, каталогизирует все пакеты `@keystone/*` с их публичным API
+
+### 14.4 Versioning
+
+Пакеты версионируются независимо в SemVer. Aggregated `@keystone/types` пересобирается при изменении любого upstream, публикуется как major-bump upstream'а. Плагин-автор объявляет пиры в своём `package.json`:
+
+```json
+"dependencies": {
+  "@keystone/sidecar-protocol": "^1.0.0",
+  "@keystone/design": "^0.2.0"
+}
+```
+
+Совместимость пакетов проверяется в CI registry (см. §6) — плагин с несовместимыми peer-версиями отклоняется на PR-check.
+
+## 15. Открытые вопросы
 
 - **Custom repositories vs. централизованный store** — начинаем с одного официального registry; custom taps на этапе E-F.
 - **Монетизация плагинов** — не в MVP. Долгосрочно — premium tier для core team plugins, revenue-share для verified authors.
