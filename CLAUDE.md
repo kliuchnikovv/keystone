@@ -48,4 +48,7 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 
 ## Status
 
-Phase 0 (scaffold) done: repo layout, host CMake build + doctest smoke tests, blink apps for S3/C6. Next: **Phase 1 — framing** in `libhubproto` (COBS, CRC16-CCITT, header + payload codec) with full host tests.
+- **Phase 0** done: repo layout, host CMake build + doctest, blink apps for S3/C6.
+- **Phase 1** done: `libhubproto` complete — CRC16-CCITT, COBS, 8-byte header codec, capability model, and payload codecs (DECLARE, STATE, COMMAND, CMD_ACK) plus the frame layer (`encode_frame` + streaming `FrameReader` with CRC check and 0x00 resync). 38/38 host tests pass. Note: STATE/COMMAND value length depends on each attribute's `value_type`, which is not on the wire — the caller resolves it from the registry (STATE via the `state_reader` pull cursor; COMMAND via an explicit `value_type` arg).
+
+Next: **Phase 2 — UART link-up** (`UartTransport` behind `Bus` on S3+C6, exchange HELLO + HEARTBEAT).

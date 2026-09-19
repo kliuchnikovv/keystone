@@ -92,4 +92,90 @@ bool decode_declare(const std::uint8_t* in, std::size_t len, DeclareView& out) n
 // Read the i-th attribute of a decoded DECLARE (i < view.attr_count).
 AttrDecl declare_attr_at(const DeclareView& view, std::uint8_t index) noexcept;
 
+// ---- Value ----------------------------------------------------------------
+// A single typed attribute value. `raw` holds the exact little-endian wire
+// bytes (SPEC §6.2), so on-wire (de)serialization is a copy and the accessors
+// reinterpret. POD, fits any value (max 4 bytes), no allocation.
+struct Value {
+  ValueType    type;
+  std::uint8_t len;      // == value_size(type)
+  std::uint8_t raw[4];
+
+  static Value make_bool(bool v) noexcept;
+  static Value make_u8(std::uint8_t v) noexcept;
+  static Value make_i16(std::int16_t v) noexcept;
+  static Value make_u16(std::uint16_t v) noexcept;
+  static Value make_f32(float v) noexcept;
+  static Value make_xy(std::uint16_t x, std::uint16_t y) noexcept;
+  static Value make_enum8(std::uint8_t v) noexcept;
+
+  bool          as_bool() const noexcept;
+  std::uint8_t  as_u8() const noexcept;
+  std::int16_t  as_i16() const noexcept;
+  std::uint16_t as_u16() const noexcept;
+  float         as_f32() const noexcept;
+  void          as_xy(std::uint16_t& x, std::uint16_t& y) const noexcept;
+  std::uint8_t  as_enum8() const noexcept;
+};
+
+// Interpret [in, in+value_size(vt)) as a Value of type `vt`. Returns false if
+// `vt` is unknown or fewer than value_size(vt) bytes are available.
+bool read_value(const std::uint8_t* in, std::size_t len, ValueType vt,
+                Value& out) noexcept;
+
+// ---- COMMAND (SPEC §5) ----------------------------------------------------
+// Layout: entity_id(u16) attr_id(u8) then value bytes per value_type.
+struct Command {
+  std::uint16_t entity_id;
+  std::uint8_t  attr_id;
+  Value         value;
+};
+
+EncodeResult encode_command(const Command& cmd, std::uint8_t* out,
+                            std::size_t cap) noexcept;
+
+// Decode a COMMAND. `vt` is the attribute's value_type, resolved by the caller
+// from the registry (it is not on the wire).
+bool decode_command(const std::uint8_t* in, std::size_t len, ValueType vt,
+                    Command& out) noexcept;
+
+// ---- CMD_ACK (SPEC §5) ----------------------------------------------------
+EncodeResult encode_cmd_ack(CmdAckStatus status, std::uint8_t* out,
+                            std::size_t cap) noexcept;
+bool decode_cmd_ack(const std::uint8_t* in, std::size_t len,
+                    CmdAckStatus& out) noexcept;
+
+// ---- STATE (SPEC §5) ------------------------------------------------------
+// Layout: entity_id(u16) attr_count(u8) then count x { attr_id(u8) value bytes }.
+struct StateEntry {
+  std::uint8_t attr_id;
+  Value        value;
+};
+
+EncodeResult encode_state(std::uint16_t entity_id, const StateEntry* entries,
+                          std::uint8_t count, std::uint8_t* out,
+                          std::size_t cap) noexcept;
+
+// Pull-parser for a STATE payload. Value types are not on the wire, so the
+// caller peeks the next attr_id, resolves its value_type from the registry,
+// then consumes the value. `valid` goes false on truncation or a bad type;
+// check it after the loop.
+struct StateReader {
+  const std::uint8_t* p;
+  const std::uint8_t* end;
+  std::uint16_t entity_id;
+  std::uint8_t  remaining;
+  bool          valid;
+};
+
+StateReader state_reader(const std::uint8_t* in, std::size_t len) noexcept;
+
+// If another entry remains, sets `attr_id` to it (without consuming) and returns
+// true. Returns false at a clean end; sets reader.valid=false on truncation.
+bool state_next_attr(StateReader& reader, std::uint8_t& attr_id) noexcept;
+
+// Consume the next entry's attr_id + value, interpreting the value as `vt`.
+// Returns false (and clears reader.valid) on a bad type or truncation.
+bool state_consume(StateReader& reader, ValueType vt, Value& out) noexcept;
+
 }  // namespace hubproto
