@@ -51,6 +51,11 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 - **Phase 0** done: repo layout, host CMake build + doctest, blink apps for S3/C6.
 - **Phase 1** done: `libhubproto` complete — CRC16-CCITT, COBS, 8-byte header codec, capability model, and payload codecs (DECLARE, STATE, COMMAND, CMD_ACK) plus the frame layer (`encode_frame` + streaming `FrameReader` with CRC check and 0x00 resync). 38/38 host tests pass. Note: STATE/COMMAND value length depends on each attribute's `value_type`, which is not on the wire — the caller resolves it from the registry (STATE via the `state_reader` pull cursor; COMMAND via an explicit `value_type` arg).
 
-- **Phase 2 (core-side)** done: `core/` gains the transport boundary — `Bus` and `ByteLink` interfaces (SPEC Invariant 1), `UartTransport` (framing + dispatch engine over an injected `ByteLink`, host-tested via `InMemoryLink` loopback). 45/45 host tests pass, core still has zero radio/ESP-IDF deps. Raw byte I/O is injected, so the same `UartTransport` runs on hardware with an ESP-IDF UART `ByteLink` (to be added in `firmware/`); SPI/USB transports will reuse it with a different `ByteLink`.
+- **Phase 2 (core-side)** done: `core/` gains the transport boundary — `Bus` and `ByteLink` interfaces (SPEC Invariant 1), `UartTransport` (framing + dispatch engine over an injected `ByteLink`, host-tested via `InMemoryLink` loopback). 45/45 host tests pass, core still has zero radio/ESP-IDF deps.
+- **Phase 2 (firmware)** written (not yet verified on hardware): `EspUartLink` (ESP-IDF UART `ByteLink`) as a shared component, plus `hubproto`/`core` ESP-IDF component wrappers that reuse the same shared sources. Both `brain-s3` and `zigbee-c6` now run `UartTransport` and exchange HELLO/HEARTBEAT over UART1. Wiring, build/flash, and expected output: [docs/phase2-uart-link.md](docs/phase2-uart-link.md). **Needs a build+flash on real boards to confirm.**
 
-Next: **Phase 2 (hardware)** — an ESP-IDF UART `ByteLink` in `firmware/`, then S3↔C6 link-up exchanging HELLO + HEARTBEAT on real boards.
+Next: on-hardware bring-up of the UART link, then **Phase 3 — EntityRegistry + declaration** (host-testable core work).
+
+### ESP-IDF component layout
+
+Firmware apps pick up shared code via `EXTRA_COMPONENT_DIRS=../components`. The wrappers in `firmware/components/{hubproto,core}` reference the same sources as the host build (no duplication); `firmware/components/esp_uart_link` holds the only ESP-IDF-specific transport code. App `main` is C++ (`app_main` is `extern "C"`).
