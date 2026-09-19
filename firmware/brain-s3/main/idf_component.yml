@@ -1,0 +1,5 @@
+## Managed component dependencies for the brain-s3 blink app.
+dependencies:
+  espressif/led_strip: "^2.5"
+  idf:
+    version: ">=5.1"
