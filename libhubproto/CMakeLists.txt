@@ -6,7 +6,9 @@
 #
 # Phase 0: only a version stamp exists. Framing/codec land in Phase 1.
 add_library(hubproto STATIC
-  src/version.cpp)
+  src/version.cpp
+  src/crc16.cpp
+  src/cobs.cpp)
 
 target_include_directories(hubproto PUBLIC include)
 target_link_libraries(hubproto PRIVATE keystone_warnings)
