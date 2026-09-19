@@ -8,7 +8,9 @@
 add_library(hubproto STATIC
   src/version.cpp
   src/crc16.cpp
-  src/cobs.cpp)
+  src/cobs.cpp
+  src/message.cpp
+  src/payload.cpp)
 
 target_include_directories(hubproto PUBLIC include)
 target_link_libraries(hubproto PRIVATE keystone_warnings)
