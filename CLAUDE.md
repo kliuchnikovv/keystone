@@ -51,4 +51,6 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 - **Phase 0** done: repo layout, host CMake build + doctest, blink apps for S3/C6.
 - **Phase 1** done: `libhubproto` complete — CRC16-CCITT, COBS, 8-byte header codec, capability model, and payload codecs (DECLARE, STATE, COMMAND, CMD_ACK) plus the frame layer (`encode_frame` + streaming `FrameReader` with CRC check and 0x00 resync). 38/38 host tests pass. Note: STATE/COMMAND value length depends on each attribute's `value_type`, which is not on the wire — the caller resolves it from the registry (STATE via the `state_reader` pull cursor; COMMAND via an explicit `value_type` arg).
 
-Next: **Phase 2 — UART link-up** (`UartTransport` behind `Bus` on S3+C6, exchange HELLO + HEARTBEAT).
+- **Phase 2 (core-side)** done: `core/` gains the transport boundary — `Bus` and `ByteLink` interfaces (SPEC Invariant 1), `UartTransport` (framing + dispatch engine over an injected `ByteLink`, host-tested via `InMemoryLink` loopback). 45/45 host tests pass, core still has zero radio/ESP-IDF deps. Raw byte I/O is injected, so the same `UartTransport` runs on hardware with an ESP-IDF UART `ByteLink` (to be added in `firmware/`); SPI/USB transports will reuse it with a different `ByteLink`.
+
+Next: **Phase 2 (hardware)** — an ESP-IDF UART `ByteLink` in `firmware/`, then S3↔C6 link-up exchanging HELLO + HEARTBEAT on real boards.
