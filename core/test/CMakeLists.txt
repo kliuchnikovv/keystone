@@ -6,7 +6,8 @@ add_executable(core_tests
   test_entity_registry.cpp
   test_radio_coordinator.cpp
   test_state_machine.cpp
-  test_command_dispatcher.cpp)
+  test_command_dispatcher.cpp
+  test_rule_engine.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 

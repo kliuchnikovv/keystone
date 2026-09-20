@@ -56,7 +56,11 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 
 - **Phase 3 (core)** done: `EntityRegistry` (fixed-capacity entity store: declare/find/value_type_of/clear_chip) and `RadioCoordinator` (brain lifecycle: HELLO→QUERY, DECLARE→registry, DECLARE_END→ready, boot_id change→clear+re-QUERY). 56/56 host tests, verified over the `UartTransport`↔`UartTransport` loopback. Core still radio-free.
 
-Next: on-hardware UART bring-up (Phase 2), and wiring `RadioCoordinator`+registry into `brain-s3` with fake DECLAREs from `zigbee-c6` (Phase 3 on-device); then **Phase 4 — STATE + COMMAND/CMD_ACK + minimal RuleEngine** (host-testable core).
+- **Phase 4 (core)** done: `StateMachine` (applies STATE, edge-triggered change notifications), `CommandDispatcher` (COMMAND routing by chip, CMD_ACK matching by seq, injected-time retries → Unreachable), `RuleEngine` (in-code trigger→predicate→action table). Plus `Value operator==` and `EntityRegistry::set_value/get_value`. Full end-to-end verified over the loopback: STATE → rule fires → COMMAND → CMD_ACK. 72/72 host tests, core still radio-free.
+
+The brain core (Phases 3–4) is a set of composable, radio-free components that all attach to a `Bus`: `EntityRegistry`, `RadioCoordinator`, `StateMachine`, `CommandDispatcher`, `RuleEngine`. Wire them together in an app around one `UartTransport`.
+
+Next: on-hardware UART bring-up (Phase 2), wiring the core into `brain-s3` with fake DECLARE/STATE from `zigbee-c6` (Phases 3–4 on-device), then **Phase 5 — boot_id in NVS** (persist the reboot counter; resync already handled by `RadioCoordinator`).
 
 ### ESP-IDF component layout
 
