@@ -1,0 +1,125 @@
+#include <doctest/doctest.h>
+
+#include <array>
+#include <cstdint>
+
+#include "core/entity_registry.hpp"
+#include "hubproto/payload.hpp"
+
+using hubproto::AttrDecl;
+using hubproto::DeclareView;
+using hubproto::DeviceType;
+using hubproto::ValueType;
+
+namespace {
+
+// Encode a DECLARE, decode it into a view, and keep the backing bytes alive.
+struct DeclareBytes {
+  std::array<std::uint8_t, 64> buf{};
+  DeclareView view{};
+
+  DeclareBytes(std::uint16_t entity_id, DeviceType dt,
+               const AttrDecl* attrs, std::uint8_t count) {
+    auto r = hubproto::encode_declare(entity_id, dt, attrs, count, buf.data(),
+                                      buf.size());
+    REQUIRE(r.ok);
+    REQUIRE(hubproto::decode_declare(buf.data(), r.len, view));
+  }
+};
+
+const std::array<AttrDecl, 2> kLightAttrs{{
+    {0x01, ValueType::Bool, 0x07},
+    {0x02, ValueType::U8, 0x07},
+}};
+const std::array<AttrDecl, 1> kSwitchAttrs{{{0x01, ValueType::Bool, 0x07}}};
+
+}  // namespace
+
+TEST_CASE("declare adds an entity that can be found") {
+  core::EntityRegistry<> reg;
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+
+  REQUIRE(reg.declare(0x01, light.view));
+  CHECK(reg.size() == 1);
+
+  const auto* e = reg.find(0x0010);
+  REQUIRE(e != nullptr);
+  CHECK(e->chip_id == 0x01);
+  CHECK(e->device_type == DeviceType::Light);
+  REQUIRE(e->attr_count == 2);
+  CHECK(e->attrs[0].attr_id == 0x01);
+  CHECK(e->attrs[0].value_type == ValueType::Bool);
+  CHECK(e->attrs[1].attr_id == 0x02);
+  CHECK(e->attrs[1].has_value == false);
+}
+
+TEST_CASE("two entities from the same chip coexist") {
+  core::EntityRegistry<> reg;
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  DeclareBytes sw(0x0020, DeviceType::Switch, kSwitchAttrs.data(), 1);
+
+  REQUIRE(reg.declare(0x01, light.view));
+  REQUIRE(reg.declare(0x01, sw.view));
+  CHECK(reg.size() == 2);
+  CHECK(reg.find(0x0010)->device_type == DeviceType::Light);
+  CHECK(reg.find(0x0020)->device_type == DeviceType::Switch);
+}
+
+TEST_CASE("re-declaring the same entity_id replaces it, not duplicates") {
+  core::EntityRegistry<> reg;
+  DeclareBytes as_light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  DeclareBytes as_switch(0x0010, DeviceType::Switch, kSwitchAttrs.data(), 1);
+
+  REQUIRE(reg.declare(0x01, as_light.view));
+  REQUIRE(reg.declare(0x01, as_switch.view));
+  CHECK(reg.size() == 1);
+  const auto* e = reg.find(0x0010);
+  REQUIRE(e != nullptr);
+  CHECK(e->device_type == DeviceType::Switch);
+  CHECK(e->attr_count == 1);
+}
+
+TEST_CASE("value_type_of resolves a declared attribute") {
+  core::EntityRegistry<> reg;
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  REQUIRE(reg.declare(0x01, light.view));
+
+  ValueType vt{};
+  REQUIRE(reg.value_type_of(0x0010, 0x02, vt));
+  CHECK(vt == ValueType::U8);
+  CHECK_FALSE(reg.value_type_of(0x0010, 0x99, vt));  // unknown attr
+  CHECK_FALSE(reg.value_type_of(0x9999, 0x01, vt));  // unknown entity
+}
+
+TEST_CASE("clear_chip removes only that chip's entities") {
+  core::EntityRegistry<> reg;
+  DeclareBytes a(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  DeclareBytes b(0x0020, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  DeclareBytes c(0x0030, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  REQUIRE(reg.declare(0x01, a.view));
+  REQUIRE(reg.declare(0x01, b.view));
+  REQUIRE(reg.declare(0x02, c.view));
+
+  CHECK(reg.clear_chip(0x01) == 2);
+  CHECK(reg.size() == 1);
+  CHECK(reg.find(0x0010) == nullptr);
+  CHECK(reg.find(0x0030) != nullptr);  // chip 0x02 untouched
+}
+
+TEST_CASE("declare fails when the table is full") {
+  core::EntityRegistry<2, 8> reg;  // capacity 2
+  DeclareBytes a(0x0001, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  DeclareBytes b(0x0002, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  DeclareBytes c(0x0003, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  REQUIRE(reg.declare(0x01, a.view));
+  REQUIRE(reg.declare(0x01, b.view));
+  CHECK_FALSE(reg.declare(0x01, c.view));
+  CHECK(reg.size() == 2);
+}
+
+TEST_CASE("declare fails when an entity has more attrs than capacity") {
+  core::EntityRegistry<8, 1> reg;  // one attr max
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  CHECK_FALSE(reg.declare(0x01, light.view));
+  CHECK(reg.size() == 0);
+}
