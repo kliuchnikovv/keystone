@@ -3,7 +3,8 @@ add_executable(core_tests
   test_main.cpp
   test_smoke.cpp
   test_uart_transport.cpp
-  test_entity_registry.cpp)
+  test_entity_registry.cpp
+  test_radio_coordinator.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 

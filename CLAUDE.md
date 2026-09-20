@@ -54,7 +54,9 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 - **Phase 2 (core-side)** done: `core/` gains the transport boundary — `Bus` and `ByteLink` interfaces (SPEC Invariant 1), `UartTransport` (framing + dispatch engine over an injected `ByteLink`, host-tested via `InMemoryLink` loopback). 45/45 host tests pass, core still has zero radio/ESP-IDF deps.
 - **Phase 2 (firmware)** written (not yet verified on hardware): `EspUartLink` (ESP-IDF UART `ByteLink`) as a shared component, plus `hubproto`/`core` ESP-IDF component wrappers that reuse the same shared sources. Both `brain-s3` and `zigbee-c6` now run `UartTransport` and exchange HELLO/HEARTBEAT over UART1. Wiring, build/flash, and expected output: [docs/phase2-uart-link.md](docs/phase2-uart-link.md). **Needs a build+flash on real boards to confirm.**
 
-Next: on-hardware bring-up of the UART link, then **Phase 3 — EntityRegistry + declaration** (host-testable core work).
+- **Phase 3 (core)** done: `EntityRegistry` (fixed-capacity entity store: declare/find/value_type_of/clear_chip) and `RadioCoordinator` (brain lifecycle: HELLO→QUERY, DECLARE→registry, DECLARE_END→ready, boot_id change→clear+re-QUERY). 56/56 host tests, verified over the `UartTransport`↔`UartTransport` loopback. Core still radio-free.
+
+Next: on-hardware UART bring-up (Phase 2), and wiring `RadioCoordinator`+registry into `brain-s3` with fake DECLAREs from `zigbee-c6` (Phase 3 on-device); then **Phase 4 — STATE + COMMAND/CMD_ACK + minimal RuleEngine** (host-testable core).
 
 ### ESP-IDF component layout
 
