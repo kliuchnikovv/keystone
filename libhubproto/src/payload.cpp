@@ -147,6 +147,14 @@ void Value::as_xy(std::uint16_t& x, std::uint16_t& y) const noexcept {
 }
 std::uint8_t Value::as_enum8() const noexcept { return raw[0]; }
 
+bool operator==(const Value& a, const Value& b) noexcept {
+  if (a.type != b.type || a.len != b.len) return false;
+  for (std::size_t i = 0; i < a.len; ++i) {
+    if (a.raw[i] != b.raw[i]) return false;
+  }
+  return true;
+}
+
 bool read_value(const std::uint8_t* in, std::size_t len, ValueType vt,
                 Value& out) noexcept {
   const std::size_t sz = value_size(vt);

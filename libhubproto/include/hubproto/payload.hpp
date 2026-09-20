@@ -118,6 +118,10 @@ struct Value {
   std::uint8_t  as_enum8() const noexcept;
 };
 
+// Two values are equal iff same type, same length, and equal wire bytes.
+bool operator==(const Value& a, const Value& b) noexcept;
+inline bool operator!=(const Value& a, const Value& b) noexcept { return !(a == b); }
+
 // Interpret [in, in+value_size(vt)) as a Value of type `vt`. Returns false if
 // `vt` is unknown or fewer than value_size(vt) bytes are available.
 bool read_value(const std::uint8_t* in, std::size_t len, ValueType vt,

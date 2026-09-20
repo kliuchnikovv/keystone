@@ -91,6 +91,30 @@ TEST_CASE("value_type_of resolves a declared attribute") {
   CHECK_FALSE(reg.value_type_of(0x9999, 0x01, vt));  // unknown entity
 }
 
+TEST_CASE("set_value / get_value store and return the latest state") {
+  core::EntityRegistry<> reg;
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  REQUIRE(reg.declare(0x01, light.view));
+
+  hubproto::Value out{};
+  CHECK_FALSE(reg.get_value(0x0010, 0x02, out));  // nothing reported yet
+
+  REQUIRE(reg.set_value(0x0010, 0x02, hubproto::Value::make_u8(200)));
+  REQUIRE(reg.get_value(0x0010, 0x02, out));
+  CHECK(out.as_u8() == 200);
+  CHECK(reg.find(0x0010)->attrs[1].has_value);
+}
+
+TEST_CASE("set_value rejects a type mismatch and unknown targets") {
+  core::EntityRegistry<> reg;
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  REQUIRE(reg.declare(0x01, light.view));
+
+  CHECK_FALSE(reg.set_value(0x0010, 0x02, hubproto::Value::make_bool(true)));  // declared u8
+  CHECK_FALSE(reg.set_value(0x0010, 0x99, hubproto::Value::make_u8(1)));       // unknown attr
+  CHECK_FALSE(reg.set_value(0x9999, 0x01, hubproto::Value::make_bool(true)));  // unknown entity
+}
+
 TEST_CASE("clear_chip removes only that chip's entities") {
   core::EntityRegistry<> reg;
   DeclareBytes a(0x0010, DeviceType::Light, kLightAttrs.data(), 2);

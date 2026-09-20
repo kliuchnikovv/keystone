@@ -28,6 +28,19 @@ TEST_CASE("Value round-trips every value_type") {
   CHECK(y == 0x3344);
 }
 
+TEST_CASE("Value equality compares type, length and wire bytes") {
+  CHECK(Value::make_u8(200) == Value::make_u8(200));
+  CHECK(Value::make_u8(200) != Value::make_u8(201));
+  CHECK(Value::make_bool(true) != Value::make_u8(1));  // different type
+  CHECK(Value::make_i16(-50) == Value::make_i16(-50));
+
+  // Bytes beyond `len` do not affect equality.
+  Value a = Value::make_u8(7);
+  Value b = Value::make_u8(7);
+  b.raw[1] = 0xEE;  // junk past len (len==1)
+  CHECK(a == b);
+}
+
 TEST_CASE("Value stores type and length") {
   Value v = Value::make_i16(-1);
   CHECK(v.type == ValueType::I16);

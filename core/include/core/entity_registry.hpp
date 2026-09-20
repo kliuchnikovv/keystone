@@ -50,6 +50,15 @@ class EntityRegistry {
   bool value_type_of(std::uint16_t entity_id, std::uint8_t attr_id,
                      hubproto::ValueType& out) const noexcept;
 
+  // Store the latest state value of an attribute. Returns false if the entity or
+  // attribute is unknown, or the value's type differs from the declared type.
+  bool set_value(std::uint16_t entity_id, std::uint8_t attr_id,
+                 const hubproto::Value& v) noexcept;
+
+  // Read the latest state value. Returns false if unknown or not yet reported.
+  bool get_value(std::uint16_t entity_id, std::uint8_t attr_id,
+                 hubproto::Value& out) const noexcept;
+
   // Remove every entity owned by `chip_id` (boot_id resync). Returns the count.
   std::size_t clear_chip(std::uint8_t chip_id) noexcept;
 
@@ -122,6 +131,40 @@ bool EntityRegistry<MaxEntities, MaxAttrs>::value_type_of(
   for (std::uint8_t i = 0; i < e->attr_count; ++i) {
     if (e->attrs[i].attr_id == attr_id) {
       out = e->attrs[i].value_type;
+      return true;
+    }
+  }
+  return false;
+}
+
+template <std::size_t MaxEntities, std::size_t MaxAttrs>
+bool EntityRegistry<MaxEntities, MaxAttrs>::set_value(
+    std::uint16_t entity_id, std::uint8_t attr_id,
+    const hubproto::Value& v) noexcept {
+  for (auto& e : entities_) {
+    if (!e.in_use || e.entity_id != entity_id) continue;
+    for (std::uint8_t i = 0; i < e.attr_count; ++i) {
+      if (e.attrs[i].attr_id != attr_id) continue;
+      if (v.type != e.attrs[i].value_type) return false;  // type safety
+      e.attrs[i].value = v;
+      e.attrs[i].has_value = true;
+      return true;
+    }
+    return false;  // entity found, attr not
+  }
+  return false;
+}
+
+template <std::size_t MaxEntities, std::size_t MaxAttrs>
+bool EntityRegistry<MaxEntities, MaxAttrs>::get_value(
+    std::uint16_t entity_id, std::uint8_t attr_id,
+    hubproto::Value& out) const noexcept {
+  const Entity* e = find(entity_id);
+  if (e == nullptr) return false;
+  for (std::uint8_t i = 0; i < e->attr_count; ++i) {
+    if (e->attrs[i].attr_id == attr_id) {
+      if (!e->attrs[i].has_value) return false;
+      out = e->attrs[i].value;
       return true;
     }
   }
