@@ -1,0 +1,17 @@
+# Native ESP-IDF build defaults for the Zigbee coordinator (ESP32-C6).
+# idf.py generates sdkconfig from this; do not hand-edit the generated sdkconfig.
+
+# --- Zigbee stack: coordinator/router role on the on-chip 802.15.4 radio ---
+CONFIG_ZB_ENABLED=y
+CONFIG_ZB_ZCZR=y
+CONFIG_ZB_RADIO_NATIVE=y
+
+# --- Partition table (zb_storage/zb_fct live here) ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- 4 MB flash (this C6 board), matches the PlatformIO build ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# --- Zigbee stack expects a 1 kHz tick ---
+CONFIG_FREERTOS_HZ=1000
