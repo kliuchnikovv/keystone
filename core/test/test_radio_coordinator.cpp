@@ -134,6 +134,74 @@ TEST_CASE("a new boot_id resyncs: entities cleared and re-queried") {
   CHECK(at_chip.last.type == MsgType::Query);
 }
 
+TEST_CASE("an unknown chip is queried on any message (brain reboot)") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  // The chip was already running; the brain just booted and sees a HEARTBEAT.
+  chip.publish(mk(MsgType::Heartbeat, 0x01, 5), nullptr, 0);
+
+  REQUIRE(at_chip.count == 1);
+  CHECK(at_chip.last.type == MsgType::Query);
+  CHECK(coord.chip_known(0x01));
+}
+
+TEST_CASE("a changed boot_id on a HEARTBEAT resyncs (self-healing)") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  chip.publish(mk(MsgType::Hello, 0x01, 1), nullptr, 0);
+  publish_declare(chip, 0x01, 0x0010, DeviceType::Light, kLight.data(), 2);
+  chip.publish(mk(MsgType::DeclareEnd, 0x01, 1), nullptr, 0);
+  REQUIRE(reg.size() == 1);
+  REQUIRE(coord.chip_ready(0x01));
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  // Chip rebooted (new boot_id) but we notice via a HEARTBEAT, not a fresh HELLO.
+  chip.publish(mk(MsgType::Heartbeat, 0x01, 2), nullptr, 0);
+
+  CHECK(reg.size() == 0);
+  CHECK_FALSE(coord.chip_ready(0x01));
+  REQUIRE(at_chip.count == 1);
+  CHECK(at_chip.last.type == MsgType::Query);
+}
+
+TEST_CASE("a HEARTBEAT with an unchanged boot_id does not disturb the registry") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  chip.publish(mk(MsgType::Hello, 0x01, 1), nullptr, 0);
+  publish_declare(chip, 0x01, 0x0010, DeviceType::Light, kLight.data(), 2);
+  chip.publish(mk(MsgType::DeclareEnd, 0x01, 1), nullptr, 0);
+  REQUIRE(reg.size() == 1);
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  chip.publish(mk(MsgType::Heartbeat, 0x01, 1), nullptr, 0);  // same boot_id
+
+  CHECK(reg.size() == 1);
+  CHECK(coord.chip_ready(0x01));
+  CHECK(at_chip.count == 0);  // no spurious QUERY
+}
+
 TEST_CASE("resync clears only the rebooting chip's entities") {
   InMemoryLink la, lb;
   InMemoryLink::connect(la, lb);

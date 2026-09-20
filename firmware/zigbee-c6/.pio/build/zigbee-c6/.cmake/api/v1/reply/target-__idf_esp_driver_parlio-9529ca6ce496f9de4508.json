@@ -3,7 +3,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "esp-idf/esp_driver_sdio/libesp_driver_sdio.a"
+			"path" : "esp-idf/esp_driver_parlio/libesp_driver_parlio.a"
 		}
 	],
 	"backtrace" : 2,
@@ -26,7 +26,7 @@
 		"files" : 
 		[
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/component.cmake",
-			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdio/CMakeLists.txt",
+			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio/CMakeLists.txt",
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/utilities.cmake"
 		],
 		"nodes" : 
@@ -37,7 +37,7 @@
 			{
 				"command" : 1,
 				"file" : 1,
-				"line" : 18,
+				"line" : 21,
 				"parent" : 0
 			},
 			{
@@ -111,6 +111,24 @@
 				"file" : 0,
 				"line" : 365,
 				"parent" : 3
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 13
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 13
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 13
 			},
 			{
 				"command" : 2,
@@ -282,7 +300,7 @@
 				},
 				{
 					"backtrace" : 12,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdio/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio/include"
 				},
 				{
 					"backtrace" : 2,
@@ -522,46 +540,60 @@
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_parlio/include"
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/esp32c6/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_parlio/esp32c6/include"
 				},
 				{
 					"backtrace" : 14,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_gpio/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_pm/include"
 				},
 				{
 					"backtrace" : 15,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_ringbuf/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_gpio/include"
+				},
+				{
+					"backtrace" : 16,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_mm/include"
+				},
+				{
+					"backtrace" : 17,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_bitscrambler/include"
+				},
+				{
+					"backtrace" : 18,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_dma/include"
 				}
 			],
 			"language" : "C",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2
 			]
 		}
 	],
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
+			"backtrace" : 5,
+			"id" : "__idf_esp_hal_parlio::@894fe47290b0cc96307a"
 		},
 		{
-			"backtrace" : 5,
-			"id" : "__idf_esp_hal_sd::@1ada79c52e603a3e38c7"
+			"backtrace" : 2,
+			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
 		}
 	],
-	"id" : "__idf_esp_driver_sdio::@c3c0139becf4e3b2a9c1",
-	"name" : "__idf_esp_driver_sdio",
-	"nameOnDisk" : "libesp_driver_sdio.a",
+	"id" : "__idf_esp_driver_parlio::@26a02346e1abd52d0d01",
+	"name" : "__idf_esp_driver_parlio",
+	"nameOnDisk" : "libesp_driver_parlio.a",
 	"paths" : 
 	{
-		"build" : "esp-idf/esp_driver_sdio",
-		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdio"
+		"build" : "esp-idf/esp_driver_parlio",
+		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio"
 	},
 	"sourceGroups" : 
 	[
@@ -569,7 +601,9 @@
 			"name" : "Source Files",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2
 			]
 		}
 	],
@@ -578,7 +612,19 @@
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdio/src/sdio_slave.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio/src/parlio_common.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio/src/parlio_tx.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_parlio/src/parlio_rx.c",
 			"sourceGroupIndex" : 0
 		}
 	],

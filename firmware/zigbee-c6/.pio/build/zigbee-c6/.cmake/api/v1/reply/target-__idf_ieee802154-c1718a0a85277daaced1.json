@@ -3,7 +3,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "esp-idf/esp_driver_mcpwm/libesp_driver_mcpwm.a"
+			"path" : "esp-idf/ieee802154/libieee802154.a"
 		}
 	],
 	"backtrace" : 2,
@@ -26,7 +26,7 @@
 		"files" : 
 		[
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/component.cmake",
-			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/CMakeLists.txt",
+			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/CMakeLists.txt",
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/utilities.cmake"
 		],
 		"nodes" : 
@@ -37,7 +37,7 @@
 			{
 				"command" : 1,
 				"file" : 1,
-				"line" : 26,
+				"line" : 34,
 				"parent" : 0
 			},
 			{
@@ -55,13 +55,13 @@
 			{
 				"command" : 3,
 				"file" : 0,
-				"line" : 362,
+				"line" : 365,
 				"parent" : 3
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 347,
+				"line" : 344,
 				"parent" : 4
 			},
 			{
@@ -107,22 +107,46 @@
 				"parent" : 11
 			},
 			{
+				"command" : 10,
+				"file" : 0,
+				"line" : 497,
+				"parent" : 1
+			},
+			{
+				"command" : 9,
+				"file" : 0,
+				"line" : 323,
+				"parent" : 13
+			},
+			{
 				"command" : 3,
 				"file" : 0,
-				"line" : 365,
+				"line" : 362,
 				"parent" : 3
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 344,
-				"parent" : 13
+				"line" : 347,
+				"parent" : 15
 			},
 			{
 				"command" : 2,
 				"file" : 0,
 				"line" : 344,
-				"parent" : 13
+				"parent" : 4
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 4
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 4
 			}
 		]
 	},
@@ -282,7 +306,11 @@
 				},
 				{
 					"backtrace" : 12,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/include"
+				},
+				{
+					"backtrace" : 14,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/private_include"
 				},
 				{
 					"backtrace" : 2,
@@ -521,20 +549,32 @@
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/lwip/port/esp32xx/include/sys"
 				},
 				{
-					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_mcpwm/include"
+					"backtrace" : 16,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_coex/include"
 				},
 				{
-					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_mcpwm/esp32c6/include"
+					"backtrace" : 17,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_phy/include"
 				},
 				{
-					"backtrace" : 14,
+					"backtrace" : 17,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_phy/esp32c6/include"
+				},
+				{
+					"backtrace" : 18,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_timer/include"
+				},
+				{
+					"backtrace" : 19,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_pm/include"
 				},
 				{
-					"backtrace" : 15,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_gpio/include"
+					"backtrace" : 5,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_ieee802154/include"
+				},
+				{
+					"backtrace" : 5,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_ieee802154/esp32c6/include"
 				}
 			],
 			"language" : "C",
@@ -555,21 +595,21 @@
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
+			"backtrace" : 5,
+			"id" : "__idf_esp_hal_ieee802154::@794189f9ddce088c585f"
 		},
 		{
-			"backtrace" : 5,
-			"id" : "__idf_esp_hal_mcpwm::@c68ca8ee46f178963f61"
+			"backtrace" : 2,
+			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
 		}
 	],
-	"id" : "__idf_esp_driver_mcpwm::@48ac72772582b222889a",
-	"name" : "__idf_esp_driver_mcpwm",
-	"nameOnDisk" : "libesp_driver_mcpwm.a",
+	"id" : "__idf_ieee802154::@4f032233b439602167f9",
+	"name" : "__idf_ieee802154",
+	"nameOnDisk" : "libieee802154.a",
 	"paths" : 
 	{
-		"build" : "esp-idf/esp_driver_mcpwm",
-		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm"
+		"build" : "esp-idf/ieee802154",
+		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154"
 	},
 	"sourceGroups" : 
 	[
@@ -594,55 +634,55 @@
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_cap.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/esp_ieee802154.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_cmpr.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_ack.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_com.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_dev.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_fault.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_event.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_gen.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_frame.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_oper.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_pib.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_sync.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_util.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_timer.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_sec.c",
 			"sourceGroupIndex" : 0
 		},
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_mcpwm/src/mcpwm_etm.c",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/ieee802154/driver/esp_ieee802154_timer.c",
 			"sourceGroupIndex" : 0
 		}
 	],

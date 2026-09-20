@@ -1119,6 +1119,13 @@
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/esp_uart_link/CMakeFiles/install.dir
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/esp_uart_link/CMakeFiles/install/local.dir
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/esp_uart_link/CMakeFiles/install/strip.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/__idf_nvs_boot_id.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/edit_cache.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/rebuild_cache.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/list_install_components.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/install.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/install/local.dir
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/nvs_boot_id/CMakeFiles/install/strip.dir
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/main/CMakeFiles/__idf_main.dir
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/main/CMakeFiles/edit_cache.dir
 /Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/esp-idf/main/CMakeFiles/rebuild_cache.dir

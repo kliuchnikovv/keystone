@@ -264,7 +264,7 @@
 					"define" : "ESP_PLATFORM"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"define" : "ESP_PSA_ITS_AVAILABLE"
 				},
 				{
@@ -272,11 +272,11 @@
 					"define" : "IDF_VER=\"6.0.1\""
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"define" : "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\""
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"define" : "MBEDTLS_MAJOR_VERSION=4"
 				},
 				{
@@ -288,7 +288,7 @@
 					"define" : "SOC_XTAL_FREQ_MHZ=CONFIG_XTAL_FREQ"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"define" : "TF_PSA_CRYPTO_USER_CONFIG_FILE=\"mbedtls/esp_config.h\""
 				},
 				{
@@ -563,135 +563,135 @@
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/lwip/port/esp32xx/include/sys"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm/include/common"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm/include/security"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm/include/transports"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm/include/crypto/srp6a"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm/proto-c"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_timer/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_wifi/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_wifi/include/local"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_wifi/wifi_apps/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_wifi/wifi_apps/nan_app/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_event/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_phy/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_phy/esp32c6/include"
 				},
 				{
-					"backtrace" : 5,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_netif/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_https_server/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_http_server/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/http_parser"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp-tls"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp-tls/esp-tls-crypto"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/port/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/library"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/core"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/builtin/src"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/esp_crt_bundle/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/port/psa_driver/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_security/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_security/esp32c6/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_security/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/builtin/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/everest/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 5,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/p256-m"
 				},
 				{
@@ -712,24 +712,24 @@
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
-		},
-		{
 			"backtrace" : 5,
-			"id" : "__idf_console::@4311ed8d271cc0ee1422"
-		},
-		{
-			"backtrace" : 6,
 			"id" : "__idf_esp_https_server::@a47490a9e49b7eabdb18"
 		},
 		{
-			"backtrace" : 5,
+			"backtrace" : 6,
 			"id" : "__idf_protobuf-c::@b14513c4bd859268ec22"
 		},
 		{
-			"backtrace" : 5,
+			"backtrace" : 6,
 			"id" : "__idf_protocomm::@d76d01c8dec06205e1fc"
+		},
+		{
+			"backtrace" : 6,
+			"id" : "__idf_console::@4311ed8d271cc0ee1422"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
 		}
 	],
 	"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef",

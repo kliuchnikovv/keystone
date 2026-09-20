@@ -3,7 +3,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "esp-idf/esp_driver_ledc/libesp_driver_ledc.a"
+			"path" : "esp-idf/main/libmain.a"
 		}
 	],
 	"backtrace" : 2,
@@ -17,7 +17,7 @@
 			"__component_set_dependencies",
 			"__component_set_all_dependencies",
 			"add_compile_options",
-			"add_c_compile_options",
+			"add_cxx_compile_options",
 			"add_compile_definitions",
 			"include_directories",
 			"target_include_directories",
@@ -26,7 +26,7 @@
 		"files" : 
 		[
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/component.cmake",
-			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_ledc/CMakeLists.txt",
+			"main/CMakeLists.txt",
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/utilities.cmake"
 		],
 		"nodes" : 
@@ -37,7 +37,7 @@
 			{
 				"command" : 1,
 				"file" : 1,
-				"line" : 20,
+				"line" : 1,
 				"parent" : 0
 			},
 			{
@@ -65,6 +65,18 @@
 				"parent" : 4
 			},
 			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 347,
+				"parent" : 4
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 347,
+				"parent" : 4
+			},
+			{
 				"command" : 5,
 				"file" : 0,
 				"line" : 479,
@@ -73,14 +85,14 @@
 			{
 				"command" : 6,
 				"file" : 0,
-				"line" : 481,
+				"line" : 482,
 				"parent" : 1
 			},
 			{
 				"command" : 5,
 				"file" : 2,
-				"line" : 377,
-				"parent" : 7
+				"line" : 366,
+				"parent" : 9
 			},
 			{
 				"command" : 7,
@@ -104,24 +116,6 @@
 				"command" : 9,
 				"file" : 0,
 				"line" : 323,
-				"parent" : 11
-			},
-			{
-				"command" : 3,
-				"file" : 0,
-				"line" : 365,
-				"parent" : 3
-			},
-			{
-				"command" : 2,
-				"file" : 0,
-				"line" : 344,
-				"parent" : 13
-			},
-			{
-				"command" : 2,
-				"file" : 0,
-				"line" : 344,
 				"parent" : 13
 			}
 		]
@@ -132,121 +126,117 @@
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : "@\"/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/toolchain/cflags\" -fdiagnostics-color=always"
+					"fragment" : "@\"/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/toolchain/cxxflags\" -fdiagnostics-color=always"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-ffunction-sections"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fdata-sections"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wall"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Werror"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-error=unused-function"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-error=unused-variable"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-error=unused-but-set-variable"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-error=deprecated-declarations"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wextra"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-error=extra"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-unused-parameter"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-sign-compare"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Wno-enum-conversion"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-gdwarf-4"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-ggdb"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-Og"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fno-shrink-wrap"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fmacro-prefix-map=/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6=."
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fmacro-prefix-map=/Users/kliuchnikovv/.platformio/packages/framework-espidf=/IDF"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fstrict-volatile-bitfields"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fno-jump-tables"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 8,
 					"fragment" : "-fno-tree-switch-conversion"
 				},
 				{
-					"backtrace" : 8,
-					"fragment" : "-std=gnu23"
+					"backtrace" : 10,
+					"fragment" : "-std=gnu++26"
 				},
 				{
-					"backtrace" : 8,
-					"fragment" : "-Wno-old-style-declaration"
+					"backtrace" : 10,
+					"fragment" : "-fno-exceptions"
 				},
 				{
-					"backtrace" : 8,
-					"fragment" : "-fzero-init-padding-bits=all"
-				},
-				{
-					"backtrace" : 8,
-					"fragment" : "-fno-malloc-dce"
+					"backtrace" : 10,
+					"fragment" : "-fuse-cxa-atexit"
 				}
 			],
 			"defines" : 
 			[
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "ESP_PLATFORM"
 				},
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "IDF_VER=\"6.0.1\""
 				},
 				{
@@ -258,31 +248,31 @@
 					"define" : "SOC_XTAL_FREQ_MHZ=CONFIG_XTAL_FREQ"
 				},
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "_GLIBCXX_HAVE_POSIX_SEMAPHORE"
 				},
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "_GLIBCXX_USE_POSIX_SEMAPHORE"
 				},
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "_GNU_SOURCE"
 				},
 				{
-					"backtrace" : 9,
+					"backtrace" : 11,
 					"define" : "_POSIX_READER_WRITER_LOCKS"
 				}
 			],
 			"includes" : 
 			[
 				{
-					"backtrace" : 10,
+					"backtrace" : 12,
 					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/config"
 				},
 				{
-					"backtrace" : 12,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_ledc/include"
+					"backtrace" : 14,
+					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/main"
 				},
 				{
 					"backtrace" : 2,
@@ -522,47 +512,86 @@
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_ledc/include"
+					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/core/include"
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_ledc/esp32c6/include"
+					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/libhubproto/include"
 				},
 				{
-					"backtrace" : 14,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_pm/include"
+					"backtrace" : 6,
+					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/components/esp_uart_link/include"
 				},
 				{
-					"backtrace" : 15,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_gpio/include"
+					"backtrace" : 6,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_uart/include"
+				},
+				{
+					"backtrace" : 6,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_uart/include"
+				},
+				{
+					"backtrace" : 6,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_uart/esp32c6/include"
+				},
+				{
+					"backtrace" : 6,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/vfs/include"
+				},
+				{
+					"backtrace" : 7,
+					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/components/nvs_boot_id/include"
+				},
+				{
+					"backtrace" : 7,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/nvs_flash/include"
+				},
+				{
+					"backtrace" : 7,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_partition/include"
+				},
+				{
+					"backtrace" : 7,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_blockdev/include"
 				}
 			],
-			"language" : "C",
+			"language" : "CXX",
 			"sourceIndexes" : 
 			[
-				0,
-				1
+				0
 			]
 		}
 	],
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
+			"backtrace" : 5,
+			"id" : "__idf_hubproto::@f6145161f5135078f052"
 		},
 		{
 			"backtrace" : 5,
-			"id" : "__idf_esp_hal_ledc::@f7e0a64d676c21278c1e"
+			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
+		},
+		{
+			"backtrace" : 6,
+			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
+		},
+		{
+			"backtrace" : 7,
+			"id" : "__idf_nvs_boot_id::@f0926bba69427fc42cec"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
 		}
 	],
-	"id" : "__idf_esp_driver_ledc::@9a01f21f38f01238ca77",
-	"name" : "__idf_esp_driver_ledc",
-	"nameOnDisk" : "libesp_driver_ledc.a",
+	"id" : "__idf_main::@7368607ed66887415643",
+	"name" : "__idf_main",
+	"nameOnDisk" : "libmain.a",
 	"paths" : 
 	{
-		"build" : "esp-idf/esp_driver_ledc",
-		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_ledc"
+		"build" : "esp-idf/main",
+		"source" : "main"
 	},
 	"sourceGroups" : 
 	[
@@ -570,8 +599,7 @@
 			"name" : "Source Files",
 			"sourceIndexes" : 
 			[
-				0,
-				1
+				0
 			]
 		}
 	],
@@ -580,13 +608,7 @@
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_ledc/src/ledc.c",
-			"sourceGroupIndex" : 0
-		},
-		{
-			"backtrace" : 2,
-			"compileGroupIndex" : 0,
-			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_ledc/src/ledc_etm.c",
+			"path" : "main/main.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],

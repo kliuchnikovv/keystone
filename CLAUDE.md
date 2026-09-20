@@ -62,7 +62,9 @@ The brain core (Phases 3–4) is a set of composable, radio-free components that
 
 - **Phases 2–4 verified on hardware** (PlatformIO, 2× ESP32, 4 MB): `brain-s3` runs the full core (registry, coordinator, state machine, dispatcher, rules); `zigbee-c6` is a fake device (HELLO→declares occupancy 0x0010 + light 0x0020→reports occupancy STATE→ACKs COMMANDs). Observed on the wire: occupancy STATE → rule → light COMMAND → CMD_ACK Ok, seq-matched, both directions. Firmware build/flash: `cd firmware/<app> && pio run -t upload` (ports pinned in each `platformio.ini`; S3=usbmodem101, C6=usbmodem1101).
 
-Next: **Phase 5 — boot_id in NVS** (persist the reboot counter; resync already handled by `RadioCoordinator`), then **Phase 6 — real Zigbee** on the C6.
+- **Phase 5 done (host + hardware)**: `RadioCoordinator` now treats boot_id as the resync primitive on ANY message (not just HELLO) — an unknown chip or a changed boot_id clears that chip's entities and re-queries (self-healing across reboot/watchdog/OTA). `nvs_boot_id` component persists+increments the reboot counter; `zigbee-c6` puts it in every header. 75/75 host tests. On hardware: resetting the C6 bumps boot_id 1→2, the brain re-declares and the rule pipeline resumes.
+
+**MVP (Phases 0–6): only Phase 6 remains.** Next: **Phase 6 — real Zigbee** on the C6 (`esp-zigbee-sdk` coordinator + Zigbee-attribute → DECLARE/STATE translator, replacing the fake device). Debug separately from protocol bring-up (SPEC §9).
 
 ### ESP-IDF component layout
 

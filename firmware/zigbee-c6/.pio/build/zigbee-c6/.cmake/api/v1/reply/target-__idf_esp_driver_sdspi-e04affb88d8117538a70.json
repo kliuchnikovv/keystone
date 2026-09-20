@@ -3,7 +3,7 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "esp-idf/main/libmain.a"
+			"path" : "esp-idf/esp_driver_sdspi/libesp_driver_sdspi.a"
 		}
 	],
 	"backtrace" : 2,
@@ -17,7 +17,7 @@
 			"__component_set_dependencies",
 			"__component_set_all_dependencies",
 			"add_compile_options",
-			"add_cxx_compile_options",
+			"add_c_compile_options",
 			"add_compile_definitions",
 			"include_directories",
 			"target_include_directories",
@@ -26,7 +26,7 @@
 		"files" : 
 		[
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/component.cmake",
-			"main/CMakeLists.txt",
+			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi/CMakeLists.txt",
 			"/Users/kliuchnikovv/.platformio/packages/framework-espidf/tools/cmake/utilities.cmake"
 		],
 		"nodes" : 
@@ -37,7 +37,7 @@
 			{
 				"command" : 1,
 				"file" : 1,
-				"line" : 1,
+				"line" : 21,
 				"parent" : 0
 			},
 			{
@@ -79,13 +79,13 @@
 			{
 				"command" : 6,
 				"file" : 0,
-				"line" : 482,
+				"line" : 481,
 				"parent" : 1
 			},
 			{
 				"command" : 5,
 				"file" : 2,
-				"line" : 366,
+				"line" : 377,
 				"parent" : 8
 			},
 			{
@@ -111,6 +111,30 @@
 				"file" : 0,
 				"line" : 323,
 				"parent" : 12
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 347,
+				"parent" : 4
+			},
+			{
+				"command" : 3,
+				"file" : 0,
+				"line" : 365,
+				"parent" : 3
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 15
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 344,
+				"parent" : 15
 			}
 		]
 	},
@@ -120,7 +144,7 @@
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : "@\"/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/toolchain/cxxflags\" -fdiagnostics-color=always"
+					"fragment" : "@\"/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/.pio/build/zigbee-c6/toolchain/cflags\" -fdiagnostics-color=always"
 				},
 				{
 					"backtrace" : 7,
@@ -212,15 +236,19 @@
 				},
 				{
 					"backtrace" : 9,
-					"fragment" : "-std=gnu++26"
+					"fragment" : "-std=gnu23"
 				},
 				{
 					"backtrace" : 9,
-					"fragment" : "-fno-exceptions"
+					"fragment" : "-Wno-old-style-declaration"
 				},
 				{
 					"backtrace" : 9,
-					"fragment" : "-fuse-cxa-atexit"
+					"fragment" : "-fzero-init-padding-bits=all"
+				},
+				{
+					"backtrace" : 9,
+					"fragment" : "-fno-malloc-dce"
 				}
 			],
 			"defines" : 
@@ -266,7 +294,7 @@
 				},
 				{
 					"backtrace" : 13,
-					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/zigbee-c6/main"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi/include"
 				},
 				{
 					"backtrace" : 2,
@@ -506,66 +534,88 @@
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/core/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/sdmmc/include"
 				},
 				{
 					"backtrace" : 5,
-					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/libhubproto/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_blockdev/include"
+				},
+				{
+					"backtrace" : 5,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/include"
+				},
+				{
+					"backtrace" : 5,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/esp32c6/include"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/components/esp_uart_link/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_spi/include"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_uart/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_pm/include"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_uart/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_gpspi/include"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_uart/esp32c6/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_gpspi/esp32c6/include"
 				},
 				{
 					"backtrace" : 6,
-					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/vfs/include"
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_dma/include"
+				},
+				{
+					"backtrace" : 14,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_gpio/include"
+				},
+				{
+					"backtrace" : 16,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_timer/include"
+				},
+				{
+					"backtrace" : 17,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_mm/include"
 				}
 			],
-			"language" : "CXX",
+			"language" : "C",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2
 			]
 		}
 	],
 	"dependencies" : 
 	[
 		{
-			"backtrace" : 2,
-			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
+			"backtrace" : 5,
+			"id" : "__idf_esp_hal_sd::@1ada79c52e603a3e38c7"
 		},
 		{
 			"backtrace" : 5,
-			"id" : "__idf_hubproto::@f6145161f5135078f052"
-		},
-		{
-			"backtrace" : 5,
-			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
+			"id" : "__idf_sdmmc::@89ed5bca1750ffbc7db6"
 		},
 		{
 			"backtrace" : 6,
-			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
+			"id" : "__idf_esp_driver_spi::@a108b58494cdd93e678c"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "__idf_riscv::@5eeb1a2ca709d020776e"
 		}
 	],
-	"id" : "__idf_main::@7368607ed66887415643",
-	"name" : "__idf_main",
-	"nameOnDisk" : "libmain.a",
+	"id" : "__idf_esp_driver_sdspi::@c293af58c49fe790ac32",
+	"name" : "__idf_esp_driver_sdspi",
+	"nameOnDisk" : "libesp_driver_sdspi.a",
 	"paths" : 
 	{
-		"build" : "esp-idf/main",
-		"source" : "main"
+		"build" : "esp-idf/esp_driver_sdspi",
+		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi"
 	},
 	"sourceGroups" : 
 	[
@@ -573,7 +623,9 @@
 			"name" : "Source Files",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2
 			]
 		}
 	],
@@ -582,7 +634,19 @@
 		{
 			"backtrace" : 2,
 			"compileGroupIndex" : 0,
-			"path" : "main/main.cpp",
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi/src/sdspi_crc.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi/src/sdspi_host.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdspi/src/sdspi_transaction.c",
 			"sourceGroupIndex" : 0
 		}
 	],

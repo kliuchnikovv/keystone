@@ -11,6 +11,7 @@
 #include "esp_log.h"
 
 #include "esp_uart_link.hpp"
+#include "nvs_boot_id.hpp"
 #include "core/uart_transport.hpp"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
@@ -23,7 +24,7 @@ const char* kTag = "zigbee-c6";
 constexpr int kUartTxGpio = 5;
 constexpr int kUartRxGpio = 4;
 constexpr std::uint8_t kOwnChipId = 0x01;
-constexpr std::uint8_t kBootId = 1;  // TODO(Phase 5): persist in NVS
+std::uint8_t g_boot_id = 0;  // set from NVS at boot (SPEC Phase 5)
 
 constexpr std::uint16_t kOccupancy = 0x0010;
 constexpr std::uint8_t  kOccupiedAttr = 0x50;
@@ -41,7 +42,7 @@ hubproto::Header header(hubproto::MsgType type, std::uint16_t entity_id,
   h.version = hubproto::kProtocolVersion;
   h.type = type;
   h.chip_id = kOwnChipId;
-  h.boot_id = kBootId;
+  h.boot_id = g_boot_id;
   h.seq = seq;
   h.entity_id = entity_id;
   return h;
@@ -104,12 +105,15 @@ extern "C" void app_main(void) {
   }());
   ESP_ERROR_CHECK(link.begin());
 
+  g_boot_id = fw::next_boot_id();  // persisted reboot counter (SPEC Phase 5)
+
   static core::UartTransport bus(link);
   g_bus = &bus;
   bus.subscribe(&on_message, nullptr);
   link.start();
 
-  ESP_LOGI(kTag, "chip 0x%02x up", kOwnChipId);
+  ESP_LOGI(kTag, "chip 0x%02x up; boot_id=%u", kOwnChipId,
+           static_cast<unsigned>(g_boot_id));
 
   while (true) {
     if (!g_declared) {

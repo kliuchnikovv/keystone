@@ -116,30 +116,46 @@ template <typename Registry, std::size_t MaxChips>
 void RadioCoordinator<Registry, MaxChips>::handle(const hubproto::Header& h,
                                                   const std::uint8_t* payload,
                                                   std::size_t len) noexcept {
+  const std::uint8_t chip = h.chip_id;
+  const ChipState* existing = find_chip(chip);
+
+  // An unknown chip (e.g. after a brain reboot), or a chip whose boot_id
+  // changed (a reboot, watchdog reset or OTA — SPEC §4.2), invalidates any
+  // prior declarations: drop them and re-query. boot_id is the resync primitive,
+  // so this triggers on ANY message, not just HELLO.
+  if (existing == nullptr || existing->boot_id != h.boot_id) {
+    ChipState* c = get_or_add(chip);
+    if (c == nullptr) return;  // chip table full
+    c->boot_id = h.boot_id;
+    c->ready = false;
+    reg_.clear_chip(chip);
+    send_query(chip);
+    return;
+  }
+
+  // Known chip, unchanged boot_id.
   switch (h.type) {
     case hubproto::MsgType::Hello: {
-      ChipState* c = get_or_add(h.chip_id);
-      if (c == nullptr) return;  // chip table full
-      c->boot_id = h.boot_id;
+      ChipState* c = get_or_add(chip);
       c->ready = false;
-      reg_.clear_chip(h.chip_id);  // a HELLO always starts a fresh cycle
-      send_query(h.chip_id);
+      reg_.clear_chip(chip);  // a HELLO always starts a fresh cycle
+      send_query(chip);
       break;
     }
     case hubproto::MsgType::Declare: {
       hubproto::DeclareView view{};
       if (hubproto::decode_declare(payload, len, view)) {
-        reg_.declare(h.chip_id, view);
+        reg_.declare(chip, view);
       }
       break;
     }
     case hubproto::MsgType::DeclareEnd: {
-      ChipState* c = get_or_add(h.chip_id);
-      if (c != nullptr) c->ready = true;
+      ChipState* c = get_or_add(chip);
+      c->ready = true;
       break;
     }
     default:
-      break;  // STATE/COMMAND/CMD_ACK/HEARTBEAT handled elsewhere
+      break;  // STATE/COMMAND/CMD_ACK/HEARTBEAT need no coordinator action
   }
 }
 

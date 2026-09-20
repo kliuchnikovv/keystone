@@ -2325,6 +2325,25 @@ rule C_STATIC_LIBRARY_LINKER____idf_esp_uart_link_
 #############################################
 # Rule for compiling CXX files.
 
+rule CXX_COMPILER____idf_nvs_boot_id_unscanned_
+  depfile = $DEP_FILE
+  deps = gcc
+  command = ${LAUNCHER}${CODE_CHECK}/Users/kliuchnikovv/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-g++ $DEFINES $INCLUDES $FLAGS -MD -MT $out -MF $DEP_FILE -o $out -c $in
+  description = Building CXX object $out
+
+
+#############################################
+# Rule for linking C static library.
+
+rule C_STATIC_LIBRARY_LINKER____idf_nvs_boot_id_
+  command = $PRE_LINK && /Users/kliuchnikovv/.platformio/packages/tool-cmake/bin/cmake -E rm -f $TARGET_FILE && /Users/kliuchnikovv/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-ar qc $TARGET_FILE $LINK_FLAGS $in && /Users/kliuchnikovv/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-ranlib $TARGET_FILE && /Users/kliuchnikovv/.platformio/packages/tool-cmake/bin/cmake -E touch $TARGET_FILE && $POST_BUILD
+  description = Linking C static library $TARGET_FILE
+  restat = $RESTAT
+
+
+#############################################
+# Rule for compiling CXX files.
+
 rule CXX_COMPILER____idf_main_unscanned_
   depfile = $DEP_FILE
   deps = gcc

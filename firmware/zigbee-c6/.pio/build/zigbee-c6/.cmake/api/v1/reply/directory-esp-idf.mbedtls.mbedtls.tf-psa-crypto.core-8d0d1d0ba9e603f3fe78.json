@@ -39,7 +39,7 @@
 				"esp-idf/mbedtls/mbedtls/tf-psa-crypto/core/libtfpsacrypto.a"
 			],
 			"targetId" : "tfpsacrypto::@a178143d93fb03652d8f",
-			"targetIndex" : 158,
+			"targetIndex" : 159,
 			"type" : "target"
 		},
 		{
@@ -51,7 +51,7 @@
 				"esp-idf/mbedtls/mbedtls/tf-psa-crypto/core/libtfpsacrypto.a"
 			],
 			"targetId" : "tfpsacrypto::@a178143d93fb03652d8f",
-			"targetIndex" : 158,
+			"targetIndex" : 159,
 			"type" : "target"
 		}
 	],

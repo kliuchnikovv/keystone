@@ -52,6 +52,13 @@ void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_i
            static_cast<unsigned>(v.raw[0]));
 }
 
+void on_raw(void* /*ctx*/, const hubproto::Header& h, const std::uint8_t* /*p*/,
+            std::size_t /*len*/) {
+  ESP_LOGI(kTag, "rx type=0x%02x chip=%u boot=%u",
+           static_cast<unsigned>(static_cast<std::uint8_t>(h.type)),
+           static_cast<unsigned>(h.chip_id), static_cast<unsigned>(h.boot_id));
+}
+
 void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
                    std::uint8_t attr_id, hubproto::CmdAckStatus status) {
   ESP_LOGI(kTag, "COMMAND result seq=%u entity=0x%04x attr=0x%02x status=%d",
@@ -78,6 +85,7 @@ extern "C" void app_main(void) {
   static Dispatcher disp(bus, reg);
   static Rules rules(disp, &now_ms, nullptr);
 
+  bus.subscribe(&on_raw, nullptr);  // 4th/last subscriber: raw inbound trace
   disp.on_result(&on_cmd_result, nullptr);
 
   // Rule: motion on -> light on; motion off -> light off.

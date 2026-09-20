@@ -45,7 +45,7 @@
 				"esp-idf/mbedtls/mbedtls/library/libmbedx509.a"
 			],
 			"targetId" : "mbedx509::@12759e2a35724d846b97",
-			"targetIndex" : 140,
+			"targetIndex" : 141,
 			"type" : "target"
 		},
 		{
@@ -57,7 +57,7 @@
 				"esp-idf/mbedtls/mbedtls/library/libmbedtls.a"
 			],
 			"targetId" : "mbedtls::@12759e2a35724d846b97",
-			"targetIndex" : 138,
+			"targetIndex" : 139,
 			"type" : "target"
 		},
 		{

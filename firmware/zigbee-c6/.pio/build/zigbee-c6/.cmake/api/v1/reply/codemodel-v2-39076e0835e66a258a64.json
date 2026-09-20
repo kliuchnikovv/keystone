@@ -20,30 +20,30 @@
 					"source" : ".",
 					"targetIndexes" : 
 					[
-						111,
 						112,
 						113,
 						114,
 						115,
 						116,
-						119,
+						117,
 						120,
-						127,
-						129,
-						131,
-						133,
+						121,
+						128,
+						130,
+						132,
 						134,
 						135,
 						136,
-						142,
+						137,
 						143,
 						144,
-						151,
-						155,
+						145,
+						152,
 						156,
 						157,
-						160,
-						161
+						158,
+						161,
+						162
 					]
 				},
 				{
@@ -190,7 +190,8 @@
 						157,
 						158,
 						159,
-						160
+						160,
+						161
 					],
 					"hasInstallRule" : true,
 					"jsonFile" : "directory-esp-idf-2e5ca56c8c529975e0bb.json",
@@ -214,7 +215,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/riscv",
 					"targetIndexes" : 
 					[
-						100
+						101
 					]
 				},
 				{
@@ -330,8 +331,8 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/bootloader",
 					"targetIndexes" : 
 					[
-						117,
-						128
+						118,
+						129
 					]
 				},
 				{
@@ -357,12 +358,12 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/partition_table",
 					"targetIndexes" : 
 					[
-						130,
-						146,
+						131,
 						147,
 						148,
 						149,
-						150
+						150,
+						151
 					]
 				},
 				{
@@ -438,13 +439,13 @@
 					"targetIndexes" : 
 					[
 						8,
-						122,
 						123,
 						124,
 						125,
 						126,
-						153,
-						154
+						127,
+						154,
+						155
 					]
 				},
 				{
@@ -585,7 +586,7 @@
 					"targetIndexes" : 
 					[
 						94,
-						121
+						122
 					]
 				},
 				{
@@ -608,7 +609,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls",
 					"targetIndexes" : 
 					[
-						139
+						140
 					]
 				},
 				{
@@ -643,7 +644,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto",
 					"targetIndexes" : 
 					[
-						159
+						160
 					]
 				},
 				{
@@ -661,7 +662,7 @@
 				{
 					"build" : "esp-idf/mbedtls/mbedtls/tf-psa-crypto/core",
 					"hasInstallRule" : true,
-					"jsonFile" : "directory-esp-idf.mbedtls.mbedtls.tf-psa-crypto.core-1cd4bf373f703d894153.json",
+					"jsonFile" : "directory-esp-idf.mbedtls.mbedtls.tf-psa-crypto.core-8d0d1d0ba9e603f3fe78.json",
 					"minimumCMakeVersion" : 
 					{
 						"string" : "3.10.2"
@@ -671,7 +672,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/core",
 					"targetIndexes" : 
 					[
-						158
+						159
 					]
 				},
 				{
@@ -705,7 +706,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/everest",
 					"targetIndexes" : 
 					[
-						132
+						133
 					]
 				},
 				{
@@ -720,7 +721,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/p256-m",
 					"targetIndexes" : 
 					[
-						145
+						146
 					]
 				},
 				{
@@ -740,7 +741,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/tf-psa-crypto/drivers/builtin",
 					"targetIndexes" : 
 					[
-						118
+						119
 					]
 				},
 				{
@@ -768,7 +769,7 @@
 				{
 					"build" : "esp-idf/mbedtls/mbedtls/library",
 					"hasInstallRule" : true,
-					"jsonFile" : "directory-esp-idf.mbedtls.mbedtls.library-2d9952e5569c18283628.json",
+					"jsonFile" : "directory-esp-idf.mbedtls.mbedtls.library-281e4e3f36d12b624508.json",
 					"minimumCMakeVersion" : 
 					{
 						"string" : "3.10.2"
@@ -778,9 +779,9 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/mbedtls/mbedtls/library",
 					"targetIndexes" : 
 					[
-						137,
 						138,
-						140
+						139,
+						141
 					]
 				},
 				{
@@ -862,7 +863,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/spi_flash",
 					"targetIndexes" : 
 					[
-						104
+						105
 					]
 				},
 				{
@@ -893,8 +894,8 @@
 					"targetIndexes" : 
 					[
 						80,
-						141,
-						152
+						142,
+						153
 					]
 				},
 				{
@@ -1010,7 +1011,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/soc",
 					"targetIndexes" : 
 					[
-						103
+						104
 					]
 				},
 				{
@@ -1183,7 +1184,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/pthread",
 					"targetIndexes" : 
 					[
-						99
+						100
 					]
 				},
 				{
@@ -1314,7 +1315,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/nvs_sec_provider",
 					"targetIndexes" : 
 					[
-						96
+						97
 					]
 				},
 				{
@@ -1329,7 +1330,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/nvs_flash",
 					"targetIndexes" : 
 					[
-						95
+						96
 					]
 				},
 				{
@@ -1374,7 +1375,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/vfs",
 					"targetIndexes" : 
 					[
-						108
+						109
 					]
 				},
 				{
@@ -1430,7 +1431,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/wpa_supplicant",
 					"targetIndexes" : 
 					[
-						110
+						111
 					]
 				},
 				{
@@ -1516,7 +1517,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/unity",
 					"targetIndexes" : 
 					[
-						107
+						108
 					]
 				},
 				{
@@ -1997,7 +1998,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/sdmmc",
 					"targetIndexes" : 
 					[
-						102
+						103
 					]
 				},
 				{
@@ -2180,7 +2181,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/tcp_transport",
 					"targetIndexes" : 
 					[
-						106
+						107
 					]
 				},
 				{
@@ -2270,7 +2271,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protobuf-c",
 					"targetIndexes" : 
 					[
-						97
+						98
 					]
 				},
 				{
@@ -2285,7 +2286,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/protocomm",
 					"targetIndexes" : 
 					[
-						98
+						99
 					]
 				},
 				{
@@ -2348,7 +2349,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/wear_levelling",
 					"targetIndexes" : 
 					[
-						109
+						110
 					]
 				},
 				{
@@ -2415,7 +2416,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/rt",
 					"targetIndexes" : 
 					[
-						101
+						102
 					]
 				},
 				{
@@ -2430,7 +2431,7 @@
 					"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/spiffs",
 					"targetIndexes" : 
 					[
-						105
+						106
 					]
 				},
 				{
@@ -2490,6 +2491,21 @@
 					]
 				},
 				{
+					"build" : "esp-idf/nvs_boot_id",
+					"jsonFile" : "directory-esp-idf.nvs_boot_id-54f635067bee4c4d3c30.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.22"
+					},
+					"parentIndex" : 1,
+					"projectIndex" : 1,
+					"source" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/components/nvs_boot_id",
+					"targetIndexes" : 
+					[
+						95
+					]
+				},
+				{
 					"build" : "esp-idf/main",
 					"jsonFile" : "directory-esp-idf.main-f27928b5f5a70a8f4668.json",
 					"minimumCMakeVersion" : 
@@ -2520,30 +2536,30 @@
 					"name" : "keystone_zigbee_c6",
 					"targetIndexes" : 
 					[
-						111,
 						112,
 						113,
 						114,
 						115,
 						116,
-						119,
+						117,
 						120,
-						127,
-						129,
-						131,
-						133,
+						121,
+						128,
+						130,
+						132,
 						134,
 						135,
 						136,
-						142,
+						137,
 						143,
 						144,
-						151,
-						155,
+						145,
+						152,
 						156,
 						157,
-						160,
-						161
+						158,
+						161,
+						162
 					]
 				},
 				{
@@ -2699,7 +2715,8 @@
 						157,
 						158,
 						159,
-						160
+						160,
+						161
 					],
 					"name" : "esp-idf",
 					"parentIndex" : 0,
@@ -2816,24 +2833,25 @@
 						108,
 						109,
 						110,
-						117,
-						121,
+						111,
+						118,
 						122,
 						123,
 						124,
 						125,
 						126,
-						128,
-						130,
-						141,
-						146,
+						127,
+						129,
+						131,
+						142,
 						147,
 						148,
 						149,
 						150,
-						152,
+						151,
 						153,
-						154
+						154,
+						155
 					]
 				},
 				{
@@ -2852,10 +2870,10 @@
 					"parentIndex" : 1,
 					"targetIndexes" : 
 					[
-						137,
 						138,
 						139,
-						140
+						140,
+						141
 					]
 				},
 				{
@@ -2875,11 +2893,11 @@
 					"parentIndex" : 2,
 					"targetIndexes" : 
 					[
-						118,
-						132,
-						145,
-						158,
-						159
+						119,
+						133,
+						146,
+						159,
+						160
 					]
 				}
 			],
@@ -2909,7 +2927,7 @@
 				{
 					"directoryIndex" : 90,
 					"id" : "__idf_cmock::@38f9eb59693b7394f54c",
-					"jsonFile" : "target-__idf_cmock-64596a99b446e75027a3.json",
+					"jsonFile" : "target-__idf_cmock-14c3ad52166baba19357.json",
 					"name" : "__idf_cmock",
 					"projectIndex" : 1
 				},
@@ -2923,7 +2941,7 @@
 				{
 					"directoryIndex" : 158,
 					"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc",
-					"jsonFile" : "target-__idf_core-c4e38a581f856d7c47e2.json",
+					"jsonFile" : "target-__idf_core-9a80e54475d52eed7b56.json",
 					"name" : "__idf_core",
 					"projectIndex" : 1
 				},
@@ -2965,7 +2983,7 @@
 				{
 					"directoryIndex" : 13,
 					"id" : "__idf_esp_app_format::@08c2bdce7fd85cdbea06",
-					"jsonFile" : "target-__idf_esp_app_format-50e5dcccd6462fbac91f.json",
+					"jsonFile" : "target-__idf_esp_app_format-064086b4a467fc34ecb0.json",
 					"name" : "__idf_esp_app_format",
 					"projectIndex" : 1
 				},
@@ -3042,49 +3060,49 @@
 				{
 					"directoryIndex" : 112,
 					"id" : "__idf_esp_driver_ledc::@9a01f21f38f01238ca77",
-					"jsonFile" : "target-__idf_esp_driver_ledc-9508c55061c5b0164cca.json",
+					"jsonFile" : "target-__idf_esp_driver_ledc-9e68b30ca6cce0aaca40.json",
 					"name" : "__idf_esp_driver_ledc",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 114,
 					"id" : "__idf_esp_driver_mcpwm::@48ac72772582b222889a",
-					"jsonFile" : "target-__idf_esp_driver_mcpwm-87df98872a7a6ce8d2b0.json",
+					"jsonFile" : "target-__idf_esp_driver_mcpwm-dd253a40568b6d165783.json",
 					"name" : "__idf_esp_driver_mcpwm",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 116,
 					"id" : "__idf_esp_driver_parlio::@26a02346e1abd52d0d01",
-					"jsonFile" : "target-__idf_esp_driver_parlio-b56e4773d063d6587eee.json",
+					"jsonFile" : "target-__idf_esp_driver_parlio-9529ca6ce496f9de4508.json",
 					"name" : "__idf_esp_driver_parlio",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 118,
 					"id" : "__idf_esp_driver_pcnt::@7f5d6483ec7c43d22871",
-					"jsonFile" : "target-__idf_esp_driver_pcnt-3092c3448f47d19f2cc1.json",
+					"jsonFile" : "target-__idf_esp_driver_pcnt-576ccc5db1efb458045d.json",
 					"name" : "__idf_esp_driver_pcnt",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 122,
 					"id" : "__idf_esp_driver_rmt::@0efb206e593213c2b54a",
-					"jsonFile" : "target-__idf_esp_driver_rmt-019549ccd6f6a8b2ab33.json",
+					"jsonFile" : "target-__idf_esp_driver_rmt-362fab591788830ea69b.json",
 					"name" : "__idf_esp_driver_rmt",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 125,
 					"id" : "__idf_esp_driver_sd_intf::@9cb2f063b9dd7d282253",
-					"jsonFile" : "target-__idf_esp_driver_sd_intf-1c38547dc391f7e373da.json",
+					"jsonFile" : "target-__idf_esp_driver_sd_intf-b2fe54b8852100a24727.json",
 					"name" : "__idf_esp_driver_sd_intf",
 					"projectIndex" : 1
 				},
 				{
 					"directoryIndex" : 126,
 					"id" : "__idf_esp_driver_sdio::@c3c0139becf4e3b2a9c1",
-					"jsonFile" : "target-__idf_esp_driver_sdio-fa5cd38b01ec615bcd0a.json",
+					"jsonFile" : "target-__idf_esp_driver_sdio-39bea3a194d45528eb69.json",
 					"name" : "__idf_esp_driver_sdio",
 					"projectIndex" : 1
 				},
@@ -3098,7 +3116,7 @@
 				{
 					"directoryIndex" : 129,
 					"id" : "__idf_esp_driver_sdspi::@c293af58c49fe790ac32",
-					"jsonFile" : "target-__idf_esp_driver_sdspi-047dc2608e623f5c4f56.json",
+					"jsonFile" : "target-__idf_esp_driver_sdspi-e04affb88d8117538a70.json",
 					"name" : "__idf_esp_driver_sdspi",
 					"projectIndex" : 1
 				},
@@ -3140,7 +3158,7 @@
 				{
 					"directoryIndex" : 133,
 					"id" : "__idf_esp_eth::@68140d310044213ed0bc",
-					"jsonFile" : "target-__idf_esp_eth-3240ec3641f269394091.json",
+					"jsonFile" : "target-__idf_esp_eth-d52e7704e360de2db82e.json",
 					"name" : "__idf_esp_eth",
 					"projectIndex" : 1
 				},
@@ -3357,7 +3375,7 @@
 				{
 					"directoryIndex" : 142,
 					"id" : "__idf_esp_lcd::@d5a84597e1633c9ab0d3",
-					"jsonFile" : "target-__idf_esp_lcd-8d42a3daf3bbf224b0ae.json",
+					"jsonFile" : "target-__idf_esp_lcd-59bb520cf46f80dcedf8.json",
 					"name" : "__idf_esp_lcd",
 					"projectIndex" : 1
 				},
@@ -3371,7 +3389,7 @@
 				{
 					"directoryIndex" : 145,
 					"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef",
-					"jsonFile" : "target-__idf_esp_local_ctrl-e977c35b72fd3ed17300.json",
+					"jsonFile" : "target-__idf_esp_local_ctrl-69bb652768ef67f49093.json",
 					"name" : "__idf_esp_local_ctrl",
 					"projectIndex" : 1
 				},
@@ -3462,7 +3480,7 @@
 				{
 					"directoryIndex" : 159,
 					"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8",
-					"jsonFile" : "target-__idf_esp_uart_link-fc6786878f461e76b026.json",
+					"jsonFile" : "target-__idf_esp_uart_link-4aeafc0c358da2660fd3.json",
 					"name" : "__idf_esp_uart_link",
 					"projectIndex" : 1
 				},
@@ -3476,7 +3494,7 @@
 				{
 					"directoryIndex" : 150,
 					"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7",
-					"jsonFile" : "target-__idf_fatfs-730c3e96215daeec2066.json",
+					"jsonFile" : "target-__idf_fatfs-4a942e25ae072876f9e2.json",
 					"name" : "__idf_fatfs",
 					"projectIndex" : 1
 				},
@@ -3518,7 +3536,7 @@
 				{
 					"directoryIndex" : 152,
 					"id" : "__idf_ieee802154::@4f032233b439602167f9",
-					"jsonFile" : "target-__idf_ieee802154-000447faccbf054d4275.json",
+					"jsonFile" : "target-__idf_ieee802154-c1718a0a85277daaced1.json",
 					"name" : "__idf_ieee802154",
 					"projectIndex" : 1
 				},
@@ -3537,9 +3555,9 @@
 					"projectIndex" : 1
 				},
 				{
-					"directoryIndex" : 160,
+					"directoryIndex" : 161,
 					"id" : "__idf_main::@7368607ed66887415643",
-					"jsonFile" : "target-__idf_main-0cc058212d1ca3f06833.json",
+					"jsonFile" : "target-__idf_main-29cef79975e1517e8c47.json",
 					"name" : "__idf_main",
 					"projectIndex" : 1
 				},
@@ -3548,6 +3566,13 @@
 					"id" : "__idf_mbedtls::@9d0b8d44c897d31e7973",
 					"jsonFile" : "target-__idf_mbedtls-9bbd624d118ede2c6458.json",
 					"name" : "__idf_mbedtls",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 160,
+					"id" : "__idf_nvs_boot_id::@f0926bba69427fc42cec",
+					"jsonFile" : "target-__idf_nvs_boot_id-62d4e10964deae4defd4.json",
+					"name" : "__idf_nvs_boot_id",
 					"projectIndex" : 1
 				},
 				{
@@ -3574,7 +3599,7 @@
 				{
 					"directoryIndex" : 144,
 					"id" : "__idf_protocomm::@d76d01c8dec06205e1fc",
-					"jsonFile" : "target-__idf_protocomm-297ff75d70bd468eb885.json",
+					"jsonFile" : "target-__idf_protocomm-4d48d26088662ab108d5.json",
 					"name" : "__idf_protocomm",
 					"projectIndex" : 1
 				},
@@ -3602,7 +3627,7 @@
 				{
 					"directoryIndex" : 124,
 					"id" : "__idf_sdmmc::@89ed5bca1750ffbc7db6",
-					"jsonFile" : "target-__idf_sdmmc-74d498078328ac7ac573.json",
+					"jsonFile" : "target-__idf_sdmmc-6d66a0a3826bd7ecf8f1.json",
 					"name" : "__idf_sdmmc",
 					"projectIndex" : 1
 				},
@@ -3665,7 +3690,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "__ldgen_output_sections.ld::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-__ldgen_output_sections.ld-1740fcbd7e667731e51f.json",
+					"jsonFile" : "target-__ldgen_output_sections.ld-fd76345c901dedcb5e34.json",
 					"name" : "__ldgen_output_sections.ld",
 					"projectIndex" : 0
 				},
@@ -3840,7 +3865,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "keystone_zigbee_c6.elf::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-keystone_zigbee_c6.elf-cf1ebbd1858c19765f94.json",
+					"jsonFile" : "target-keystone_zigbee_c6.elf-d55be1e66d179b1c9cf8.json",
 					"name" : "keystone_zigbee_c6.elf",
 					"projectIndex" : 0
 				},

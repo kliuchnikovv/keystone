@@ -209,5 +209,7 @@ $<TARGET_FILE:idf::core>
 $<TARGET_FILE:__idf_hubproto>
 $<TARGET_FILE:idf::esp_uart_link>
 $<TARGET_FILE:__idf_core>
+$<TARGET_FILE:idf::nvs_boot_id>
 $<TARGET_FILE:idf::main>
 $<TARGET_FILE:__idf_esp_uart_link>
+$<TARGET_FILE:__idf_nvs_boot_id>
