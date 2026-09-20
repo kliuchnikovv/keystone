@@ -39,6 +39,14 @@ idf.py -p <PORT> flash monitor
 C6 and S3-Zero flash over their own USB-C. The CAM needs an external FTDI (SPEC §10).
 Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your board differs).
 
+**`zigbee-c6` builds with native ESP-IDF 5.5** (installed at `~/esp/esp-idf`;
+`source ~/esp/esp-idf/export.sh` then `idf.py -p /dev/cu.usbmodem1101 build flash`).
+It pulls `espressif/esp-zigbee-lib` + `espressif/esp-zboss-lib` (managed
+components) — PlatformIO's bundled IDF was too old for the Zigbee SDK. `brain-s3`
+still builds/flashes with PlatformIO (`pio run -t upload`, S3=usbmodem101).
+The Zigbee console only logs on events; to capture the boot log open the port
+with pyserial and pulse DTR=False+RTS=True→RTS=False to reset.
+
 ## Conventions
 
 - C++17, 2-space indent, `snake_case` files, warnings-as-signal (`-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`).
@@ -64,7 +72,9 @@ The brain core (Phases 3–4) is a set of composable, radio-free components that
 
 - **Phase 5 done (host + hardware)**: `RadioCoordinator` now treats boot_id as the resync primitive on ANY message (not just HELLO) — an unknown chip or a changed boot_id clears that chip's entities and re-queries (self-healing across reboot/watchdog/OTA). `nvs_boot_id` component persists+increments the reboot counter; `zigbee-c6` puts it in every header. 75/75 host tests. On hardware: resetting the C6 bumps boot_id 1→2, the brain re-declares and the rule pipeline resumes.
 
-**MVP (Phases 0–6): only Phase 6 remains.** Next: **Phase 6 — real Zigbee** on the C6 (`esp-zigbee-sdk` coordinator + Zigbee-attribute → DECLARE/STATE translator, replacing the fake device). Debug separately from protocol bring-up (SPEC §9).
+- **Phase 6 core done (hardware-verified)**: `zigbee-c6` is now a real `esp-zigbee-sdk` coordinator (native ESP-IDF 5.5, on-chip 802.15.4) with the Zigbee→DECLARE/STATE/COMMAND translator, replacing the fake device. On join it discovers a device's endpoints/clusters, reads Basic manufacturer/model, maps each On/Off endpoint to a `switch` entity (numbered from 0x0100), binds + configures On/Off reporting, and sends HELLO so the brain re-runs QUERY→DECLARE (HELLO is the resync primitive for late joins). STATE flows up from On/Off reports; COMMAND(on_off) translates to a ZCL On/Off command down → CMD_ACK. Verified end-to-end with an IKEA INSPELNING smart plug: `brain-s3` (Phase 6 demo harness) toggles the switch every 6 s → real relay switches → CMD_ACK Ok (seq-matched) → On/Off report → STATE back, stable across many cycles. Built on branch `phase6-zigbee`.
+
+**MVP (Phases 0–6): core complete.** Remaining Phase 6 polish (**Stage 2c**): power/energy metering — the IKEA plug also exposes Electrical Measurement (0x0b04) + Metering (0x0702); needs new attr_ids in SPEC §6.1 (e.g. power, energy) + reporting → STATE. Also nice-to-have: boot-time re-discovery of already-joined devices (today an app reflash needs a plug factory-reset to re-trigger discovery).
 
 ### ESP-IDF component layout
 
