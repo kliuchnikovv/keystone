@@ -1,9 +1,14 @@
-// Phases 3-4 (brain, ESP32-S3-Zero): the full brain core over the UART link.
+// Brain (ESP32-S3-Zero): the full brain core over the UART link.
 //
 // Wires the portable core to the transport: EntityRegistry + RadioCoordinator
 // (HELLO->QUERY->DECLARE), StateMachine (applies STATE), CommandDispatcher
-// (COMMAND + CMD_ACK, retries), and a RuleEngine. Rule: occupancy 0x0010 →
-// drive light 0x0020. Everything except EspUartLink is hardware-agnostic.
+// (COMMAND + CMD_ACK, retries), and a RuleEngine (occupancy 0x0010 -> light
+// 0x0020, from the Phase 3-5 fake pipeline). Everything except EspUartLink is
+// hardware-agnostic.
+//
+// Phase 6 demo harness: once the C6 (chip 0x01) declares a real Zigbee `switch`
+// entity (numbered from 0x0100 by the translator), toggle it every 6s so the
+// brain drives a real relay end-to-end (COMMAND -> CMD_ACK, STATE back).
 //
 // Wiring (crossed, common GND): S3.TX(GPIO7) -> C6.RX(GPIO4), S3.RX(GPIO6) <- C6.TX(GPIO5).
 #include "freertos/FreeRTOS.h"
@@ -66,6 +71,19 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
            static_cast<unsigned>(attr_id), static_cast<int>(status));
 }
 
+// Phase 6 demo harness: the C6 translator numbers Zigbee switch entities from
+// 0x0100. Find the first one so the brain can drive a real relay end-to-end.
+constexpr std::uint16_t kSwitchIdBase = 0x0100;
+constexpr std::uint16_t kSwitchIdEnd = 0x0108;
+
+std::uint16_t find_switch(const Registry& reg) {
+  for (std::uint16_t id = kSwitchIdBase; id < kSwitchIdEnd; ++id) {
+    const auto* e = reg.find(id);
+    if (e != nullptr && e->device_type == hubproto::DeviceType::Switch) return id;
+  }
+  return 0;
+}
+
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -103,12 +121,31 @@ extern "C" void app_main(void) {
   ESP_LOGI(kTag, "brain up; core online, awaiting HELLO from chips");
 
   bool announced = false;
+  std::uint32_t last_toggle_ms = 0;
+  bool desired_on = false;
   while (true) {
-    disp.poll(now_ms(nullptr));  // drive command timeouts/retries
+    const std::uint32_t t = now_ms(nullptr);
+    disp.poll(t);  // drive command timeouts/retries
     if (!announced && coord.chip_ready(0x01)) {
       announced = true;
       ESP_LOGI(kTag, "chip 0x01 declared; registry has %u entities",
                static_cast<unsigned>(reg.size()));
+    }
+
+    // Phase 6 demo: toggle the real Zigbee switch every 6s, end-to-end.
+    if (coord.chip_ready(0x01) && t - last_toggle_ms >= 6000) {
+      const std::uint16_t sw = find_switch(reg);
+      if (sw != 0) {
+        last_toggle_ms = t;
+        desired_on = !desired_on;
+        std::uint16_t seq = 0;
+        if (disp.send(sw, kOnOffAttr, hubproto::Value::make_bool(desired_on), t,
+                      seq)) {
+          ESP_LOGI(kTag, "-> COMMAND switch 0x%04x on_off=%d (seq=%u)",
+                   static_cast<unsigned>(sw), desired_on ? 1 : 0,
+                   static_cast<unsigned>(seq));
+        }
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(200));
   }
