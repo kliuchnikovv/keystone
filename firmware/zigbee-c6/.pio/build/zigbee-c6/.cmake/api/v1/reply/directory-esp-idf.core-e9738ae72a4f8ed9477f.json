@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "esp-idf/core",
+		"source" : "/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/components/core"
+	}
+}

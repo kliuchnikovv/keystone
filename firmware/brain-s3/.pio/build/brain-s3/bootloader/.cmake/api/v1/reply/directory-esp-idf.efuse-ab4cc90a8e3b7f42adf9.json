@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "esp-idf/efuse",
+		"source" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/efuse"
+	}
+}

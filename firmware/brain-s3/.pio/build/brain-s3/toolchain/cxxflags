@@ -1,0 +1,6 @@
+-mlongcalls
+-fno-builtin-memcpy
+-fno-builtin-memset
+-fno-builtin-bzero
+"-specs=/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/specs/picolibc.specs"
+-fno-rtti

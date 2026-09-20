@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/CMakeFiles/bootloader
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/CMakeFiles/bootloader.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/CMakeFiles/bootloader-complete.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp/firmware/brain-s3/.pio/build/brain-s3/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule
