@@ -59,27 +59,6 @@
 			"id" : "__idf_esp_driver_gptimer::@b8628cd9d7b32710339f"
 		},
 		{
-			"id" : "__idf_perfmon::@aac0f647c32bb8f54a67"
-		},
-		{
-			"id" : "__idf_rt::@c044be52929cb104e3c1"
-		},
-		{
-			"id" : "__idf_spiffs::@df881b71474064c86689"
-		},
-		{
-			"id" : "__idf_hubproto::@f6145161f5135078f052"
-		},
-		{
-			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
-		},
-		{
-			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
-		},
-		{
-			"id" : "__idf_main::@7368607ed66887415643"
-		},
-		{
 			"id" : "__idf_esp_driver_spi::@a108b58494cdd93e678c"
 		},
 		{
@@ -108,6 +87,42 @@
 		},
 		{
 			"id" : "__idf_esp_driver_i2c::@823c83e66a2d740aac64"
+		},
+		{
+			"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef"
+		},
+		{
+			"id" : "__idf_protobuf-c::@b14513c4bd859268ec22"
+		},
+		{
+			"id" : "__idf_protocomm::@d76d01c8dec06205e1fc"
+		},
+		{
+			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
+		},
+		{
+			"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7"
+		},
+		{
+			"id" : "__idf_perfmon::@aac0f647c32bb8f54a67"
+		},
+		{
+			"id" : "__idf_rt::@c044be52929cb104e3c1"
+		},
+		{
+			"id" : "__idf_spiffs::@df881b71474064c86689"
+		},
+		{
+			"id" : "__idf_hubproto::@f6145161f5135078f052"
+		},
+		{
+			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
+		},
+		{
+			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
+		},
+		{
+			"id" : "__idf_main::@7368607ed66887415643"
 		},
 		{
 			"id" : "__idf_esp_hal_ledc::@f7e0a64d676c21278c1e"
@@ -174,21 +189,6 @@
 		},
 		{
 			"id" : "__idf_esp_lcd::@d5a84597e1633c9ab0d3"
-		},
-		{
-			"id" : "__idf_protobuf-c::@b14513c4bd859268ec22"
-		},
-		{
-			"id" : "__idf_protocomm::@d76d01c8dec06205e1fc"
-		},
-		{
-			"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef"
-		},
-		{
-			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
-		},
-		{
-			"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7"
 		}
 	],
 	"id" : "__ldgen_output_sections.ld::@6890427a1f51a3e7e1df",

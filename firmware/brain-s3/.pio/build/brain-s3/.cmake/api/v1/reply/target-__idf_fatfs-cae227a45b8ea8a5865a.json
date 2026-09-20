@@ -565,39 +565,39 @@
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/lwip/port/esp32xx/include/sys"
 				},
 				{
-					"backtrace" : 8,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/wear_levelling/include"
 				},
 				{
-					"backtrace" : 8,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_partition/include"
 				},
 				{
-					"backtrace" : 8,
+					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_blockdev/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 7,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/sdmmc/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 7,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/include"
 				},
 				{
-					"backtrace" : 6,
+					"backtrace" : 7,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_hal_sd/esp32s3/include"
 				},
 				{
-					"backtrace" : 7,
+					"backtrace" : 8,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdmmc/include"
 				},
 				{
-					"backtrace" : 7,
+					"backtrace" : 8,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sdmmc/legacy/include"
 				},
 				{
-					"backtrace" : 7,
+					"backtrace" : 8,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_driver_sd_intf/include"
 				},
 				{
@@ -661,27 +661,27 @@
 		},
 		{
 			"backtrace" : 6,
+			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
+		},
+		{
+			"backtrace" : 7,
 			"id" : "__idf_esp_hal_sd::@1ada79c52e603a3e38c7"
 		},
 		{
-			"backtrace" : 6,
+			"backtrace" : 7,
 			"id" : "__idf_sdmmc::@89ed5bca1750ffbc7db6"
 		},
 		{
-			"backtrace" : 7,
+			"backtrace" : 8,
 			"id" : "__idf_esp_driver_sd_intf::@9cb2f063b9dd7d282253"
 		},
 		{
-			"backtrace" : 7,
+			"backtrace" : 8,
 			"id" : "__idf_esp_driver_sdmmc::@6ccb6c8602dfb90db4d7"
 		},
 		{
 			"backtrace" : 5,
 			"id" : "__idf_esp_driver_sdspi::@c293af58c49fe790ac32"
-		},
-		{
-			"backtrace" : 8,
-			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
 		}
 	],
 	"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7",

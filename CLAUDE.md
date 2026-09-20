@@ -60,7 +60,9 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your b
 
 The brain core (Phases 3–4) is a set of composable, radio-free components that all attach to a `Bus`: `EntityRegistry`, `RadioCoordinator`, `StateMachine`, `CommandDispatcher`, `RuleEngine`. Wire them together in an app around one `UartTransport`.
 
-Next: on-hardware UART bring-up (Phase 2), wiring the core into `brain-s3` with fake DECLARE/STATE from `zigbee-c6` (Phases 3–4 on-device), then **Phase 5 — boot_id in NVS** (persist the reboot counter; resync already handled by `RadioCoordinator`).
+- **Phases 2–4 verified on hardware** (PlatformIO, 2× ESP32, 4 MB): `brain-s3` runs the full core (registry, coordinator, state machine, dispatcher, rules); `zigbee-c6` is a fake device (HELLO→declares occupancy 0x0010 + light 0x0020→reports occupancy STATE→ACKs COMMANDs). Observed on the wire: occupancy STATE → rule → light COMMAND → CMD_ACK Ok, seq-matched, both directions. Firmware build/flash: `cd firmware/<app> && pio run -t upload` (ports pinned in each `platformio.ini`; S3=usbmodem101, C6=usbmodem1101).
+
+Next: **Phase 5 — boot_id in NVS** (persist the reboot counter; resync already handled by `RadioCoordinator`), then **Phase 6 — real Zigbee** on the C6.
 
 ### ESP-IDF component layout
 

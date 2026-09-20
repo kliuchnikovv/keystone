@@ -2436,34 +2436,6 @@
 			"id" : "__idf_esp_driver_gptimer::@b8628cd9d7b32710339f"
 		},
 		{
-			"backtrace" : 116,
-			"id" : "__idf_perfmon::@aac0f647c32bb8f54a67"
-		},
-		{
-			"backtrace" : 117,
-			"id" : "__idf_rt::@c044be52929cb104e3c1"
-		},
-		{
-			"backtrace" : 118,
-			"id" : "__idf_spiffs::@df881b71474064c86689"
-		},
-		{
-			"backtrace" : 119,
-			"id" : "__idf_hubproto::@f6145161f5135078f052"
-		},
-		{
-			"backtrace" : 120,
-			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
-		},
-		{
-			"backtrace" : 121,
-			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
-		},
-		{
-			"backtrace" : 122,
-			"id" : "__idf_main::@7368607ed66887415643"
-		},
-		{
 			"backtrace" : 68,
 			"id" : "__idf_esp_driver_spi::@a108b58494cdd93e678c"
 		},
@@ -2502,6 +2474,54 @@
 		{
 			"backtrace" : 82,
 			"id" : "__idf_esp_driver_i2c::@823c83e66a2d740aac64"
+		},
+		{
+			"backtrace" : 112,
+			"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef"
+		},
+		{
+			"backtrace" : 110,
+			"id" : "__idf_protobuf-c::@b14513c4bd859268ec22"
+		},
+		{
+			"backtrace" : 111,
+			"id" : "__idf_protocomm::@d76d01c8dec06205e1fc"
+		},
+		{
+			"backtrace" : 114,
+			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
+		},
+		{
+			"backtrace" : 115,
+			"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7"
+		},
+		{
+			"backtrace" : 116,
+			"id" : "__idf_perfmon::@aac0f647c32bb8f54a67"
+		},
+		{
+			"backtrace" : 117,
+			"id" : "__idf_rt::@c044be52929cb104e3c1"
+		},
+		{
+			"backtrace" : 118,
+			"id" : "__idf_spiffs::@df881b71474064c86689"
+		},
+		{
+			"backtrace" : 119,
+			"id" : "__idf_hubproto::@f6145161f5135078f052"
+		},
+		{
+			"backtrace" : 120,
+			"id" : "__idf_core::@d14ae6fa5b5fd8dc87fc"
+		},
+		{
+			"backtrace" : 121,
+			"id" : "__idf_esp_uart_link::@727d67af2c8cc0d24af8"
+		},
+		{
+			"backtrace" : 122,
+			"id" : "__idf_main::@7368607ed66887415643"
 		},
 		{
 			"backtrace" : 84,
@@ -2590,26 +2610,6 @@
 		{
 			"backtrace" : 109,
 			"id" : "__idf_esp_lcd::@d5a84597e1633c9ab0d3"
-		},
-		{
-			"backtrace" : 110,
-			"id" : "__idf_protobuf-c::@b14513c4bd859268ec22"
-		},
-		{
-			"backtrace" : 111,
-			"id" : "__idf_protocomm::@d76d01c8dec06205e1fc"
-		},
-		{
-			"backtrace" : 112,
-			"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef"
-		},
-		{
-			"backtrace" : 114,
-			"id" : "__idf_wear_levelling::@cb21b0d7c0815cff11c6"
-		},
-		{
-			"backtrace" : 115,
-			"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7"
 		}
 	],
 	"id" : "keystone_brain_s3.elf::@6890427a1f51a3e7e1df",

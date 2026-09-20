@@ -2989,7 +2989,7 @@
 				{
 					"directoryIndex" : 13,
 					"id" : "__idf_esp_app_format::@08c2bdce7fd85cdbea06",
-					"jsonFile" : "target-__idf_esp_app_format-cda6c008bb2d7fc7f775.json",
+					"jsonFile" : "target-__idf_esp_app_format-5411bf1ecb50f8fec079.json",
 					"name" : "__idf_esp_app_format",
 					"projectIndex" : 1
 				},
@@ -3402,7 +3402,7 @@
 				{
 					"directoryIndex" : 146,
 					"id" : "__idf_esp_local_ctrl::@d6aad58d2946e56208ef",
-					"jsonFile" : "target-__idf_esp_local_ctrl-7428e0f000cbfcba78b4.json",
+					"jsonFile" : "target-__idf_esp_local_ctrl-100946b2f94e8c0983c2.json",
 					"name" : "__idf_esp_local_ctrl",
 					"projectIndex" : 1
 				},
@@ -3507,7 +3507,7 @@
 				{
 					"directoryIndex" : 150,
 					"id" : "__idf_fatfs::@75ac1d9b25dacc8cc9e7",
-					"jsonFile" : "target-__idf_fatfs-6a8c9be10b0b46c9d8b0.json",
+					"jsonFile" : "target-__idf_fatfs-cae227a45b8ea8a5865a.json",
 					"name" : "__idf_fatfs",
 					"projectIndex" : 1
 				},
@@ -3563,7 +3563,7 @@
 				{
 					"directoryIndex" : 161,
 					"id" : "__idf_main::@7368607ed66887415643",
-					"jsonFile" : "target-__idf_main-d0e4fcdbbbc936937b7f.json",
+					"jsonFile" : "target-__idf_main-73367f7b3359381f6c89.json",
 					"name" : "__idf_main",
 					"projectIndex" : 1
 				},
@@ -3696,7 +3696,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "__ldgen_output_sections.ld::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-__ldgen_output_sections.ld-9b69b13ae6a601455358.json",
+					"jsonFile" : "target-__ldgen_output_sections.ld-6f2b8f88b127cd6bbbb7.json",
 					"name" : "__ldgen_output_sections.ld",
 					"projectIndex" : 0
 				},
@@ -3892,7 +3892,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "keystone_brain_s3.elf::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-keystone_brain_s3.elf-002ccab3d0a9a31b6548.json",
+					"jsonFile" : "target-keystone_brain_s3.elf-2352dbca438b27235e8f.json",
 					"name" : "keystone_brain_s3.elf",
 					"projectIndex" : 0
 				},

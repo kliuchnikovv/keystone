@@ -111,6 +111,12 @@
 				"file" : 0,
 				"line" : 323,
 				"parent" : 12
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 347,
+				"parent" : 4
 			}
 		]
 	},
@@ -543,6 +549,10 @@
 				{
 					"backtrace" : 6,
 					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/vfs/include"
+				},
+				{
+					"backtrace" : 14,
+					"path" : "/Users/kliuchnikovv/.platformio/packages/framework-espidf/components/esp_timer/include"
 				}
 			],
 			"language" : "CXX",

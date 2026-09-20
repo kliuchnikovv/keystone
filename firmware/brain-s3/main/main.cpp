@@ -1,18 +1,25 @@
-// Phase 2 (brain, ESP32-S3-Zero): bring up the UART link to the co-processor.
+// Phases 3-4 (brain, ESP32-S3-Zero): the full brain core over the UART link.
 //
-// Listens for messages from the radio chip and logs them, and sends its own
-// HEARTBEAT periodically. Uses the portable core::UartTransport over an
-// EspUartLink; no protocol or framing logic lives here. Liveness is observed on
-// the serial monitor (an LED indicator can be added later).
+// Wires the portable core to the transport: EntityRegistry + RadioCoordinator
+// (HELLO->QUERY->DECLARE), StateMachine (applies STATE), CommandDispatcher
+// (COMMAND + CMD_ACK, retries), and a RuleEngine. Rule: occupancy 0x0010 →
+// drive light 0x0020. Everything except EspUartLink is hardware-agnostic.
 //
-// Wiring (crossed, common GND): S3.TX(GPIO7) -> C6.RX, S3.RX(GPIO6) <- C6.TX.
+// Wiring (crossed, common GND): S3.TX(GPIO7) -> C6.RX(GPIO4), S3.RX(GPIO6) <- C6.TX(GPIO5).
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "esp_uart_link.hpp"
 #include "core/uart_transport.hpp"
+#include "core/entity_registry.hpp"
+#include "core/radio_coordinator.hpp"
+#include "core/state_machine.hpp"
+#include "core/command_dispatcher.hpp"
+#include "core/rule_engine.hpp"
 #include "hubproto/message.hpp"
+#include "hubproto/payload.hpp"
 #include "hubproto/version.hpp"
 
 namespace {
@@ -21,26 +28,35 @@ const char* kTag = "brain-s3";
 
 constexpr int kUartTxGpio = 7;
 constexpr int kUartRxGpio = 6;
-constexpr std::uint8_t kPeerChipId = 0x01;  // the C6 co-processor
-constexpr int kHeartbeatMs = 1000;
 
-void on_message(void* /*ctx*/, const hubproto::Header& h,
-                const std::uint8_t* /*payload*/, std::size_t len) {
-  ESP_LOGI(kTag, "rx type=0x%02x chip=%u boot=%u seq=%u plen=%u",
-           static_cast<unsigned>(static_cast<std::uint8_t>(h.type)),
-           static_cast<unsigned>(h.chip_id), static_cast<unsigned>(h.boot_id),
-           static_cast<unsigned>(h.seq), static_cast<unsigned>(len));
+constexpr std::uint16_t kOccupancy = 0x0010;
+constexpr std::uint8_t  kOccupiedAttr = 0x50;
+constexpr std::uint16_t kLight = 0x0020;
+constexpr std::uint8_t  kOnOffAttr = 0x01;
+
+using Registry = core::EntityRegistry<>;
+using Dispatcher = core::CommandDispatcher<Registry>;
+using Rules = core::RuleEngine<Dispatcher>;
+
+std::uint32_t now_ms(void* /*ctx*/) {
+  return static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 }
 
-hubproto::Header heartbeat_header() {
-  hubproto::Header h{};
-  h.version = hubproto::kProtocolVersion;
-  h.type = hubproto::MsgType::Heartbeat;
-  h.chip_id = kPeerChipId;  // chip_id names the radio chip endpoint (SPEC 4.2)
-  h.boot_id = 1;            // TODO(Phase 5): persist a reboot counter in NVS
-  h.seq = 0;
-  h.entity_id = hubproto::kSelfEntityId;
-  return h;
+bool is_true(const hubproto::Value& v) { return v.as_bool(); }
+bool is_false(const hubproto::Value& v) { return !v.as_bool(); }
+
+void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_id,
+                     const hubproto::Value& v) {
+  ESP_LOGI(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
+           static_cast<unsigned>(entity_id), static_cast<unsigned>(attr_id),
+           static_cast<unsigned>(v.raw[0]));
+}
+
+void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
+                   std::uint8_t attr_id, hubproto::CmdAckStatus status) {
+  ESP_LOGI(kTag, "COMMAND result seq=%u entity=0x%04x attr=0x%02x status=%d",
+           static_cast<unsigned>(seq), static_cast<unsigned>(entity_id),
+           static_cast<unsigned>(attr_id), static_cast<int>(status));
 }
 
 }  // namespace
@@ -55,14 +71,37 @@ extern "C" void app_main(void) {
   }());
   ESP_ERROR_CHECK(link.begin());
 
-  static core::UartTransport bus(link);  // registers itself as the link receiver
-  bus.subscribe(&on_message, nullptr);
+  static Registry reg;
+  static core::UartTransport bus(link);
+  static core::RadioCoordinator<Registry> coord(bus, reg);
+  static core::StateMachine<Registry> sm(bus, reg);
+  static Dispatcher disp(bus, reg);
+  static Rules rules(disp, &now_ms, nullptr);
+
+  disp.on_result(&on_cmd_result, nullptr);
+
+  // Rule: motion on -> light on; motion off -> light off.
+  core::Rule on_rule{kOccupancy, kOccupiedAttr, &is_true, kLight, kOnOffAttr,
+                     hubproto::Value::make_bool(true)};
+  core::Rule off_rule{kOccupancy, kOccupiedAttr, &is_false, kLight, kOnOffAttr,
+                      hubproto::Value::make_bool(false)};
+  rules.add_rule(on_rule);
+  rules.add_rule(off_rule);
+
+  sm.on_change(&Rules::on_state_change, &rules);  // rules react to state
+  sm.on_change(&on_state_change, nullptr);        // and we log it
+
   link.start();
+  ESP_LOGI(kTag, "brain up; core online, awaiting HELLO from chips");
 
-  ESP_LOGI(kTag, "brain up; heartbeating to chip 0x%02x", kPeerChipId);
-
+  bool announced = false;
   while (true) {
-    bus.publish(heartbeat_header(), nullptr, 0);
-    vTaskDelay(pdMS_TO_TICKS(kHeartbeatMs));
+    disp.poll(now_ms(nullptr));  // drive command timeouts/retries
+    if (!announced && coord.chip_ready(0x01)) {
+      announced = true;
+      ESP_LOGI(kTag, "chip 0x01 declared; registry has %u entities",
+               static_cast<unsigned>(reg.size()));
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
