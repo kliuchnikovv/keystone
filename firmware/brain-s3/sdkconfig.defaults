@@ -1,0 +1,9 @@
+# Native/PlatformIO ESP-IDF defaults for the brain (ESP32-S3-Zero).
+# Route the primary console to the on-chip USB-Serial-JTAG so the interactive
+# command console (esp_console) can READ input over the same USB port that
+# carries the logs (the default UART0 console is not wired to USB here).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+
+# 4 MB flash (this board).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
