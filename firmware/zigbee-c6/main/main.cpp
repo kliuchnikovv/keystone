@@ -23,6 +23,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -72,12 +73,46 @@ struct ZbSwitch {
   bool on_off;                     // last known On/Off state
 };
 
-constexpr std::size_t kMaxSwitches = 8;
+constexpr std::size_t kMaxSwitches = 32;
 ZbSwitch g_switches[kMaxSwitches] = {};
 std::uint16_t g_next_entity_id = 0x0100;
 
 // IEEE address of the device currently being discovered (announce -> simple desc).
 esp_zb_ieee_addr_t g_pending_ieee = {};
+
+// Set once we've re-armed reporting for NVS-restored devices after a reboot.
+bool g_rearm_scheduled = false;
+
+// NVS persistence: the switch table survives a C6 reflash/reboot, so a device
+// that is still joined (its bindings + reporting config persist in the Zigbee
+// stack) is re-declared to the brain without a factory-reset/re-pair.
+const char* kNvsNamespace = "keystone";
+const char* kNvsSwitches = "zb_sw";
+const char* kNvsNextId = "zb_next";
+
+void persist_switches() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_blob(h, kNvsSwitches, g_switches, sizeof(g_switches));
+  nvs_set_u16(h, kNvsNextId, g_next_entity_id);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_switches() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::size_t sz = sizeof(g_switches);
+  nvs_get_blob(h, kNvsSwitches, g_switches, &sz);
+  nvs_get_u16(h, kNvsNextId, &g_next_entity_id);
+  nvs_close(h);
+  std::size_t n = 0;
+  for (const auto& s : g_switches) {
+    if (s.in_use) ++n;
+  }
+  if (n > 0) ESP_LOGI(kTag, "restored %u switch entity(ies) from NVS",
+                      static_cast<unsigned>(n));
+}
 
 ZbSwitch* find_by_entity(std::uint16_t entity_id) {
   for (auto& s : g_switches) {
@@ -93,9 +128,18 @@ ZbSwitch* find_by_addr(std::uint16_t short_addr, std::uint8_t endpoint) {
   return nullptr;
 }
 
+// Identity is the stable IEEE address: a re-paired device keeps its entity_id
+// and just updates its (volatile) short address.
 ZbSwitch* register_switch(std::uint16_t short_addr, const esp_zb_ieee_addr_t ieee,
                           std::uint8_t endpoint) {
-  if (ZbSwitch* existing = find_by_addr(short_addr, endpoint)) return existing;
+  for (auto& s : g_switches) {
+    if (s.in_use && std::memcmp(s.ieee, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
+      s.short_addr = short_addr;
+      s.endpoint = endpoint;
+      persist_switches();
+      return &s;
+    }
+  }
   for (auto& s : g_switches) {
     if (!s.in_use) {
       s.in_use = true;
@@ -104,6 +148,7 @@ ZbSwitch* register_switch(std::uint16_t short_addr, const esp_zb_ieee_addr_t iee
       std::memcpy(s.ieee, ieee, sizeof(esp_zb_ieee_addr_t));
       s.endpoint = endpoint;
       s.on_off = false;
+      persist_switches();
       return &s;
     }
   }
@@ -195,6 +240,11 @@ void handle_command(const hubproto::Header& h, const std::uint8_t* payload,
       ESP_LOGI(kTag, "COMMAND entity 0x%04x on_off=%d -> device 0x%04x ep%u",
                static_cast<unsigned>(cmd.entity_id), on ? 1 : 0,
                static_cast<unsigned>(s->short_addr), s->endpoint);
+      // Optimistic state: the command was delivered and ACKed, so reflect the
+      // new value as STATE immediately. A genuine attribute report (e.g. from a
+      // physical toggle) still overrides this via the report handler.
+      s->on_off = on;
+      send_state_on_off(*s);
     } else {
       status = hubproto::CmdAckStatus::Fail;
     }
@@ -284,6 +334,22 @@ void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint) {
   onoff.attr_number = 1;
   onoff.attr_field = onoff_attr;
   esp_zb_zcl_read_attr_cmd_req(&onoff);
+}
+
+// After a reboot, entities come back from NVS but their reporting/bindings and
+// current state were never re-established this run. Once the network is up,
+// re-bind + reconfigure On/Off reporting and read the current state so the brain
+// gets a STATE for each restored device (runs in stack context via a scheduler
+// alarm). Fresh joins already do this in the discovery path.
+void rearm_restored(std::uint8_t /*unused*/) {
+  for (const auto& s : g_switches) {
+    if (!s.in_use) continue;
+    setup_on_off_reporting(s);
+    read_device_state(s.short_addr, s.endpoint);
+    ESP_LOGI(kTag, "re-armed restored entity 0x%04x (device 0x%04x)",
+             static_cast<unsigned>(s.entity_id),
+             static_cast<unsigned>(s.short_addr));
+  }
 }
 
 // ---- Zigbee discovery (Stage 1/2a) ---------------------------------------
@@ -458,6 +524,15 @@ extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
                  esp_zb_get_pan_id(), esp_zb_get_current_channel(),
                  esp_zb_get_short_address());
         open_network_for_join();
+        // Re-arm reporting for any devices restored from NVS (once).
+        bool have_restored = false;
+        for (const auto& s : g_switches) {
+          if (s.in_use) { have_restored = true; break; }
+        }
+        if (have_restored && !g_rearm_scheduled) {
+          g_rearm_scheduled = true;
+          esp_zb_scheduler_alarm(rearm_restored, 0, 3000);
+        }
       } else {
         ESP_LOGE(kTag, "formation failed (status=%d), retrying",
                  static_cast<int>(err_status));
@@ -525,6 +600,7 @@ void esp_zb_task(void* /*pv*/) {
 extern "C" void app_main(void) {
   ESP_ERROR_CHECK(nvs_flash_init());
   g_boot_id = fw::next_boot_id();  // persisted reboot counter (SPEC Phase 5)
+  restore_switches();  // re-declare still-joined devices without a re-pair
 
   // Bring up the UART link + transport to the brain first (Phase 2 transport).
   g_bus_mtx = xSemaphoreCreateMutex();
