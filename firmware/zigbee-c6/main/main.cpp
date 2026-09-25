@@ -83,6 +83,34 @@ esp_zb_ieee_addr_t g_pending_ieee = {};
 // Set once we've re-armed reporting for NVS-restored devices after a reboot.
 bool g_rearm_scheduled = false;
 
+// Pending brain COMMANDs awaiting a ZCL Default Response from the device.
+// Matched by ZCL tsn returned from esp_zb_zcl_on_off_cmd_req(): only on success
+// do we send CmdAck Ok + STATE back to the brain. Failures become CmdAck Fail;
+// no response at all -> brain's CommandDispatcher times out to Unreachable.
+struct PendingCmd {
+  bool in_use;
+  std::uint8_t tsn;
+  std::uint16_t src_short;       // device we sent to (for extra safety)
+  std::uint16_t entity_id;
+  std::uint16_t hubproto_seq;    // brain's seq, to echo in CmdAck
+  bool target_on;
+};
+PendingCmd g_pending[8] = {};
+
+PendingCmd* find_pending(std::uint8_t tsn, std::uint16_t src_short) {
+  for (auto& p : g_pending) {
+    if (p.in_use && p.tsn == tsn && p.src_short == src_short) return &p;
+  }
+  return nullptr;
+}
+
+PendingCmd* alloc_pending() {
+  for (auto& p : g_pending) {
+    if (!p.in_use) return &p;
+  }
+  return nullptr;
+}
+
 // NVS persistence: the switch table survives a C6 reflash/reboot, so a device
 // that is still joined (its bindings + reporting config persist in the Zigbee
 // stack) is re-declared to the brain without a factory-reset/re-pair.
@@ -223,39 +251,51 @@ void handle_command(const hubproto::Header& h, const std::uint8_t* payload,
     return;
   }
   ZbSwitch* s = find_by_entity(cmd.entity_id);
-  hubproto::CmdAckStatus status = hubproto::CmdAckStatus::Unreachable;
-  if (s != nullptr) {
-    const bool on = cmd.value.as_bool();
-    esp_zb_zcl_on_off_cmd_t req{};
-    req.zcl_basic_cmd.dst_addr_u.addr_short = s->short_addr;
-    req.zcl_basic_cmd.dst_endpoint = s->endpoint;
-    req.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
-    req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    req.on_off_cmd_id = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID;
-    // ZCL calls must run under the stack lock (we are on the UART task here).
-    if (esp_zb_lock_acquire(portMAX_DELAY)) {
-      esp_zb_zcl_on_off_cmd_req(&req);
-      esp_zb_lock_release();
-      status = hubproto::CmdAckStatus::Ok;
-      ESP_LOGI(kTag, "COMMAND entity 0x%04x on_off=%d -> device 0x%04x ep%u",
-               static_cast<unsigned>(cmd.entity_id), on ? 1 : 0,
-               static_cast<unsigned>(s->short_addr), s->endpoint);
-      // Optimistic state: the command was delivered and ACKed, so reflect the
-      // new value as STATE immediately. A genuine attribute report (e.g. from a
-      // physical toggle) still overrides this via the report handler.
-      s->on_off = on;
-      send_state_on_off(*s);
-    } else {
-      status = hubproto::CmdAckStatus::Fail;
-    }
-  } else {
+  if (s == nullptr) {
     ESP_LOGW(kTag, "COMMAND for unknown entity 0x%04x",
              static_cast<unsigned>(cmd.entity_id));
-  }
-  std::uint8_t ack[1];
-  if (hubproto::encode_cmd_ack(status, ack, sizeof(ack)).ok) {
+    std::uint8_t ack[1];
+    hubproto::encode_cmd_ack(hubproto::CmdAckStatus::Unreachable, ack, sizeof(ack));
     publish_locked(make_header(hubproto::MsgType::CmdAck, cmd.entity_id, h.seq), ack, 1);
+    return;
   }
+
+  PendingCmd* p = alloc_pending();
+  if (p == nullptr) {
+    ESP_LOGW(kTag, "pending cmd table full; dropping command");
+    std::uint8_t ack[1];
+    hubproto::encode_cmd_ack(hubproto::CmdAckStatus::Fail, ack, sizeof(ack));
+    publish_locked(make_header(hubproto::MsgType::CmdAck, cmd.entity_id, h.seq), ack, 1);
+    return;
+  }
+
+  const bool on = cmd.value.as_bool();
+  esp_zb_zcl_on_off_cmd_t req{};
+  req.zcl_basic_cmd.dst_addr_u.addr_short = s->short_addr;
+  req.zcl_basic_cmd.dst_endpoint = s->endpoint;
+  req.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
+  req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+  req.on_off_cmd_id = on ? ESP_ZB_ZCL_CMD_ON_OFF_ON_ID : ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID;
+
+  // ZCL calls must run under the stack lock (we are on the UART task here).
+  // Reply to the brain only after the device's Default Response arrives — no
+  // more optimistic Ok. If the device never responds, the brain's dispatcher
+  // times out to Unreachable via its own retries.
+  std::uint8_t tsn = 0;
+  if (esp_zb_lock_acquire(portMAX_DELAY)) {
+    tsn = esp_zb_zcl_on_off_cmd_req(&req);
+    esp_zb_lock_release();
+  }
+  p->in_use = true;
+  p->tsn = tsn;
+  p->src_short = s->short_addr;
+  p->entity_id = cmd.entity_id;
+  p->hubproto_seq = h.seq;
+  p->target_on = on;
+  ESP_LOGI(kTag, "COMMAND entity 0x%04x on_off=%d -> device 0x%04x ep%u tsn=%u",
+           static_cast<unsigned>(cmd.entity_id), on ? 1 : 0,
+           static_cast<unsigned>(s->short_addr), s->endpoint,
+           static_cast<unsigned>(tsn));
 }
 
 void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
@@ -459,6 +499,36 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
           send_state_on_off(*s);
         }
       }
+      break;
+    }
+    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID: {
+      const auto* m =
+          static_cast<const esp_zb_zcl_cmd_default_resp_message_t*>(message);
+      const std::uint8_t tsn = m->info.header.tsn;
+      const std::uint16_t src = m->info.src_address.u.short_addr;
+      PendingCmd* p = find_pending(tsn, src);
+      if (p == nullptr) break;  // not one of our tracked commands
+      const bool ok = m->status_code == ESP_ZB_ZCL_STATUS_SUCCESS;
+      std::uint8_t ack[1];
+      hubproto::encode_cmd_ack(ok ? hubproto::CmdAckStatus::Ok
+                                  : hubproto::CmdAckStatus::Fail,
+                               ack, sizeof(ack));
+      publish_locked(make_header(hubproto::MsgType::CmdAck, p->entity_id,
+                                 p->hubproto_seq),
+                     ack, 1);
+      ESP_LOGI(kTag, "default resp tsn=%u entity 0x%04x status=%d -> CmdAck %s",
+               static_cast<unsigned>(tsn),
+               static_cast<unsigned>(p->entity_id),
+               static_cast<int>(m->status_code), ok ? "Ok" : "Fail");
+      if (ok) {
+        // Device confirmed the command applied: reflect it as STATE.
+        ZbSwitch* sw = find_by_addr(src, m->info.src_endpoint);
+        if (sw != nullptr) {
+          sw->on_off = p->target_on;
+          send_state_on_off(*sw);
+        }
+      }
+      p->in_use = false;
       break;
     }
     case ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID: {
