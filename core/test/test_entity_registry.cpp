@@ -79,6 +79,37 @@ TEST_CASE("re-declaring the same entity_id replaces it, not duplicates") {
   CHECK(e->attr_count == 1);
 }
 
+TEST_CASE("entity_at enumerates live entities and bounds-checks") {
+  core::EntityRegistry<> reg;
+  CHECK(reg.entity_at(0) == nullptr);  // empty
+
+  DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  DeclareBytes sw(0x0020, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  DeclareBytes sw2(0x0030, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  REQUIRE(reg.declare(0x01, light.view));
+  REQUIRE(reg.declare(0x01, sw.view));
+  REQUIRE(reg.declare(0x02, sw2.view));
+
+  // Every live entity is reachable exactly once across [0, size()).
+  bool seen[3] = {false, false, false};
+  for (std::size_t i = 0; i < reg.size(); ++i) {
+    const auto* e = reg.entity_at(i);
+    REQUIRE(e != nullptr);
+    if (e->entity_id == 0x0010) seen[0] = true;
+    else if (e->entity_id == 0x0020) seen[1] = true;
+    else if (e->entity_id == 0x0030) seen[2] = true;
+  }
+  CHECK((seen[0] && seen[1] && seen[2]));
+  CHECK(reg.entity_at(reg.size()) == nullptr);  // out of range
+
+  // After clearing chip 0x01, only the chip 0x02 entity remains at index 0.
+  reg.clear_chip(0x01);
+  REQUIRE(reg.size() == 1);
+  REQUIRE(reg.entity_at(0) != nullptr);
+  CHECK(reg.entity_at(0)->entity_id == 0x0030);
+  CHECK(reg.entity_at(1) == nullptr);
+}
+
 TEST_CASE("value_type_of resolves a declared attribute") {
   core::EntityRegistry<> reg;
   DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);

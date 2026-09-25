@@ -46,6 +46,11 @@ class EntityRegistry {
   // Find a live entity by id, or nullptr.
   const Entity* find(std::uint16_t entity_id) const noexcept;
 
+  // Enumerate live entities by compacted index in [0, size()): returns the i-th
+  // in-use entity, or nullptr if index is out of range. Lets callers (a console,
+  // the future Matter bridge) list everything without exposing the storage.
+  const Entity* entity_at(std::size_t index) const noexcept;
+
   // Resolve an attribute's declared value_type (needed to decode STATE/COMMAND).
   bool value_type_of(std::uint16_t entity_id, std::uint8_t attr_id,
                      hubproto::ValueType& out) const noexcept;
@@ -118,6 +123,18 @@ auto EntityRegistry<MaxEntities, MaxAttrs>::find(std::uint16_t entity_id)
     const noexcept -> const Entity* {
   for (const auto& e : entities_) {
     if (e.in_use && e.entity_id == entity_id) return &e;
+  }
+  return nullptr;
+}
+
+template <std::size_t MaxEntities, std::size_t MaxAttrs>
+auto EntityRegistry<MaxEntities, MaxAttrs>::entity_at(std::size_t index)
+    const noexcept -> const Entity* {
+  std::size_t n = 0;
+  for (const auto& e : entities_) {
+    if (!e.in_use) continue;
+    if (n == index) return &e;
+    ++n;
   }
   return nullptr;
 }
