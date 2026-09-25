@@ -1,0 +1,7 @@
+## IDF Component Manager manifest for the Thread/Matter co-processor (ESP32-C6).
+## Stage A: no radio-stack deps yet — just IDF. Stage B will add
+## espressif/esp-openthread (Thread border router); Stage C will add
+## espressif/esp-matter on top.
+dependencies:
+  idf:
+    version: ">=5.2"

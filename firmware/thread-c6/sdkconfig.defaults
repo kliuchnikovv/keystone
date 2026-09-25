@@ -1,0 +1,14 @@
+# Native ESP-IDF build defaults for the Thread co-processor (ESP32-C6).
+# Stage A (this file): bus/transport only, no Thread stack yet — so the brain
+# can see chip 0x02 announce HELLO and stay linked. Later stages add
+# OpenThread + esp-matter.
+
+# --- Partition table (Thread/Matter storage will live here later) ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- 4 MB flash (same C6-DevKitC-1 boards as the Zigbee one) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# --- Matter / OpenThread stacks expect a 1 kHz tick ---
+CONFIG_FREERTOS_HZ=1000
