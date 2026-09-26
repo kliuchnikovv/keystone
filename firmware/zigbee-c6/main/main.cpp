@@ -53,8 +53,11 @@ core::UartTransport* g_bus = nullptr;
 SemaphoreHandle_t g_bus_mtx = nullptr;
 
 // ---- Capability model (SPEC §6.1) ----------------------------------------
-// A Zigbee On/Off device maps to device_type=switch, attr on_off(0x01) bool.
+// A Zigbee On/Off device maps to device_type=switch, attr on_off(0x01) bool,
+// plus optional metering attributes when the device exposes them.
 constexpr std::uint8_t kOnOffAttr = 0x01;
+constexpr std::uint8_t kPowerWAttr = 0x13;  // instantaneous active power, W
+constexpr std::uint16_t kPowerUnpublished = 0xFFFF;  // sentinel for "no STATE sent yet"
 
 // ---- Zigbee constants -----------------------------------------------------
 constexpr std::uint8_t kCoordEndpoint = 1;
@@ -72,6 +75,11 @@ struct ZbSwitch {
   esp_zb_ieee_addr_t ieee;         // stable 64-bit address (for binding)
   std::uint8_t endpoint;           // device application endpoint
   bool on_off;                     // last known On/Off state
+  bool on_off_valid;               // true once we've received any On/Off value
+  bool has_metering;               // device exposes Electrical Measurement (0x0b04)
+  std::uint16_t ac_power_mul;      // ActivePower multiplier (default 1)
+  std::uint16_t ac_power_div;      // ActivePower divisor    (default 1)
+  std::uint16_t last_power_w;      // last computed power in W (for STATE dedup)
 };
 
 constexpr std::size_t kMaxSwitches = 32;
@@ -136,8 +144,13 @@ void restore_switches() {
   nvs_get_u16(h, kNvsNextId, &g_next_entity_id);
   nvs_close(h);
   std::size_t n = 0;
-  for (const auto& s : g_switches) {
-    if (s.in_use) ++n;
+  for (auto& s : g_switches) {
+    if (!s.in_use) continue;
+    // Metering divisor/multiplier get re-read at rearm; guard against a divisor
+    // of 0 in old NVS blobs that predate this field.
+    if (s.ac_power_div == 0) s.ac_power_div = 1;
+    if (s.ac_power_mul == 0) s.ac_power_mul = 1;
+    ++n;
   }
   if (n > 0) ESP_LOGI(kTag, "restored %u switch entity(ies) from NVS",
                       static_cast<unsigned>(n));
@@ -177,6 +190,11 @@ ZbSwitch* register_switch(std::uint16_t short_addr, const esp_zb_ieee_addr_t iee
       std::memcpy(s.ieee, ieee, sizeof(esp_zb_ieee_addr_t));
       s.endpoint = endpoint;
       s.on_off = false;
+      s.on_off_valid = false;
+      s.has_metering = false;
+      s.ac_power_mul = 1;
+      s.ac_power_div = 1;
+      s.last_power_w = kPowerUnpublished;
       persist_switches();
       return &s;
     }
@@ -219,16 +237,23 @@ void send_hello() {
 }
 
 void send_declarations() {
-  const std::uint8_t flags =
+  const std::uint8_t rw_report =
       hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable;
+  const std::uint8_t r_report =
+      hubproto::kFlagReadable | hubproto::kFlagReportable;
   std::size_t declared = 0;
   for (auto& s : g_switches) {
     if (!s.in_use) continue;
-    const hubproto::AttrDecl attrs[1] = {
-        {kOnOffAttr, hubproto::ValueType::Bool, flags}};
-    std::uint8_t buf[16];
+    // Always: on_off. Optionally: power_w if the device exposes metering.
+    hubproto::AttrDecl attrs[2] = {
+        {kOnOffAttr, hubproto::ValueType::Bool, rw_report}, {}};
+    std::uint8_t attr_count = 1;
+    if (s.has_metering) {
+      attrs[attr_count++] = {kPowerWAttr, hubproto::ValueType::U16, r_report};
+    }
+    std::uint8_t buf[24];
     auto r = hubproto::encode_declare(s.entity_id, hubproto::DeviceType::Switch,
-                                      attrs, 1, buf, sizeof(buf));
+                                      attrs, attr_count, buf, sizeof(buf));
     if (r.ok) {
       publish_locked(make_header(hubproto::MsgType::Declare, s.entity_id, 0), buf,
                      r.len);
@@ -238,6 +263,33 @@ void send_declarations() {
   publish_locked(make_header(hubproto::MsgType::DeclareEnd, 0x0000, 0), nullptr, 0);
   ESP_LOGI(kTag, "declared %u switch entity(ies) + DECLARE_END",
            static_cast<unsigned>(declared));
+}
+
+void send_state_power_w(ZbSwitch& s, std::uint16_t watts) {
+  // Sentinel: means "never published"; the first STATE always goes through
+  // even if the reading is 0. Subsequent duplicates are dropped as noise.
+  if (watts == s.last_power_w && s.last_power_w != kPowerUnpublished) return;
+  s.last_power_w = watts;
+  const hubproto::StateEntry e[1] = {{kPowerWAttr, hubproto::Value::make_u16(watts)}};
+  std::uint8_t buf[16];
+  auto r = hubproto::encode_state(s.entity_id, e, 1, buf, sizeof(buf));
+  if (r.ok) {
+    publish_locked(make_header(hubproto::MsgType::State, s.entity_id, 0), buf, r.len);
+    ESP_LOGI(kTag, "STATE entity 0x%04x power_w=%u",
+             static_cast<unsigned>(s.entity_id), static_cast<unsigned>(watts));
+  }
+}
+
+// Apply the cached ACPower multiplier/divisor to a raw ActivePower reading
+// (spec: `real_power = raw * multiplier / divisor` in Watts). Clamps to u16.
+std::uint16_t scale_active_power(const ZbSwitch& s, std::int16_t raw) {
+  if (s.ac_power_div == 0) return 0;  // guard, restore also clamps but be safe
+  const std::int32_t scaled =
+      (static_cast<std::int32_t>(raw) * static_cast<std::int32_t>(s.ac_power_mul)) /
+      static_cast<std::int32_t>(s.ac_power_div);
+  if (scaled < 0) return 0;
+  if (scaled > 0xFFFF) return 0xFFFF;
+  return static_cast<std::uint16_t>(scaled);
 }
 
 void send_state_on_off(const ZbSwitch& s) {
@@ -336,42 +388,68 @@ void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
 }
 
 // ---- Zigbee -> bus : device setup after discovery -------------------------
-// Bind the device's On/Off cluster to the coordinator and ask it to report
-// On/Off changes, so physical state changes reach the brain as STATE.
-void setup_on_off_reporting(const ZbSwitch& s) {
+// Bind a cluster from the device to the coordinator so unicast reports arrive
+// at our endpoint. Fire-and-forget; the ZDO answer isn't tracked.
+void bind_cluster(const ZbSwitch& s, std::uint16_t cluster_id) {
   esp_zb_ieee_addr_t coord_ieee;
   esp_zb_get_long_address(coord_ieee);
 
   esp_zb_zdo_bind_req_param_t bind{};
   std::memcpy(bind.src_address, s.ieee, sizeof(esp_zb_ieee_addr_t));
   bind.src_endp = s.endpoint;
-  bind.cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
+  bind.cluster_id = cluster_id;
   bind.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
   std::memcpy(bind.dst_address_u.addr_long, coord_ieee, sizeof(esp_zb_ieee_addr_t));
   bind.dst_endp = kCoordEndpoint;
   bind.req_dst_addr = s.short_addr;
   esp_zb_zdo_device_bind_req(&bind, nullptr, nullptr);
+}
 
+// Ask the device to send periodic reports for `attr_id` in `cluster_id`.
+// `attr_type` is the ZCL wire type (BOOL, S16, etc). `min`/`max` are seconds;
+// `delta` is the reportable change (nullptr = "any change").
+void configure_report(const ZbSwitch& s, std::uint16_t cluster_id,
+                      std::uint16_t attr_id, std::uint8_t attr_type,
+                      std::uint16_t min_s, std::uint16_t max_s,
+                      void* delta) {
   esp_zb_zcl_config_report_record_t rec{};
   rec.direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND;
-  rec.attributeID = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID;  // 0x0000
-  rec.attrType = ESP_ZB_ZCL_ATTR_TYPE_BOOL;
-  rec.min_interval = 0;
-  rec.max_interval = 300;  // heartbeat report at least every 5 min
-  rec.reportable_change = nullptr;
+  rec.attributeID = attr_id;
+  rec.attrType = attr_type;
+  rec.min_interval = min_s;
+  rec.max_interval = max_s;
+  rec.reportable_change = delta;
 
   esp_zb_zcl_config_report_cmd_t cfg{};
   cfg.zcl_basic_cmd.dst_addr_u.addr_short = s.short_addr;
   cfg.zcl_basic_cmd.dst_endpoint = s.endpoint;
   cfg.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
   cfg.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-  cfg.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
+  cfg.clusterID = cluster_id;
   cfg.record_number = 1;
   cfg.record_field = &rec;
   esp_zb_zcl_config_report_cmd_req(&cfg);
+}
 
-  ESP_LOGI(kTag, "bound + configured On/Off reporting for entity 0x%04x",
-           static_cast<unsigned>(s.entity_id));
+// Bind + configure reporting for every cluster the device exposes that we
+// translate. Called at fresh join and again at boot for restored devices.
+void setup_reporting(const ZbSwitch& s) {
+  bind_cluster(s, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
+  configure_report(s, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                   ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, ESP_ZB_ZCL_ATTR_TYPE_BOOL,
+                   0, 300, nullptr);
+  if (s.has_metering) {
+    // ActivePower: report if it moved by >=1 W, at least every 30s and no
+    // more than once per 5s (min_interval throttles the device).
+    static std::int16_t kPowerDelta = 1;
+    bind_cluster(s, ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT);
+    configure_report(s, ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT,
+                     ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,
+                     ESP_ZB_ZCL_ATTR_TYPE_S16, 5, 30, &kPowerDelta);
+  }
+  ESP_LOGI(kTag, "bound + configured reporting for entity 0x%04x%s",
+           static_cast<unsigned>(s.entity_id),
+           s.has_metering ? " (on_off + power)" : " (on_off)");
 }
 
 // Read current On/Off + Basic identity from a joined device's endpoint 1.
@@ -397,6 +475,29 @@ void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint) {
   onoff.attr_number = 1;
   onoff.attr_field = onoff_attr;
   esp_zb_zcl_read_attr_cmd_req(&onoff);
+
+  // If this device advertised Electrical Measurement, also read ActivePower +
+  // its scaling factors (AC Power Multiplier / Divisor). The response handler
+  // caches the factors and, when a subsequent ActivePower value arrives,
+  // scales it to Watts and publishes STATE(power_w). This works even without
+  // configured reporting.
+  ZbSwitch* sw = find_by_addr(short_addr, endpoint);
+  if (sw != nullptr && sw->has_metering) {
+    static std::uint16_t em_attrs[3] = {
+        ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,        // 0x050B
+        ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACPOWER_MULTIPLIER_ID,  // 0x0604
+        ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACPOWER_DIVISOR_ID,     // 0x0605
+    };
+    esp_zb_zcl_read_attr_cmd_t em{};
+    em.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
+    em.zcl_basic_cmd.dst_endpoint = endpoint;
+    em.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
+    em.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    em.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT;
+    em.attr_number = 3;
+    em.attr_field = em_attrs;
+    esp_zb_zcl_read_attr_cmd_req(&em);
+  }
 }
 
 // After a reboot, entities come back from NVS but their reporting/bindings and
@@ -405,9 +506,19 @@ void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint) {
 // gets a STATE for each restored device (runs in stack context via a scheduler
 // alarm). Fresh joins already do this in the discovery path.
 void rearm_restored(std::uint8_t /*unused*/) {
-  for (const auto& s : g_switches) {
+  for (auto& s : g_switches) {
     if (!s.in_use) continue;
-    setup_on_off_reporting(s);
+    // Push last-known values from NVS as STATE right away so the brain's `home`
+    // shows the real state instead of "?" until the async read comes back. The
+    // fresh read still runs and will correct anything that changed while we
+    // were down (a physical toggle, a metering shift).
+    if (s.on_off_valid) send_state_on_off(s);
+    if (s.has_metering && s.last_power_w != kPowerUnpublished) {
+      const std::uint16_t cached = s.last_power_w;
+      s.last_power_w = kPowerUnpublished;  // force a resend past the dedup
+      send_state_power_w(s, cached);
+    }
+    setup_reporting(s);
     read_device_state(s.short_addr, s.endpoint);
     ESP_LOGI(kTag, "re-armed restored entity 0x%04x (device 0x%04x)",
              static_cast<unsigned>(s.entity_id),
@@ -445,9 +556,11 @@ void log_joined_simple_desc(esp_zb_zdp_status_t status,
            desc->app_input_cluster_count, desc->app_output_cluster_count);
   const std::uint16_t* clusters = desc->app_cluster_list;
   bool has_on_off = false;
+  bool has_metering = false;
   for (std::uint8_t i = 0; i < desc->app_input_cluster_count; ++i) {
     ESP_LOGI(kTag, "    [in ] cluster 0x%04x", static_cast<unsigned>(clusters[i]));
     if (clusters[i] == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) has_on_off = true;
+    if (clusters[i] == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT) has_metering = true;
   }
   for (std::uint8_t i = 0; i < desc->app_output_cluster_count; ++i) {
     const std::uint16_t c = clusters[desc->app_input_cluster_count + i];
@@ -458,9 +571,12 @@ void log_joined_simple_desc(esp_zb_zdp_status_t status,
   if (has_on_off) {
     ZbSwitch* s = register_switch(short_addr, g_pending_ieee, desc->endpoint);
     if (s != nullptr) {
-      ESP_LOGI(kTag, "mapped device 0x%04x ep%u -> switch entity 0x%04x",
-               short_addr, desc->endpoint, static_cast<unsigned>(s->entity_id));
-      setup_on_off_reporting(*s);
+      s->has_metering = has_metering;
+      persist_switches();
+      ESP_LOGI(kTag, "mapped device 0x%04x ep%u -> switch entity 0x%04x%s",
+               short_addr, desc->endpoint, static_cast<unsigned>(s->entity_id),
+               has_metering ? " (with metering)" : "");
+      setup_reporting(*s);
       read_device_state(short_addr, desc->endpoint);
       send_hello();  // topology changed -> brain re-QUERYs and gets this entity
     } else {
@@ -512,15 +628,21 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
   switch (cb_id) {
     case ESP_ZB_CORE_REPORT_ATTR_CB_ID: {
       const auto* m = static_cast<const esp_zb_zcl_report_attr_message_t*>(message);
+      if (m->attribute.data.value == nullptr) break;
+      const std::uint16_t src = m->src_address.u.short_addr;
+      ZbSwitch* s = find_by_addr(src, m->src_endpoint);
+      if (s == nullptr) break;
       if (m->cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF &&
-          m->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID &&
-          m->attribute.data.value != nullptr) {
-        const std::uint16_t src = m->src_address.u.short_addr;
-        ZbSwitch* s = find_by_addr(src, m->src_endpoint);
-        if (s != nullptr) {
-          s->on_off = *static_cast<const std::uint8_t*>(m->attribute.data.value) != 0;
-          send_state_on_off(*s);
-        }
+          m->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+        s->on_off = *static_cast<const std::uint8_t*>(m->attribute.data.value) != 0;
+        s->on_off_valid = true;
+        persist_switches();
+        send_state_on_off(*s);
+      } else if (m->cluster == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT &&
+                 m->attribute.id == ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID) {
+        const auto* raw = static_cast<const std::uint8_t*>(m->attribute.data.value);
+        const std::int16_t rawP = static_cast<std::int16_t>(raw[0] | (raw[1] << 8));
+        send_state_power_w(*s, scale_active_power(*s, rawP));
       }
       break;
     }
@@ -548,6 +670,8 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
         ZbSwitch* sw = find_by_addr(src, m->info.src_endpoint);
         if (sw != nullptr) {
           sw->on_off = p->target_on;
+          sw->on_off_valid = true;
+          persist_switches();
           send_state_on_off(*sw);
         }
       }
@@ -572,8 +696,58 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
           if (s != nullptr) {
             s->on_off =
                 *static_cast<const std::uint8_t*>(v->attribute.data.value) != 0;
+            s->on_off_valid = true;
+            persist_switches();
             send_state_on_off(*s);
           }
+        } else if (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT &&
+                   v->attribute.data.value != nullptr) {
+          ZbSwitch* s = find_by_addr(src, m->info.src_endpoint);
+          if (s == nullptr) continue;
+          const auto* raw = static_cast<const std::uint8_t*>(v->attribute.data.value);
+          switch (v->attribute.id) {
+            case ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACPOWER_MULTIPLIER_ID:
+              s->ac_power_mul = static_cast<std::uint16_t>(raw[0] | (raw[1] << 8));
+              if (s->ac_power_mul == 0) s->ac_power_mul = 1;
+              persist_switches();
+              ESP_LOGI(kTag, "entity 0x%04x ACPowerMultiplier=%u",
+                       static_cast<unsigned>(s->entity_id),
+                       static_cast<unsigned>(s->ac_power_mul));
+              break;
+            case ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACPOWER_DIVISOR_ID:
+              s->ac_power_div = static_cast<std::uint16_t>(raw[0] | (raw[1] << 8));
+              if (s->ac_power_div == 0) s->ac_power_div = 1;
+              persist_switches();
+              ESP_LOGI(kTag, "entity 0x%04x ACPowerDivisor=%u",
+                       static_cast<unsigned>(s->entity_id),
+                       static_cast<unsigned>(s->ac_power_div));
+              break;
+            case ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID: {
+              const std::int16_t rawP =
+                  static_cast<std::int16_t>(raw[0] | (raw[1] << 8));
+              const std::uint16_t w = scale_active_power(*s, rawP);
+              ESP_LOGI(kTag, "entity 0x%04x ActivePower raw=%d mul=%u div=%u -> %u W",
+                       static_cast<unsigned>(s->entity_id), static_cast<int>(rawP),
+                       static_cast<unsigned>(s->ac_power_mul),
+                       static_cast<unsigned>(s->ac_power_div), static_cast<unsigned>(w));
+              send_state_power_w(*s, w);
+              break;
+            }
+            default:
+              ESP_LOGW(kTag, "unhandled EM attr 0x%04x (data type 0x%02x)",
+                       static_cast<unsigned>(v->attribute.id),
+                       static_cast<unsigned>(v->attribute.data.type));
+              break;
+          }
+        } else {
+          // Any other read-resp variable (success but nothing to do) — log for
+          // diagnostics so we can see if a device answered with a null value or
+          // an unexpected type.
+          ESP_LOGD(kTag, "read-resp cluster 0x%04x attr 0x%04x type 0x%02x value=%p",
+                   static_cast<unsigned>(m->info.cluster),
+                   static_cast<unsigned>(v->attribute.id),
+                   static_cast<unsigned>(v->attribute.data.type),
+                   v->attribute.data.value);
         }
       }
       break;
