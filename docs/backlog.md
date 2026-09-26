@@ -4,6 +4,13 @@ Ideas we haven't shaped into a phase yet. Not TODOs on a phase — those live in
 [CLAUDE.md § Status](../CLAUDE.md). This file is looser: things worth deciding
 before they become urgent.
 
+Topic-specific backlogs live next to this one:
+- [zigbee-backlog.md](zigbee-backlog.md) — what a full Zigbee coordinator needs (device types, metering, network mgmt, OTA).
+- [matter-backlog.md](matter-backlog.md) — what a full Matter bridge needs (OpenThread, esp-matter, commissioning, brain↔Matter bridge).
+- [brain-backlog.md](brain-backlog.md) — what the brain still needs to become a real hub (persistent rules, wall time, WiFi, chip health, human-facing surface).
+
+Cross-cutting design questions are collected here.
+
 ## Use idle memory on the radio co-processors
 
 Each C6 has ~512 KB SRAM + 4 MB flash. Zigbee/Thread stacks + our translator
