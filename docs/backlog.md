@@ -206,6 +206,57 @@ Invariant: chip health belongs to the *brain*. A chip reporting "I'm fine"
 tells the brain nothing useful about the *link* — the brain must judge
 liveness from its own inbound stream.
 
+## OTA updates for the co-processor C6s
+
+Today the two C6s (Zigbee coordinator, Thread border router) can only be
+updated by physically plugging USB into each one, unplugging the S3 first,
+and running `idf.py flash`. That's fine for the dev bench, painful for a
+soldered box tucked behind furniture — especially with two co-processors.
+Question: **how does the brain push new firmware to a C6 without the human
+touching hardware?**
+
+Two main shapes, both worth planning before soldering freezes the wiring:
+
+- **Brain-side flasher over UART.** The brain holds the co-processor image
+  (delivered to it any way we already know how — Wi-Fi OTA, SD card, USB
+  drop over the console) and drives the C6 into its ROM bootloader by
+  toggling the C6's `EN` line, then talks the `esptool` protocol over the
+  UART link. Requires the hardware `EN` reset lines already sketched in
+  the [chip-health](#chip-health-timeouts-and-recovery) item (a spare S3
+  GPIO to each C6's EN via a MOSFET) — worth wiring in the same solder
+  session even if we implement the flasher later. Also requires putting
+  the C6 into `boot` mode (GPIO9 low on ESP32-C6) at reset, so plan two
+  wires per C6: `EN` and `BOOT`. Once wired, the code is a small port of
+  esptool's stub protocol.
+- **In-application OTA on the C6 itself.** Each C6 exposes an OTA
+  endpoint over its own UART protocol (a new hubproto message type, or
+  reuse COMMAND with a chunk index). The brain streams the image chunk
+  by chunk into a second OTA partition, and on completion sends "reboot
+  to new". Doesn't need any extra wiring, but needs OTA partitions in
+  each C6's `partitions.csv` (double flash footprint) and a rollback
+  strategy for a bad image (esp-idf's rollback + verify).
+
+Recovery is the hard part. If a bad image bricks a C6:
+- With EN+BOOT lines: the brain still forces it into ROM and reflashes.
+  This is the "always works" path — that's why routing those two extra
+  GPIOs now is high leverage.
+- Without them: physical USB access is the only recovery. Which means the
+  hub can't be sealed / installed permanently.
+
+Ties in:
+- Brain-side image delivery = pieces already listed in
+  [brain-backlog.md § WiFi](brain-backlog.md#3-wifi) (get images via HTTPS)
+  and § web-UI (drop an image from a browser).
+- Matter has its own OTA too — that only updates a chip that already runs
+  Matter, so it doesn't cover the Zigbee C6 or a bricked chip.
+- If we ever add the recorder-CAM as a third co-processor (SPEC Phase 7),
+  it needs the same treatment — plan `EN` on it too.
+
+Recommendation: **wire `EN`+`BOOT` from the S3 to each C6 in the same
+solder session as the UARTs**, even if the software follows later. Software
+without wires: no recovery path. Wires without software: still a working
+hub, and we can add the flasher any time.
+
 ## Mobile app (iOS + Android)
 
 The user-facing surface for the home. Console-over-USB is fine for a dev
