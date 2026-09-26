@@ -19,6 +19,7 @@ TEST_CASE("Value round-trips every value_type") {
   CHECK(Value::make_i16(-50).as_i16() == -50);
   CHECK(Value::make_i16(32000).as_i16() == 32000);
   CHECK(Value::make_u16(0xBEEF).as_u16() == 0xBEEF);
+  CHECK(Value::make_u32(0xDEADBEEFu).as_u32() == 0xDEADBEEFu);
   CHECK(Value::make_f32(3.5f).as_f32() == doctest::Approx(3.5f));
   CHECK(Value::make_enum8(0x03).as_enum8() == 0x03);
 

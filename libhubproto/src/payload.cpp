@@ -11,6 +11,7 @@ std::size_t value_size(ValueType vt) noexcept {
     case ValueType::F32:     return 4;
     case ValueType::XyColor: return 4;
     case ValueType::Enum8:   return 1;
+    case ValueType::U32:     return 4;
   }
   return 0;
 }
@@ -81,6 +82,20 @@ std::uint16_t get_u16_le(const std::uint8_t* p) noexcept {
   return static_cast<std::uint16_t>(p[0] | (p[1] << 8));
 }
 
+void put_u32_le(std::uint8_t* p, std::uint32_t v) noexcept {
+  p[0] = static_cast<std::uint8_t>(v & 0xFF);
+  p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+  p[2] = static_cast<std::uint8_t>((v >> 16) & 0xFF);
+  p[3] = static_cast<std::uint8_t>((v >> 24) & 0xFF);
+}
+
+std::uint32_t get_u32_le(const std::uint8_t* p) noexcept {
+  return static_cast<std::uint32_t>(p[0]) |
+         (static_cast<std::uint32_t>(p[1]) << 8) |
+         (static_cast<std::uint32_t>(p[2]) << 16) |
+         (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
 Value typed(ValueType t) noexcept {
   Value v{};
   v.type = t;
@@ -110,6 +125,11 @@ Value Value::make_u16(std::uint16_t v) noexcept {
   put_u16_le(out.raw, v);
   return out;
 }
+Value Value::make_u32(std::uint32_t v) noexcept {
+  Value out = typed(ValueType::U32);
+  put_u32_le(out.raw, v);
+  return out;
+}
 Value Value::make_f32(float v) noexcept {
   Value out = typed(ValueType::F32);
   std::uint8_t tmp[4];
@@ -135,6 +155,7 @@ std::int16_t Value::as_i16() const noexcept {
   return static_cast<std::int16_t>(get_u16_le(raw));
 }
 std::uint16_t Value::as_u16() const noexcept { return get_u16_le(raw); }
+std::uint32_t Value::as_u32() const noexcept { return get_u32_le(raw); }
 float Value::as_f32() const noexcept {
   float v;
   std::uint8_t tmp[4] = {raw[0], raw[1], raw[2], raw[3]};

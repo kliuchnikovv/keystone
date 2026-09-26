@@ -37,6 +37,7 @@ enum class ValueType : std::uint8_t {
   F32     = 0x05,  // 4 bytes IEEE754
   XyColor = 0x06,  // 4 bytes: u16 x, u16 y
   Enum8   = 0x07,  // 1 byte
+  U32     = 0x08,  // 4 bytes LE — e.g. cumulative energy in Wh
 };
 
 // Attribute flags (DECLARE, per-attribute byte 2). SPEC §5.
@@ -105,6 +106,7 @@ struct Value {
   static Value make_u8(std::uint8_t v) noexcept;
   static Value make_i16(std::int16_t v) noexcept;
   static Value make_u16(std::uint16_t v) noexcept;
+  static Value make_u32(std::uint32_t v) noexcept;
   static Value make_f32(float v) noexcept;
   static Value make_xy(std::uint16_t x, std::uint16_t y) noexcept;
   static Value make_enum8(std::uint8_t v) noexcept;
@@ -113,6 +115,7 @@ struct Value {
   std::uint8_t  as_u8() const noexcept;
   std::int16_t  as_i16() const noexcept;
   std::uint16_t as_u16() const noexcept;
+  std::uint32_t as_u32() const noexcept;
   float         as_f32() const noexcept;
   void          as_xy(std::uint16_t& x, std::uint16_t& y) const noexcept;
   std::uint8_t  as_enum8() const noexcept;

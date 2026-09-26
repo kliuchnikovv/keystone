@@ -19,6 +19,7 @@ TEST_CASE("value_size matches SPEC 6.2") {
   CHECK(hubproto::value_size(ValueType::F32) == 4);
   CHECK(hubproto::value_size(ValueType::XyColor) == 4);
   CHECK(hubproto::value_size(ValueType::Enum8) == 1);
+  CHECK(hubproto::value_size(ValueType::U32) == 4);
   CHECK(hubproto::value_size(static_cast<ValueType>(0x00)) == 0);
   CHECK(hubproto::value_size(static_cast<ValueType>(0xFF)) == 0);
 }

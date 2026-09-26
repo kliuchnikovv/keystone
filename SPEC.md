@@ -233,7 +233,7 @@ exposed as a Matter accessory with no second modeling pass.
 |-------------|-------|--------------------|------------------------------|
 | light       | 0x01  | On/Off + Dimmable + Color Light | on_off(0x01), brightness(0x02), color_xy(0x03), color_temp(0x04) |
 | sensor      | 0x02  | Sensor (temp/humidity/etc.) | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
-| switch      | 0x03  | On/Off Plug-in Unit | on_off(0x01) |
+| switch      | 0x03  | On/Off Plug-in Unit | on_off(0x01), power_w(0x13), energy_wh(0x14) |
 | cover       | 0x04  | Window Covering     | position(0x20), state(0x21) |
 | lock        | 0x05  | Door Lock          | locked(0x30) |
 | climate     | 0x06  | Thermostat         | setpoint(0x40), mode(0x41), current_temp(0x10) |
@@ -256,6 +256,7 @@ exposed as a Matter accessory with no second modeling pass.
 0x05 float32   (4 bytes, IEEE754) # avoid on hot paths; prefer scaled ints
 0x06 xy_color  (4 bytes: uint16 x, uint16 y)
 0x07 enum8     (1 byte)
+0x08 uint32    (4 bytes, LE)      # e.g. cumulative energy in Wh (up to ~4.29 GWh)
 ```
 
 A Zigbee lamp and a DIY relay declared with the same descriptor are
