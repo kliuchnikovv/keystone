@@ -7,3 +7,7 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # 4 MB flash (this board).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Compile in DEBUG log statements so the console `log on` command can enable
+# them at runtime. Default log level stays at INFO (quiet by default).
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y

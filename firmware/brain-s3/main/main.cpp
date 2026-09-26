@@ -17,7 +17,16 @@
 // Console handlers only enqueue requests; the main loop executes them, so all
 // core access stays single-threaded (the UART RX task is the only other writer).
 //
-// Wiring (crossed, common GND): S3.TX(GPIO7) -> C6.RX(GPIO4), S3.RX(GPIO6) <- C6.TX(GPIO5).
+// Wiring (crossed, common GND — SPEC §10 + docs/hardware-wiring.md):
+//   UART1 to Zigbee C6 (chip 0x01): S3.TX(GPIO7)  -> C6.RX(GPIO4),
+//                                   S3.RX(GPIO6) <- C6.TX(GPIO5).
+//   UART2 to Thread C6  (chip 0x02): S3.TX(GPIO8)  -> C6.RX(GPIO4),
+//                                    S3.RX(GPIO9) <- C6.TX(GPIO5).
+//
+// The two UARTs are two independent core::UartTransports; a small ChipRouter in
+// this file glues them behind a single Bus so all core components (registry,
+// coordinator, state machine, dispatcher, rules) still see just one bus and
+// don't care where a message came from. Outbound is routed by header.chip_id.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -46,8 +55,15 @@ namespace {
 
 const char* kTag = "brain-s3";
 
-constexpr int kUartTxGpio = 7;
-constexpr int kUartRxGpio = 6;
+// UART1 = Zigbee coordinator (chip 0x01).
+constexpr int kZbTxGpio = 7;
+constexpr int kZbRxGpio = 6;
+// UART2 = Thread border router / Matter (chip 0x02).
+constexpr int kThTxGpio = 8;
+constexpr int kThRxGpio = 9;
+
+constexpr std::uint8_t kZigbeeChipId = 0x01;
+constexpr std::uint8_t kThreadChipId = 0x02;
 
 constexpr std::uint16_t kOccupancy = 0x0010;
 constexpr std::uint8_t  kOccupiedAttr = 0x50;
@@ -58,6 +74,59 @@ using Registry = core::EntityRegistry<>;
 using Dispatcher = core::CommandDispatcher<Registry>;
 using Rules = core::RuleEngine<Dispatcher>;
 
+// Multi-UART glue: presents itself to the core as a single core::Bus, routes
+// outgoing publish() to the underlying UartTransport whose bound chip_id
+// matches header.chip_id, and fans every inbound message from any underlying
+// transport out to all subscribers. Kept private to this app for now; if a
+// second app ever needs it we'll move it into core with host tests.
+class ChipRouter final : public core::Bus {
+ public:
+  // Bind an underlying bus to a chip_id. Subscribes internally so its inbound
+  // messages get forwarded to whoever subscribed to this router.
+  bool bind(std::uint8_t chip_id, core::Bus& bus) noexcept {
+    if (n_binds_ >= kMaxBinds) return false;
+    binds_[n_binds_] = {chip_id, &bus};
+    ++n_binds_;
+    return bus.subscribe(&ChipRouter::on_child_msg, this);
+  }
+
+  bool publish(const hubproto::Header& h, const std::uint8_t* payload,
+               std::size_t len) noexcept override {
+    for (int i = 0; i < n_binds_; ++i) {
+      if (binds_[i].chip_id == h.chip_id) return binds_[i].bus->publish(h, payload, len);
+    }
+    return false;  // unknown chip: nowhere to send
+  }
+
+  bool subscribe(MessageFn fn, void* ctx) noexcept override {
+    if (n_subs_ >= kMaxSubs) return false;
+    subs_[n_subs_] = {fn, ctx};
+    ++n_subs_;
+    return true;
+  }
+
+ private:
+  static constexpr int kMaxBinds = 4;
+  static constexpr int kMaxSubs = 4;
+
+  struct Bind { std::uint8_t chip_id; core::Bus* bus; };
+  struct Sub { MessageFn fn; void* ctx; };
+
+  static void on_child_msg(void* self, const hubproto::Header& h,
+                           const std::uint8_t* p, std::size_t len) noexcept {
+    static_cast<ChipRouter*>(self)->fan_out(h, p, len);
+  }
+  void fan_out(const hubproto::Header& h, const std::uint8_t* p,
+               std::size_t len) noexcept {
+    for (int i = 0; i < n_subs_; ++i) subs_[i].fn(subs_[i].ctx, h, p, len);
+  }
+
+  Bind binds_[kMaxBinds] = {};
+  int n_binds_ = 0;
+  Sub subs_[kMaxSubs] = {};
+  int n_subs_ = 0;
+};
+
 std::uint32_t now_ms(void* /*ctx*/) {
   return static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 }
@@ -65,11 +134,35 @@ std::uint32_t now_ms(void* /*ctx*/) {
 bool is_true(const hubproto::Value& v) { return v.as_bool(); }
 bool is_false(const hubproto::Value& v) { return !v.as_bool(); }
 
+// Background events are noisy, so they're at DEBUG level by default (off).
+// Toggle with the `log` console command. Command results and one-shot events
+// (a chip declared, a chip lost) stay at INFO so they aren't drowned out.
 void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_id,
                      const hubproto::Value& v) {
-  ESP_LOGI(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
+  ESP_LOGD(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
            static_cast<unsigned>(entity_id), static_cast<unsigned>(attr_id),
            static_cast<unsigned>(v.raw[0]));
+}
+
+// Silent frame counter per chip — feeds the `chips` console command so we can
+// see traffic without polluting the log. Indexed by chip_id; small enough to
+// leave static.
+struct ChipStats {
+  std::uint32_t rx_frames;
+  std::uint32_t last_rx_ms;
+};
+ChipStats g_chip_stats[16] = {};
+
+void on_bus_traffic(void* /*ctx*/, const hubproto::Header& h,
+                    const std::uint8_t* /*p*/, std::size_t /*len*/) {
+  if (h.chip_id < 16) {
+    g_chip_stats[h.chip_id].rx_frames++;
+    g_chip_stats[h.chip_id].last_rx_ms =
+        static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+  }
+  ESP_LOGD(kTag, "rx type=0x%02x chip=%u seq=%u",
+           static_cast<unsigned>(static_cast<std::uint8_t>(h.type)),
+           static_cast<unsigned>(h.chip_id), static_cast<unsigned>(h.seq));
 }
 
 void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
@@ -80,7 +173,8 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
 }
 
 // ---- Console <-> main-loop request channel --------------------------------
-enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCEL };
+enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCEL,
+               REQ_CHIPS, REQ_LOG };
 
 struct Req {
   ReqKind kind;
@@ -250,6 +344,31 @@ int cmd_cancel(int argc, char** argv) {
   return 0;
 }
 
+int cmd_chips(int /*argc*/, char** /*argv*/) {
+  char buf[384];
+  Req r{};
+  r.kind = REQ_CHIPS;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_log(int argc, char** argv) {
+  if (argc < 2 || (std::strcmp(argv[1], "on") != 0 && std::strcmp(argv[1], "off") != 0)) {
+    printf("usage: log on|off\n");
+    return 1;
+  }
+  char buf[64];
+  Req r{};
+  r.kind = REQ_LOG;
+  r.val = std::strcmp(argv[1], "on") == 0;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
   c.command = name;
@@ -276,6 +395,8 @@ void start_console() {
   reg_cmd("in", "in <sec> <on|off> <id> - run a switch action after a delay", &cmd_in);
   reg_cmd("timers", "list pending timers", &cmd_timers);
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
+  reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
+  reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }
@@ -283,23 +404,41 @@ void start_console() {
 }  // namespace
 
 extern "C" void app_main(void) {
-  static fw::EspUartLink link([] {
+  // Zigbee link (UART1).
+  static fw::EspUartLink link_zb([] {
     fw::EspUartLink::Config c;
     c.port = UART_NUM_1;
-    c.tx_gpio = kUartTxGpio;
-    c.rx_gpio = kUartRxGpio;
+    c.tx_gpio = kZbTxGpio;
+    c.rx_gpio = kZbRxGpio;
     return c;
   }());
-  ESP_ERROR_CHECK(link.begin());
+  ESP_ERROR_CHECK(link_zb.begin());
+
+  // Thread link (UART2).
+  static fw::EspUartLink link_th([] {
+    fw::EspUartLink::Config c;
+    c.port = UART_NUM_2;
+    c.tx_gpio = kThTxGpio;
+    c.rx_gpio = kThRxGpio;
+    return c;
+  }());
+  ESP_ERROR_CHECK(link_th.begin());
+
+  static core::UartTransport bus_zb(link_zb);
+  static core::UartTransport bus_th(link_th);
 
   static Registry reg;
-  static core::UartTransport bus(link);
+  static ChipRouter bus;                            // presents itself as one Bus
+  bus.bind(kZigbeeChipId, bus_zb);                  // publish(chip=0x01) -> UART1
+  bus.bind(kThreadChipId, bus_th);                  // publish(chip=0x02) -> UART2
+
   static core::RadioCoordinator<Registry> coord(bus, reg);
   static core::StateMachine<Registry> sm(bus, reg);
   static Dispatcher disp(bus, reg);
   static Rules rules(disp, &now_ms, nullptr);
 
   disp.on_result(&on_cmd_result, nullptr);
+  bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
 
   core::Rule on_rule{kOccupancy, kOccupiedAttr, &is_true, kLight, kOnOffAttr,
                      hubproto::Value::make_bool(true)};
@@ -311,7 +450,8 @@ extern "C" void app_main(void) {
   sm.on_change(&Rules::on_state_change, &rules);
   sm.on_change(&on_state_change, nullptr);
 
-  link.start();
+  link_zb.start();
+  link_th.start();
 
   // Pending timers (owned by this task only).
   struct Timer { bool active; std::uint32_t when_ms; std::uint16_t id; bool val; };
@@ -321,14 +461,41 @@ extern "C" void app_main(void) {
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
 
-  bool announced = false;
+  bool announced_zb = false;
+  bool announced_th = false;
+
+  // Self-heal QUERY: if a bound chip hasn't declared yet (e.g. brain rebooted
+  // after the chip, so we missed its HELLO), poke it every so often. On a QUERY
+  // the co-processor re-sends DECLARE + DECLARE_END; a ready chip is skipped.
+  const std::uint32_t kSelfHealMs = 5000;
+  std::uint32_t last_query_ms = 0;
+  const std::uint8_t kBoundChips[] = {kZigbeeChipId, kThreadChipId};
   while (true) {
     const std::uint32_t t = now_ms(nullptr);
     disp.poll(t);
-    if (!announced && coord.chip_ready(0x01)) {
-      announced = true;
-      ESP_LOGI(kTag, "chip 0x01 declared; registry has %u entities",
-               static_cast<unsigned>(reg.size()));
+    if (!announced_zb && coord.chip_ready(kZigbeeChipId)) {
+      announced_zb = true;
+      ESP_LOGI(kTag, "chip 0x%02x (zigbee) declared; registry has %u entities",
+               kZigbeeChipId, static_cast<unsigned>(reg.size()));
+    }
+    if (!announced_th && coord.chip_ready(kThreadChipId)) {
+      announced_th = true;
+      ESP_LOGI(kTag, "chip 0x%02x (thread) declared; registry has %u entities",
+               kThreadChipId, static_cast<unsigned>(reg.size()));
+    }
+
+    if (t - last_query_ms >= kSelfHealMs) {
+      last_query_ms = t;
+      for (auto id : kBoundChips) {
+        if (coord.chip_ready(id)) continue;
+        hubproto::Header q{};
+        q.version = hubproto::kProtocolVersion;
+        q.type = hubproto::MsgType::Query;
+        q.chip_id = id;
+        q.entity_id = hubproto::kSelfEntityId;
+        bus.publish(q, nullptr, 0);
+        ESP_LOGD(kTag, "self-heal QUERY -> chip 0x%02x", id);
+      }
     }
 
     // Fire due timers.
@@ -443,6 +610,33 @@ extern "C" void app_main(void) {
           } else {
             std::snprintf(r->out, r->out_cap, "no timer #%d\n", r->idx);
           }
+          break;
+        }
+        case REQ_CHIPS: {
+          const std::uint32_t now = now_ms(nullptr);
+          const char* labels[] = {"?", "zigbee", "thread"};
+          std::size_t off = 0;
+          for (std::uint8_t id = 1; id <= 15 && off < r->out_cap; ++id) {
+            const auto& cs = g_chip_stats[id];
+            const bool known = coord.chip_known(id);
+            if (!known && cs.rx_frames == 0) continue;
+            const char* lbl = id < (sizeof(labels)/sizeof(labels[0])) ? labels[id] : "?";
+            const std::uint32_t age = cs.last_rx_ms ? (now - cs.last_rx_ms) : 0;
+            off += static_cast<std::size_t>(std::snprintf(
+                r->out + off, r->out_cap - off,
+                "chip 0x%02x (%s): %s, %lu frames, last rx %lus ago\n",
+                id, lbl,
+                coord.chip_ready(id) ? "ready" : (known ? "seen (not ready)" : "silent"),
+                static_cast<unsigned long>(cs.rx_frames),
+                static_cast<unsigned long>(age / 1000)));
+          }
+          if (off == 0) std::snprintf(r->out, r->out_cap, "no chips seen yet\n");
+          break;
+        }
+        case REQ_LOG: {
+          esp_log_level_set(kTag, r->val ? ESP_LOG_DEBUG : ESP_LOG_INFO);
+          std::snprintf(r->out, r->out_cap, "verbose log %s\n",
+                        r->val ? "ON" : "OFF");
           break;
         }
       }
