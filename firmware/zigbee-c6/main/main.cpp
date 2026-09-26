@@ -23,6 +23,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -204,6 +205,14 @@ void publish_locked(const hubproto::Header& h, const std::uint8_t* buf,
   xSemaphoreGive(g_bus_mtx);
 }
 
+// Fires from an esp_timer; heartbeats every 5s so the brain can (a) see this
+// chip's liveness in `chips` and (b) self-heal after a brain reboot even
+// without a fresh HELLO from our side (any inbound message wakes up
+// RadioCoordinator's QUERY on an unknown chip).
+void heartbeat_cb(void* /*arg*/) {
+  publish_locked(make_header(hubproto::MsgType::Heartbeat, 0x0000, 0), nullptr, 0);
+}
+
 void send_hello() {
   publish_locked(make_header(hubproto::MsgType::Hello, 0x0000, 0), nullptr, 0);
   ESP_LOGI(kTag, "sent HELLO (topology changed -> brain will re-QUERY)");
@@ -298,11 +307,25 @@ void handle_command(const hubproto::Header& h, const std::uint8_t* payload,
            static_cast<unsigned>(tsn));
 }
 
+void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint);
+
+// esp_zb_scheduler_alarm callback: re-read current state from every mapped
+// device (ZCL calls must run under the stack lock; scheduler runs in stack
+// context, so we don't need to acquire it explicitly).
+void refresh_states_cb(std::uint8_t /*unused*/) {
+  for (const auto& s : g_switches) {
+    if (s.in_use) read_device_state(s.short_addr, s.endpoint);
+  }
+}
+
 void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
                      const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
     case hubproto::MsgType::Query:
       send_declarations();
+      // Also re-read current state from each device so the brain gets a fresh
+      // STATE for every entity after (re-)declaration, not just at first join.
+      esp_zb_scheduler_alarm(refresh_states_cb, 0, 100);
       break;
     case hubproto::MsgType::Command:
       handle_command(h, payload, len);
@@ -691,6 +714,19 @@ extern "C" void app_main(void) {
 
   // Announce to the brain now; declarations follow as devices join.
   send_hello();
+
+  // Periodic heartbeat so `chips` on the brain sees us alive and, after a
+  // brain reboot, its self-heal QUERY has something to trigger on.
+  static esp_timer_handle_t hb_timer;
+  const esp_timer_create_args_t hb_args{
+      .callback = &heartbeat_cb,
+      .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "hb",
+      .skip_unhandled_events = true,
+  };
+  ESP_ERROR_CHECK(esp_timer_create(&hb_args, &hb_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(hb_timer, 5000000));  // 5 s
 
   // Then start the Zigbee coordinator.
   esp_zb_platform_config_t config{};
