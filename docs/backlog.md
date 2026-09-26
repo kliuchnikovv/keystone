@@ -205,3 +205,69 @@ How to wire it (rough plan):
 Invariant: chip health belongs to the *brain*. A chip reporting "I'm fine"
 tells the brain nothing useful about the *link* — the brain must judge
 liveness from its own inbound stream.
+
+## Mobile app (iOS + Android)
+
+The user-facing surface for the home. Console-over-USB is fine for a dev
+hub; a person on the couch wants a phone. Question: **build our own app, or
+lean on someone else's, or both?**
+
+Three shapes, each with a different cost/benefit:
+
+- **Lean on Apple Home / Google Home / Alexa via Matter** — no app of our
+  own, no accounts, no push infra. We get free iOS + Android + widgets +
+  Siri/Assistant/Alexa voice + geofences + shortcuts. The catch: only the
+  entities exposed as Matter accessories are visible, and only what Matter's
+  clusters model — energy graphs, our own rule engine, hub diagnostics all
+  stay hidden. This is why [matter-backlog.md](matter-backlog.md) matters
+  even if we later add our own app.
+- **A thin native app talking to the brain over WiFi/HTTPS** — one code
+  base per platform (SwiftUI on iOS, Kotlin/Compose on Android; or one
+  cross-platform in Flutter / React Native / Expo). Screens: entity list,
+  toggle, live power reading, rule editor, event history, hub health,
+  provisioning wizard. Talks to a small HTTP/WebSocket server on the brain
+  (see [brain-backlog.md § web UI](brain-backlog.md#8-human-facing-surface-beyond-console)).
+  Requires: LAN-only first, then some form of remote access.
+- **A PWA served from the brain** — the same web UI mounted as an
+  installable app. Cheapest to build (single code path), fewest features
+  (no true background, limited iOS push). Great stopgap while the native
+  app matures.
+
+Cross-cutting bits we'll need whichever we build:
+
+- **Local API on the brain** — REST/JSON + WebSocket for live updates.
+  Auth: at first a shared token typed once during onboarding, later per-user
+  with Matter-fabric-derived identity so the app inherits the same trust
+  model. Depends on WiFi + web UI groundwork already in
+  brain-backlog.md.
+- **Remote access** — LAN works from home; away needs either mDNS + VPN,
+  a relay we host, or reuse of Matter's remote (Apple Home / Google Home
+  handle this if the accessory is in their fabric). The cheapest option is
+  "away = Apple Home"; the honest one is a relay we run.
+- **Push notifications** — APNs for iOS, FCM for Android. Requires an
+  outbound path from the brain (webhook to a small relay, or the brain
+  itself if it has internet), plus platform provisioning (APNs cert, FCM
+  project). The relay is the simplest architecture.
+- **Provisioning UX** — the app's first job: find the hub on the LAN
+  (mDNS), pair with it (QR on the hub → app scans), commission WiFi if not
+  already done, set a friendly hub name.
+- **Feature parity with the console** — every `home`/`get`/`on`/`in`/
+  `chips`/`log` action should be reachable from the app, but *presented
+  differently* (a list of tiles, not a REPL).
+- **Offline behavior** — the app must gracefully degrade when the hub is
+  unreachable (cached last state + explicit "stale" markers), and must not
+  silently retry commands the user thought failed.
+- **Design surface**: how much branding / how much just "control panel"?
+  Decide before writing pixel-heavy UI.
+
+Order-of-work suggestion:
+
+1. Get Matter working (`matter-backlog.md`) so Apple/Google Home covers
+   the 80% case for free.
+2. Small **PWA served from the brain** as the desktop UI (a couple hundred
+   lines of HTML/JS), reusing the local API. Covers the LAN case, tests
+   the API design.
+3. When (2) hits its ceiling, native app: Swift + Kotlin or a single
+   Flutter/Expo codebase — evaluate then, not now.
+4. Push + remote-access relay only when someone actually asks for them.
+
