@@ -206,7 +206,10 @@ const char* dt_name(hubproto::DeviceType t) {
 
 // Format an attribute's current value into `buf` (e.g. "on_off=on", "0x02=200").
 void fmt_attr(char* buf, std::size_t cap, const core::AttrState& a) {
-  const char* name = a.attr_id == kOnOffAttr ? "on_off" : nullptr;
+  const char* name = a.attr_id == kOnOffAttr    ? "on_off"
+                     : a.attr_id == 0x13        ? "power_w"
+                     : a.attr_id == 0x14        ? "energy_wh"
+                                                : nullptr;
   char idbuf[8];
   if (name == nullptr) {
     std::snprintf(idbuf, sizeof(idbuf), "0x%02x", static_cast<unsigned>(a.attr_id));
