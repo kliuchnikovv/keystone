@@ -187,16 +187,37 @@ in sequence:
    such member). Fixing this would need pinning esp_insights, patching it,
    or disabling insights via sdkconfig — worth trying next time.
 
+### Route 3: Docker build image (chosen)
+
+Verified working on 2026-09-28. Image
+`espressif/esp-matter:release-v1.6_idf_v5.5.5` (5.29 GB compressed) has the
+whole toolchain preassembled: IDF at `/opt/espressif/esp-idf`, esp-matter at
+`/opt/espressif/esp-matter`, the tested Python venv, and — crucially — the
+riscv toolchain version esp-matter was validated against, so the CHIP
+`Nullable.h`/GCC-14 breakage from route 1 does not reproduce. Reference build
+inside the container:
+
+```
+docker run --rm espressif/esp-matter:release-v1.6_idf_v5.5.5 bash -lc \
+  'cd $ESP_MATTER_PATH/examples/light && idf.py set-target esp32c6 && idf.py build'
+```
+
+produces `light.elf` + `light.bin` (1.85 MB, 6% headroom in the 1.92 MB OTA
+slot). Working recipe going forward: keep source in this repo, invoke the
+container with the project bind-mounted (`-v $PWD:/project`) — code stays under
+version control, only the toolchain is containerized. Local flashing still uses
+host esptool over USB.
+
+Cost: ~5.3 GB image + ~2-3 GB per build workspace. Requires ~15 GB free disk
+before pulling.
+
 ### Practical read
 
-The cheapest path forward is probably:
-- Recheck **once esp-matter publishes a GCC-14-friendly release** (the CHIP
-  fix has to happen upstream; watch the esp-matter changelog). Once it lands,
-  we stay on IDF 5.5.5 and it's a small change.
-- If we need Matter sooner: **use Espressif's Docker build image**
-  (`espressif/esp-matter` on Docker Hub) instead of local IDF. That's the
-  environment esp-matter itself is tested against and dodges the local
-  Python-env, IDF-version, and toolchain caskade above.
+Route 3 (Docker) is now the primary Matter build path for this repo. Route 1
+(local IDF 5.5.5) remains a "watch this space" — once esp-matter publishes a
+release that fixes the CHIP `Nullable.h` operator== issue against GCC 14, we
+can drop the container. Route 2 (IDF 5.2.3 downgrade) is a dead end and worth
+keeping only as a warning.
 
 ### Flash size
 
