@@ -1,14 +1,39 @@
 # Native ESP-IDF build defaults for the Thread co-processor (ESP32-C6).
-# Stage A (this file): bus/transport only, no Thread stack yet — so the brain
-# can see chip 0x02 announce HELLO and stay linked. Later stages add
-# OpenThread + esp-matter.
+# Stage B (SPEC Phase 8, matter-backlog step 1): OpenThread as a Full Thread
+# Device on the on-chip 802.15.4 radio. Border-router routing to the LAN
+# comes in a later stage; for now the C6 just forms/joins a Thread network so
+# we can see it on air and, later, put Matter endpoints on top.
 
-# --- Partition table (Thread/Matter storage will live here later) ---
+# --- Partition table ---
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# --- 4 MB flash (same C6-DevKitC-1 boards as the Zigbee one) ---
+# --- 4 MB flash (this board), same as the Zigbee C6 ---
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# --- Matter / OpenThread stacks expect a 1 kHz tick ---
+# --- OpenThread stack expects a 1 kHz tick ---
 CONFIG_FREERTOS_HZ=1000
+
+# --- OpenThread: FTD, native radio, no interactive CLI ---
+CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_FTD=y
+CONFIG_OPENTHREAD_BORDER_ROUTER=n
+CONFIG_OPENTHREAD_DNS64_CLIENT=y
+CONFIG_OPENTHREAD_CONSOLE_ENABLE=n
+CONFIG_OPENTHREAD_TASK_SIZE=10240
+CONFIG_OPENTHREAD_LOG_LEVEL_INFO=y
+
+# --- mbedTLS bits required by OpenThread crypto ---
+CONFIG_MBEDTLS_CMAC_C=y
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECJPAKE=y
+CONFIG_MBEDTLS_ECJPAKE_C=y
+
+# --- lwIP: give OpenThread's IPv6 room to breathe ---
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=4096
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=8
+CONFIG_LWIP_MULTICAST_PING=y
+CONFIG_LWIP_HOOK_IP6_SELECT_SRC_ADDR_CUSTOM=y
+
+# --- Main task needs more stack for OpenThread + our bus setup ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
