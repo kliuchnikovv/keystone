@@ -370,6 +370,72 @@ void refresh_states_cb(std::uint8_t /*unused*/) {
   }
 }
 
+// Chip-level "meta" commands: a Command with entity_id=kSelfEntityId asks the
+// coordinator itself to do something (open the join window, drop a device,
+// blink identify) rather than acting on an entity. attr_id picks the op, the
+// u16 value is its argument. Reused Command frame so no wire-protocol change.
+constexpr std::uint8_t kMetaPair = 0x01;      // arg = seconds to open network
+constexpr std::uint8_t kMetaUnpair = 0x02;    // arg = entity_id to remove
+constexpr std::uint8_t kMetaIdentify = 0x03;  // arg = entity_id, blinks 10s
+
+void handle_meta(std::uint8_t attr, std::uint16_t arg) {
+  switch (attr) {
+    case kMetaPair: {
+      const std::uint16_t sec = arg == 0 ? 180 : arg;
+      if (esp_zb_lock_acquire(portMAX_DELAY)) {
+        esp_zb_bdb_open_network(sec > 254 ? 254 : static_cast<std::uint8_t>(sec));
+        esp_zb_lock_release();
+      }
+      ESP_LOGI(kTag, "meta: pair (open network for %us)", static_cast<unsigned>(sec));
+      break;
+    }
+    case kMetaUnpair: {
+      ZbSwitch* s = find_by_entity(arg);
+      if (s == nullptr) {
+        ESP_LOGW(kTag, "meta: unpair unknown entity 0x%04x", static_cast<unsigned>(arg));
+        break;
+      }
+      esp_zb_zdo_mgmt_leave_req_param_t leave{};
+      std::memcpy(leave.device_address, s->ieee, sizeof(esp_zb_ieee_addr_t));
+      leave.dst_nwk_addr = s->short_addr;  // send Leave to the device itself
+      leave.remove_children = 0;
+      leave.rejoin = 0;
+      if (esp_zb_lock_acquire(portMAX_DELAY)) {
+        esp_zb_zdo_device_leave_req(&leave, nullptr, nullptr);
+        esp_zb_lock_release();
+      }
+      ESP_LOGI(kTag, "meta: unpair entity 0x%04x (device 0x%04x)",
+               static_cast<unsigned>(arg), static_cast<unsigned>(s->short_addr));
+      s->in_use = false;
+      persist_switches();
+      break;
+    }
+    case kMetaIdentify: {
+      ZbSwitch* s = find_by_entity(arg);
+      if (s == nullptr) {
+        ESP_LOGW(kTag, "meta: identify unknown entity 0x%04x", static_cast<unsigned>(arg));
+        break;
+      }
+      esp_zb_zcl_identify_cmd_t cmd{};
+      cmd.zcl_basic_cmd.dst_addr_u.addr_short = s->short_addr;
+      cmd.zcl_basic_cmd.dst_endpoint = s->endpoint;
+      cmd.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
+      cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+      cmd.identify_time = 10;  // seconds
+      if (esp_zb_lock_acquire(portMAX_DELAY)) {
+        esp_zb_zcl_identify_cmd_req(&cmd);
+        esp_zb_lock_release();
+      }
+      ESP_LOGI(kTag, "meta: identify entity 0x%04x for 10s",
+               static_cast<unsigned>(arg));
+      break;
+    }
+    default:
+      ESP_LOGW(kTag, "meta: unknown attr 0x%02x", static_cast<unsigned>(attr));
+      break;
+  }
+}
+
 void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
                      const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
@@ -379,9 +445,22 @@ void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
       // STATE for every entity after (re-)declaration, not just at first join.
       esp_zb_scheduler_alarm(refresh_states_cb, 0, 100);
       break;
-    case hubproto::MsgType::Command:
+    case hubproto::MsgType::Command: {
+      // Peek entity_id before decoding — chip-meta commands live at entity_id 0
+      // and have no registry-backed value_type, so decode_command wouldn't work
+      // for them anyway.
+      if (len >= 5) {
+        const std::uint16_t ent = static_cast<std::uint16_t>(payload[0] | (payload[1] << 8));
+        if (ent == hubproto::kSelfEntityId) {
+          const std::uint8_t attr = payload[2];
+          const std::uint16_t arg = static_cast<std::uint16_t>(payload[3] | (payload[4] << 8));
+          handle_meta(attr, arg);
+          break;
+        }
+      }
       handle_command(h, payload, len);
       break;
+    }
     default:
       break;
   }

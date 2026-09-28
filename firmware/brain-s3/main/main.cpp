@@ -174,7 +174,8 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
 
 // ---- Console <-> main-loop request channel --------------------------------
 enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCEL,
-               REQ_CHIPS, REQ_LOG };
+               REQ_CHIPS, REQ_LOG,
+               REQ_PAIR, REQ_UNPAIR, REQ_IDENTIFY };
 
 struct Req {
   ReqKind kind;
@@ -347,6 +348,42 @@ int cmd_cancel(int argc, char** argv) {
   return 0;
 }
 
+int cmd_pair(int argc, char** argv) {
+  const long sec = argc > 1 ? std::strtol(argv[1], nullptr, 10) : 180;
+  char buf[64];
+  Req r{};
+  r.kind = REQ_PAIR;
+  r.id = static_cast<std::uint16_t>(sec);
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_unpair(int argc, char** argv) {
+  if (argc < 2) { printf("usage: unpair <id>\n"); return 1; }
+  char buf[96];
+  Req r{};
+  r.kind = REQ_UNPAIR;
+  r.id = parse_id(argv[1]);
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_identify(int argc, char** argv) {
+  if (argc < 2) { printf("usage: identify <id>\n"); return 1; }
+  char buf[96];
+  Req r{};
+  r.kind = REQ_IDENTIFY;
+  r.id = parse_id(argv[1]);
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
 int cmd_chips(int /*argc*/, char** /*argv*/) {
   char buf[384];
   Req r{};
@@ -400,6 +437,9 @@ void start_console() {
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
   reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
   reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);
+  reg_cmd("pair", "pair [sec] - open Zigbee network for joining (default 180s)", &cmd_pair);
+  reg_cmd("unpair", "unpair <id> - drop a device from the network", &cmd_unpair);
+  reg_cmd("identify", "identify <id> - blink the device's LED for 10s", &cmd_identify);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }
@@ -640,6 +680,49 @@ extern "C" void app_main(void) {
           esp_log_level_set(kTag, r->val ? ESP_LOG_DEBUG : ESP_LOG_INFO);
           std::snprintf(r->out, r->out_cap, "verbose log %s\n",
                         r->val ? "ON" : "OFF");
+          break;
+        }
+        // Chip-meta commands: build a raw Command targeting entity_id=0 on the
+        // owning chip. Convention: attr_id picks the op, u16 value is the arg.
+        // Mirrored in zigbee-c6::handle_meta.
+        case REQ_PAIR: {
+          // No entity to look up — pair always targets the Zigbee coordinator.
+          const std::uint16_t sec = r->id;
+          std::uint8_t payload[5] = {0, 0, 0x01,
+                                     static_cast<std::uint8_t>(sec & 0xFF),
+                                     static_cast<std::uint8_t>((sec >> 8) & 0xFF)};
+          hubproto::Header h{};
+          h.version = hubproto::kProtocolVersion;
+          h.type = hubproto::MsgType::Command;
+          h.chip_id = kZigbeeChipId;
+          h.entity_id = hubproto::kSelfEntityId;
+          bus.publish(h, payload, sizeof(payload));
+          std::snprintf(r->out, r->out_cap,
+                        "pair -> chip 0x%02x for %us (sent)\n",
+                        kZigbeeChipId, static_cast<unsigned>(sec));
+          break;
+        }
+        case REQ_UNPAIR:
+        case REQ_IDENTIFY: {
+          const auto* e = reg.find(r->id);
+          if (e == nullptr) {
+            std::snprintf(r->out, r->out_cap, "0x%04x: not found\n",
+                          static_cast<unsigned>(r->id));
+            break;
+          }
+          const std::uint8_t meta_attr = (r->kind == REQ_UNPAIR) ? 0x02 : 0x03;
+          std::uint8_t payload[5] = {0, 0, meta_attr,
+                                     static_cast<std::uint8_t>(r->id & 0xFF),
+                                     static_cast<std::uint8_t>((r->id >> 8) & 0xFF)};
+          hubproto::Header h{};
+          h.version = hubproto::kProtocolVersion;
+          h.type = hubproto::MsgType::Command;
+          h.chip_id = e->chip_id;
+          h.entity_id = hubproto::kSelfEntityId;
+          bus.publish(h, payload, sizeof(payload));
+          std::snprintf(r->out, r->out_cap, "%s 0x%04x -> chip 0x%02x (sent)\n",
+                        r->kind == REQ_UNPAIR ? "unpair" : "identify",
+                        static_cast<unsigned>(r->id), e->chip_id);
           break;
         }
       }
