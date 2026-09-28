@@ -123,21 +123,23 @@ critical for MVP, worth planning before shipping.
 
 ## Grand order-of-work (rough)
 
-1. OpenThread up (border router forms a Thread network, visible on mDNS).
-2. esp-matter integrated, one Matter On/Off plug endpoint on C6#2, static
-   value — Apple Home commissions it, toggles it, but toggle doesn't do
-   anything real yet.
-3. Bridge down-path: Matter On/Off write → COMMAND over UART → real IKEA
-   plug switches → CmdAck.
-4. Bridge up-path: STATE from brain → Matter attribute update → Apple Home
-   reflects the new state.
-5. Multi-fabric + polish.
+1. ✅ OpenThread up (Thread network formed on C6#2, FTD).
+2. ✅ esp-matter integrated, one Matter On/Off endpoint on C6#2, Apple Home
+   commissions it over BLE + Thread.
+3. ✅ Bridge down-path: Matter On/Off write → COMMAND over UART → real IKEA
+   plug switches → CmdAck. (`brain-s3::on_bus_forward` at the ChipRouter.)
+4. ✅ Bridge up-path: STATE from Zigbee → mirrored on the Matter attribute →
+   Apple Home reflects the new state (same forward).
+5. **Matter Bridge (aggregator + dynamic bridged endpoints)** — one endpoint
+   per registry entity, so Apple Home sees every Zigbee device the hub owns,
+   not just the hardcoded first switch. Next big step.
 6. Additional Matter device types matching the Zigbee ones as they come
-   online.
+   online (part of step 5).
+7. Multi-fabric + polish.
 
-Realistic: **3–5 focused sessions** from zero to "Apple Home turns on and off
-our real IKEA plug via Thread". First one is the biggest step; each next
-one is smaller.
+Steps 1–4 done on `phase6-zigbee` (branch), hardware-verified end-to-end
+with an IKEA INSPELNING plug. Session count so far: one (the Docker
+route + endpoint + brain forwarding).
 
 ## Known blockers
 

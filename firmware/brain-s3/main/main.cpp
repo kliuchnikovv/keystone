@@ -107,7 +107,7 @@ class ChipRouter final : public core::Bus {
 
  private:
   static constexpr int kMaxBinds = 4;
-  static constexpr int kMaxSubs = 4;
+  static constexpr int kMaxSubs = 8;
 
   struct Bind { std::uint8_t chip_id; core::Bus* bus; };
   struct Sub { MessageFn fn; void* ctx; };
@@ -170,6 +170,32 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
   ESP_LOGI(kTag, "COMMAND result seq=%u entity=0x%04x attr=0x%02x status=%d",
            static_cast<unsigned>(seq), static_cast<unsigned>(entity_id),
            static_cast<unsigned>(attr_id), static_cast<int>(status));
+}
+
+// Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
+// co-processor (chip 0x02) exposes endpoints that mirror registry entities
+// living on the Zigbee coordinator (chip 0x01). We re-emit:
+//   - STATE from Zigbee → mirrored to Matter, so Matter subscriptions in
+//     Apple/Google/Alexa see attribute changes (including plug toggled
+//     by hand).
+//   - COMMAND from Matter → forwarded to Zigbee, so an Apple Home write
+//     reaches the real device.
+// ChipRouter fan_out fires only for messages coming IN over a UART, not for
+// our own publish() calls, so no loop.
+void on_bus_forward(void* ctx, const hubproto::Header& h,
+                    const std::uint8_t* p, std::size_t len) {
+  core::Bus* bus = static_cast<core::Bus*>(ctx);
+  if (h.type == hubproto::MsgType::State && h.chip_id == kZigbeeChipId) {
+    hubproto::Header mirror = h;
+    mirror.chip_id = kThreadChipId;
+    bus->publish(mirror, p, len);
+  } else if (h.type == hubproto::MsgType::Command && h.chip_id == kThreadChipId) {
+    hubproto::Header fwd = h;
+    fwd.chip_id = kZigbeeChipId;
+    bus->publish(fwd, p, len);
+    ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> Zigbee seq=%u",
+             static_cast<unsigned>(h.entity_id), static_cast<unsigned>(h.seq));
+  }
 }
 
 // ---- Console <-> main-loop request channel --------------------------------
@@ -482,6 +508,7 @@ extern "C" void app_main(void) {
 
   disp.on_result(&on_cmd_result, nullptr);
   bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
+  bus.subscribe(&on_bus_forward, &bus);     // Matter <-> Zigbee cross-chip mirror
 
   core::Rule on_rule{kOccupancy, kOccupiedAttr, &is_true, kLight, kOnOffAttr,
                      hubproto::Value::make_bool(true)};
