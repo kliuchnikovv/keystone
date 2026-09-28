@@ -1,0 +1,32 @@
+# ESP32-C6 target overlay: Thread on the native 802.15.4 radio, BLE for
+# Matter commissioning, and libsodium tuning. Matches
+# esp-matter/examples/light/sdkconfig.defaults.c6_thread with the shell
+# disabled (we drive the co-processor over our own UART bus).
+CONFIG_IDF_TARGET="esp32c6"
+
+# libsodium: share mbedTLS SHA.
+CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y
+
+# NimBLE tuning for BLE commissioning.
+CONFIG_BT_NIMBLE_EXT_ADV=n
+CONFIG_BT_NIMBLE_HCI_EVT_BUF_SIZE=70
+CONFIG_USE_BLE_ONLY_FOR_COMMISSIONING=n
+
+# OpenThread as a Full Thread Device on the on-chip 802.15.4 radio.
+CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_SRP_CLIENT=y
+CONFIG_OPENTHREAD_DNS_CLIENT=y
+CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC=n
+CONFIG_OPENTHREAD_LOG_LEVEL_NOTE=y
+CONFIG_OPENTHREAD_CLI=n
+
+# lwIP tuning OpenThread needs.
+CONFIG_LWIP_IPV6_AUTOCONFIG=n
+CONFIG_LWIP_MULTICAST_PING=y
+
+# mDNS: use the full stack (Matter needs extended discovery).
+CONFIG_USE_MINIMAL_MDNS=n
+CONFIG_ENABLE_EXTENDED_DISCOVERY=y
+
+# No WiFi station on the C6 — the S3 brain hosts WiFi separately.
+CONFIG_ENABLE_WIFI_STATION=n

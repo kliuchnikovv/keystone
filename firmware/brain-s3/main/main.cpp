@@ -185,10 +185,25 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
 void on_bus_forward(void* ctx, const hubproto::Header& h,
                     const std::uint8_t* p, std::size_t len) {
   core::Bus* bus = static_cast<core::Bus*>(ctx);
-  if (h.type == hubproto::MsgType::State && h.chip_id == kZigbeeChipId) {
+  // Zigbee -> Matter mirror: DECLARE (so Matter can create a bridged
+  // endpoint), STATE (so it can update the Matter attribute). No need to
+  // mirror DECLARE_END — Matter Bridge builds endpoints incrementally as
+  // DECLAREs arrive, no batching required.
+  if (h.chip_id == kZigbeeChipId &&
+      (h.type == hubproto::MsgType::Declare ||
+       h.type == hubproto::MsgType::State)) {
     hubproto::Header mirror = h;
     mirror.chip_id = kThreadChipId;
     bus->publish(mirror, p, len);
+  } else if (h.type == hubproto::MsgType::Hello && h.chip_id == kThreadChipId) {
+    // Matter just came up — kick Zigbee to re-DECLARE so the mirror can
+    // create bridged endpoints for every entity we already know about.
+    hubproto::Header q{};
+    q.version = hubproto::kProtocolVersion;
+    q.type = hubproto::MsgType::Query;
+    q.chip_id = kZigbeeChipId;
+    bus->publish(q, nullptr, 0);
+    ESP_LOGI(kTag, "kick Zigbee QUERY because Matter came up");
   } else if (h.type == hubproto::MsgType::Command && h.chip_id == kThreadChipId) {
     hubproto::Header fwd = h;
     fwd.chip_id = kZigbeeChipId;
@@ -552,6 +567,30 @@ extern "C" void app_main(void) {
       announced_th = true;
       ESP_LOGI(kTag, "chip 0x%02x (thread) declared; registry has %u entities",
                kThreadChipId, static_cast<unsigned>(reg.size()));
+      // Mirror the whole registry as DECLAREs toward the Matter Bridge so it
+      // can allocate a bridged endpoint per entity. Without this the Bridge
+      // only sees entities that declare live *after* it comes up.
+      for (std::size_t i = 0; i < reg.size(); ++i) {
+        const auto* e = reg.entity_at(i);
+        if (!e) continue;
+        hubproto::AttrDecl attrs[8];
+        const std::uint8_t n = e->attr_count > 8 ? 8 : e->attr_count;
+        for (std::uint8_t k = 0; k < n; ++k) {
+          attrs[k].attr_id = e->attrs[k].attr_id;
+          attrs[k].value_type = e->attrs[k].value_type;
+          attrs[k].flags = e->attrs[k].flags;
+        }
+        std::uint8_t buf[64];
+        auto r = hubproto::encode_declare(e->entity_id, e->device_type, attrs, n,
+                                          buf, sizeof(buf));
+        if (!r.ok) continue;
+        hubproto::Header d{};
+        d.version = hubproto::kProtocolVersion;
+        d.type = hubproto::MsgType::Declare;
+        d.chip_id = kThreadChipId;
+        d.entity_id = e->entity_id;
+        bus.publish(d, buf, r.len);
+      }
     }
 
     if (t - last_query_ms >= kSelfHealMs) {

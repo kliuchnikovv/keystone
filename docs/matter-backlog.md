@@ -130,16 +130,23 @@ critical for MVP, worth planning before shipping.
    plug switches → CmdAck. (`brain-s3::on_bus_forward` at the ChipRouter.)
 4. ✅ Bridge up-path: STATE from Zigbee → mirrored on the Matter attribute →
    Apple Home reflects the new state (same forward).
-5. **Matter Bridge (aggregator + dynamic bridged endpoints)** — one endpoint
-   per registry entity, so Apple Home sees every Zigbee device the hub owns,
-   not just the hardcoded first switch. Next big step.
+5. ✅ **Matter Bridge** (aggregator endpoint 0x000E + dynamic bridged
+   endpoints via `app_bridge_*`) — one endpoint per registry entity,
+   persisted in NVS so Apple Home never loses devices across reboots.
+   Trigger: brain re-plays every known DECLARE to chip 0x02 the moment
+   `RadioCoordinator` marks Matter ready, so Bridge can build endpoints
+   for entities it wasn't around for the first time.
 6. Additional Matter device types matching the Zigbee ones as they come
-   online (part of step 5).
-7. Multi-fabric + polish.
+   online. Today only Switch → On/Off Light is wired
+   (`map_device_type()` in `thread-c6/main/main.cpp`); adding
+   dimmable_light, color_control, occupancy_sensor, etc. is a lookup
+   table + a few extra clusters in `create_bridged_clusters()`.
+7. Multi-fabric + polish (removing test-DAC warning, DAC certification,
+   Matter OTA).
 
-Steps 1–4 done on `phase6-zigbee` (branch), hardware-verified end-to-end
-with an IKEA INSPELNING plug. Session count so far: one (the Docker
-route + endpoint + brain forwarding).
+Steps 1–5 done on `phase6-zigbee` (branch), hardware-verified end-to-end
+with an IKEA INSPELNING plug: Apple Home talks to a bridged endpoint via
+Thread → C6#2 → UART → brain → Zigbee → plug flips.
 
 ## Known blockers
 

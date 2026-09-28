@@ -1,9 +1,12 @@
-# Matter co-processor main component.
-# Pulls in the Matter data model (esp_matter) plus our shared UART bridge.
-idf_component_register(SRCS "main.cpp"
+# Matter Bridge co-processor main component.
+# Pulls in esp_matter's aggregator/bridged-endpoint machinery (app_bridge,
+# esp_matter_bridge live under $ESP_MATTER_PATH/examples/common — added via
+# EXTRA_COMPONENT_DIRS in the root CMakeLists).
+idf_component_register(SRCS "main.cpp" "keystone_bridged_device.cpp"
                        INCLUDE_DIRS "."
                        PRIV_INCLUDE_DIRS "${ESP_MATTER_PATH}/examples/common/utils"
-                       REQUIRES esp_matter core esp_uart_link hubproto nvs_boot_id
+                       REQUIRES esp_matter esp_matter_bridge app_bridge
+                                core esp_uart_link hubproto nvs_boot_id
                                 nvs_flash esp_event esp_netif esp_timer openthread)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
