@@ -139,6 +139,30 @@ Realistic: **3–5 focused sessions** from zero to "Apple Home turns on and off
 our real IKEA plug via Thread". First one is the biggest step; each next
 one is smaller.
 
+## Known blockers
+
+- **esp-matter release/v1.5–v1.6 doesn't build with the GCC 14 toolchain
+  that ships with ESP-IDF 5.5.5.** Attempted 2026-09-28 via the managed
+  component (`espressif/esp_matter ~1.5.0`): the CHIP subtree's
+  `data-model/Nullable.h` fails on `operator==` for
+  `std::optional<GenericOverallCurrentState>` and its ClosureControl
+  siblings — GCC 14 tightened `operator==` name lookup and CHIP's Nullable
+  templates rely on the older, looser rules. Not our code; not fixable in a
+  sdkconfig. Options when we come back to this:
+  1. Downgrade the riscv toolchain to GCC 13 (older IDF 5.4.1 that
+     esp-matter release/v1.4 targets).
+  2. Wait for esp-matter to publish a GCC-14-friendly release (main branch
+     may already have the fix; worth checking before starting from
+     scratch).
+  3. Patch `Nullable.h` locally in the managed component — brittle, throws
+     away on the next component update.
+- **4 MB flash is tight for Matter + OpenThread + BLE + our UART bridge.**
+  Espressif's `managed_component_light` example ships a partition table
+  with two 1.92 MB OTA slots + `esp_secure_cert` + `fctry` that adds up to
+  just under 4 MB — we'd have to drop `ota_1` (lose OTA rollback) to fit,
+  even before knowing whether the resulting factory image fits. Something
+  to size once the toolchain blocker is cleared.
+
 ## Traps to watch
 
 - Matter certs + BLE + Thread + WiFi + our UART link — the runtime is busy.
