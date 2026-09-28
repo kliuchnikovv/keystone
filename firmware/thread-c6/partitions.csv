@@ -1,7 +1,12 @@
 # Partition table for the Thread/Matter co-processor (ESP32-C6, 4 MB flash).
-# OpenThread stores its dataset in the standard `nvs` partition. Factory bumped
-# to 1500K to fit the Thread stack (and, later, esp-matter).
-# Name,      Type, SubType,  Offset,  Size, Flags
-nvs,         data, nvs,      0x9000,  0x6000,
-phy_init,    data, phy,      0xf000,  0x1000,
-factory,     app,  factory,  0x10000, 1500K,
+# Matches esp-matter examples/light layout: two 1.92 MB OTA slots + fctry
+# (Matter factory data) + esp_secure_cert (DAC/PAI). See docs/matter-backlog.md.
+# Name,        Type, SubType,  Offset,    Size,     Flags
+esp_secure_cert, 0x3F, ,       0xd000,    0x2000,   encrypted
+nvs,             data, nvs,    0x10000,   0xC000,
+nvs_keys,        data, nvs_keys, ,        0x1000,   encrypted
+otadata,         data, ota,    ,          0x2000,
+phy_init,        data, phy,    ,          0x1000,
+ota_0,           app,  ota_0,  0x20000,   0x1E0000,
+ota_1,           app,  ota_1,  0x200000,  0x1E0000,
+fctry,           data, nvs,    0x3E0000,  0x6000,

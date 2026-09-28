@@ -1,6 +1,9 @@
-# Stage B: OpenThread up. When we layer esp-matter on top, add that here too.
+# Matter co-processor main component.
+# Pulls in the Matter data model (esp_matter) plus our shared UART bridge.
 idf_component_register(SRCS "main.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES core esp_uart_link hubproto nvs_boot_id nvs_flash
-                                openthread esp_event esp_netif vfs
-                                esp_timer)
+                       PRIV_INCLUDE_DIRS "${ESP_MATTER_PATH}/examples/common/utils"
+                       REQUIRES esp_matter core esp_uart_link hubproto nvs_boot_id
+                                nvs_flash esp_event esp_netif esp_timer openthread)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")

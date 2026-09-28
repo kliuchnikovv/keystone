@@ -1,7 +1,12 @@
-## IDF Component Manager manifest for the Thread/Matter co-processor (ESP32-C6).
-## Stage A: no radio-stack deps yet — just IDF. Stage B will add
-## espressif/esp-openthread (Thread border router); Stage C will add
-## espressif/esp-matter on top.
+## IDF Component Manager manifest for the Matter co-processor.
+## Matter (esp_matter) itself is pulled in from ESP_MATTER_PATH via
+## EXTRA_COMPONENT_DIRS in the root CMakeLists — not through the registry —
+## so this manifest stays intentionally small.
 dependencies:
   idf:
     version: ">=5.2"
+  espressif/cmake_utilities:
+    version: "^1"
+    rules:
+      - if: "idf_version >=5.0"
+      - if: "target in [esp32c2]"
