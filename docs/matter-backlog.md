@@ -141,27 +141,71 @@ one is smaller.
 
 ## Known blockers
 
-- **esp-matter release/v1.5–v1.6 doesn't build with the GCC 14 toolchain
-  that ships with ESP-IDF 5.5.5.** Attempted 2026-09-28 via the managed
-  component (`espressif/esp_matter ~1.5.0`): the CHIP subtree's
-  `data-model/Nullable.h` fails on `operator==` for
-  `std::optional<GenericOverallCurrentState>` and its ClosureControl
-  siblings — GCC 14 tightened `operator==` name lookup and CHIP's Nullable
-  templates rely on the older, looser rules. Not our code; not fixable in a
-  sdkconfig. Options when we come back to this:
-  1. Downgrade the riscv toolchain to GCC 13 (older IDF 5.4.1 that
-     esp-matter release/v1.4 targets).
-  2. Wait for esp-matter to publish a GCC-14-friendly release (main branch
-     may already have the fix; worth checking before starting from
-     scratch).
-  3. Patch `Nullable.h` locally in the managed component — brittle, throws
-     away on the next component update.
-- **4 MB flash is tight for Matter + OpenThread + BLE + our UART bridge.**
-  Espressif's `managed_component_light` example ships a partition table
-  with two 1.92 MB OTA slots + `esp_secure_cert` + `fctry` that adds up to
-  just under 4 MB — we'd have to drop `ota_1` (lose OTA rollback) to fit,
-  even before knowing whether the resulting factory image fits. Something
-  to size once the toolchain blocker is cleared.
+Both routes we tried on 2026-09-28 dead-ended in different upstream places,
+not in our code. Recording the details so the next attempt starts from what
+we've already learned instead of the same rakes.
+
+### Route 1: keep IDF 5.5.5 + esp-matter release/v1.5–v1.6
+
+Fails at **the CHIP subtree vs GCC 14**. IDF 5.5.5 ships the riscv toolchain
+`esp-14.2.0_20260121` (GCC 14). Compiling CHIP's `src/app/data-model/Nullable.h`
+line 116 fails with `no match for 'operator=='` on
+`std::optional<chip::app::Clusters::ClosureControl::GenericOverallCurrentState>`
+(and sibling `GenericOverallTargetState`). GCC 14 tightened `operator==` name
+lookup and requires `T` to be EqualityComparable at template instantiation,
+which the ClusterAdvertisement-generated `GenericOverall*State` structs are
+not. `esp-matter/main` HEAD has the same code; the upstream connectedhomeip
+`master` also has it — so this needs a fix at the CHIP level. Options:
+- Wait for CHIP to add SFINAE / concept guards on `Nullable::operator==`, or
+  for the generated `GenericOverallState` structs to declare their own
+  `operator==`.
+- Patch the local managed component after every install — brittle.
+- Downgrade the toolchain (see route 2).
+
+### Route 2: downgrade to IDF 5.2.3 + esp-matter release/v1.3
+
+Fails elsewhere, worse. The 5.2.3 install itself works (esp-13.2.0 riscv,
+GCC 13.2 — no CHIP `operator==` issue), but three layered problems show up
+in sequence:
+1. **`check_python_dependencies.py` in IDF 5.2 mis-handles modern PyPI
+   metadata (Metadata-Version 2.4).** Fresh `install.sh` populates a Python
+   venv where the packages themselves are correct (they satisfy their own
+   `Requires-Dist`), but the checker walks all installed packages, mis-reads
+   `ruamel.yaml`'s 2.4 metadata and repeatedly reports a different unmet
+   requirement each `export.sh` run (`cryptography`, `pyparsing`,
+   `setuptools>=64`, `esp-idf-kconfig`, `construct`, …). Workaround
+   discovered: `sys.exit(0)` at the top of `tools/check_python_dependencies.py`
+   — makes `export.sh` succeed. Still needed on every fresh install.
+2. **The managed component `espressif/esp_matter ~1.3.1` doesn't compile**
+   against IDF 5.2.3's headers: `src/app/ClusterStateCache.cpp` has
+   forward-declaration mismatches and undeclared identifiers
+   (`ClusterStateCache`, `mRequestPathSet`, `mLastReportDataPath`, …). Pin
+   to `==1.3.0` gets past this.
+3. **`espressif/esp_insights` (dep of esp_matter 1.3.0)** then fails to
+   build against IDF 5.2.3 — `esp_insights_cbor_encoder.c` refers to
+   `SHA_SIZE` (undeclared) and `rtc_store_non_critical_data_hdr_t::dg` (no
+   such member). Fixing this would need pinning esp_insights, patching it,
+   or disabling insights via sdkconfig — worth trying next time.
+
+### Practical read
+
+The cheapest path forward is probably:
+- Recheck **once esp-matter publishes a GCC-14-friendly release** (the CHIP
+  fix has to happen upstream; watch the esp-matter changelog). Once it lands,
+  we stay on IDF 5.5.5 and it's a small change.
+- If we need Matter sooner: **use Espressif's Docker build image**
+  (`espressif/esp-matter` on Docker Hub) instead of local IDF. That's the
+  environment esp-matter itself is tested against and dodges the local
+  Python-env, IDF-version, and toolchain caskade above.
+
+### Flash size
+
+Independent of the toolchain, **4 MB flash is tight for Matter + OpenThread +
+BLE + our UART bridge**. `managed_component_light`'s partition table is two
+1.92 MB OTA slots + `esp_secure_cert` + `fctry` — right at 4 MB. To fit we'd
+have to drop `ota_1` (lose Matter OTA rollback) and possibly ratchet the
+factory partition. Something to size once one of the above routes is
+unblocked.
 
 ## Traps to watch
 
