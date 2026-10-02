@@ -2,8 +2,12 @@
 //
 // Builds on Stage 1/2a (esp-zigbee-sdk coordinator that forms a network, admits
 // a device, and discovers its clusters) by wiring the coordinator onto the
-// UART bus to the brain, exactly the transport the fake device used in
-// Phases 2-5. Each joined Zigbee On/Off device becomes one `switch` entity:
+// UART bus to the brain. Survives reboots: the Zigbee network (PAN, key,
+// channel) is persisted by ZBOSS, and the entity table is persisted in NVS;
+// on reboot the coordinator restores the same network so devices stay joined,
+// then re-arms reporting and reads current state for each entity.
+//
+// Each joined Zigbee On/Off device becomes one `switch` entity:
 //
 //   - join    -> register a switch entity, bind + configure On/Off reporting,
 //                then send HELLO so the brain re-runs QUERY -> DECLARE.
@@ -840,7 +844,28 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
 
 }  // namespace
 
+// Kick rearm + open joins after the network is up (shared by formation and reboot paths).
+void network_ready() {
+  open_network_for_join();
+  bool have_restored = false;
+  for (const auto& s : g_switches) {
+    if (s.in_use) { have_restored = true; break; }
+  }
+  if (have_restored && !g_rearm_scheduled) {
+    g_rearm_scheduled = true;
+    esp_zb_scheduler_alarm(rearm_restored, 0, 3000);
+  }
+}
+
 // esp-zigbee-sdk stack signals (formation, steering, device announce).
+//
+// Lifecycle (matches Espressif examples):
+//   SKIP_STARTUP -> INITIALIZATION (load NVS network state)
+//   -> DEVICE_FIRST_START (factory new)  -> FORMATION -> STEERING -> ready
+//   -> DEVICE_REBOOT     (NVS present)  -> network_ready() (no re-formation)
+//
+// The old code called FORMATION on every boot, which created a new network
+// (different key/PAN) each time — devices needed a factory reset to re-pair.
 extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
   std::uint32_t* p_sg_p = signal_struct->p_app_signal;
   const esp_err_t err_status = signal_struct->esp_err_status;
@@ -848,15 +873,21 @@ extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
 
   switch (sig) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
-      ESP_LOGI(kTag, "stack initialized — forming network");
-      esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
+      ESP_LOGI(kTag, "stack initialized — loading stored network state");
+      esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
       break;
 
     case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START:
     case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
       if (err_status == ESP_OK) {
-        ESP_LOGI(kTag, "device started; formation/steering will follow");
-        esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
+        if (esp_zb_bdb_is_factory_new()) {
+          ESP_LOGI(kTag, "factory-new — forming network");
+          esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
+        } else {
+          ESP_LOGI(kTag, "rebooted — network restored (PAN=0x%04x ch=%u)",
+                   esp_zb_get_pan_id(), esp_zb_get_current_channel());
+          network_ready();
+        }
       } else {
         ESP_LOGE(kTag, "device start failed (status=%d), retrying",
                  static_cast<int>(err_status));
@@ -869,16 +900,7 @@ extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
         ESP_LOGI(kTag, "network formed: PAN=0x%04x channel=%u short=0x%04x",
                  esp_zb_get_pan_id(), esp_zb_get_current_channel(),
                  esp_zb_get_short_address());
-        open_network_for_join();
-        // Re-arm reporting for any devices restored from NVS (once).
-        bool have_restored = false;
-        for (const auto& s : g_switches) {
-          if (s.in_use) { have_restored = true; break; }
-        }
-        if (have_restored && !g_rearm_scheduled) {
-          g_rearm_scheduled = true;
-          esp_zb_scheduler_alarm(rearm_restored, 0, 3000);
-        }
+        esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
       } else {
         ESP_LOGE(kTag, "formation failed (status=%d), retrying",
                  static_cast<int>(err_status));
@@ -887,7 +909,12 @@ extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
       break;
 
     case ESP_ZB_BDB_SIGNAL_STEERING:
-      ESP_LOGI(kTag, "steering signal (status=%d)", static_cast<int>(err_status));
+      if (err_status == ESP_OK) {
+        ESP_LOGI(kTag, "steering done — network open for joining");
+        network_ready();
+      } else {
+        ESP_LOGW(kTag, "steering failed (status=%d)", static_cast<int>(err_status));
+      }
       break;
 
     case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE: {
