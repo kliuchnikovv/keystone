@@ -17,7 +17,7 @@ fi
 
 echo "==> Building ${APP} in ${IMAGE}"
 # `-w` is overridden by the image's export.sh, so cd explicitly inside the shell.
-exec docker run --rm -it \
+exec docker run --rm \
   -v "${REPO_ROOT}:/project" \
   "${IMAGE}" \
   bash -lc "cd /project/${APP_DIR} && idf.py set-target esp32c6 && idf.py build"

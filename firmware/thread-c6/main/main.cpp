@@ -62,6 +62,18 @@ constexpr int kUartTxGpio = 5;
 constexpr int kUartRxGpio = 4;
 constexpr std::uint8_t kOwnChipId = 0x02;
 constexpr std::uint8_t kAttrOnOff = 0x01;
+constexpr std::uint8_t kAttrPowerW = 0x13;
+
+// Matter Electrical Power Measurement cluster (0x0090).
+// ActivePower (0x0008) is nullable int64, milliwatts.
+constexpr std::uint32_t kEpmClusterId = 0x0090;
+constexpr std::uint32_t kEpmAttrActivePower = 0x0008;
+constexpr std::uint32_t kEpmAttrPowerMode = 0x0000;
+
+// Set by ensure_bridged_endpoint() before calling app_bridge_create_new_device()
+// so the create_bridged_clusters callback can pick it up. Both run on the same
+// task, so no race.
+bool g_pending_has_metering = false;
 
 core::UartTransport* g_bus = nullptr;
 std::uint8_t g_boot_id = 0;
@@ -116,7 +128,29 @@ esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep,
                                   void* /*priv*/) {
   if (matter_dt_id == ESP_MATTER_ON_OFF_LIGHT_DEVICE_TYPE_ID) {
     on_off_light::config_t conf;
-    return on_off_light::add(ep, &conf);
+    esp_err_t err = on_off_light::add(ep, &conf);
+    if (err != ESP_OK) return err;
+    if (g_pending_has_metering) {
+      esp_matter::cluster_t* epm =
+          esp_matter::cluster::create(ep, kEpmClusterId, CLUSTER_FLAG_SERVER);
+      if (epm) {
+        // PowerMode: AC = 0 (mandatory).
+        esp_matter_attr_val_t pm{};
+        pm.type = ESP_MATTER_VAL_TYPE_ENUM8;
+        pm.val.u8 = 0;
+        esp_matter::attribute::create(epm, kEpmAttrPowerMode,
+                                      ATTRIBUTE_FLAG_NONE, pm);
+        // ActivePower: nullable int64, milliwatts.
+        esp_matter_attr_val_t ap{};
+        ap.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT64;
+        ap.val.i64 = 0;
+        esp_matter::attribute::create(epm, kEpmAttrActivePower,
+                                      ATTRIBUTE_FLAG_NULLABLE, ap);
+        ESP_LOGI(kTag, "added ElectricalPowerMeasurement cluster to ep %u",
+                 static_cast<unsigned>(esp_matter::endpoint::get_id(ep)));
+      }
+    }
+    return ESP_OK;
   }
   return ESP_ERR_INVALID_ARG;
 }
@@ -130,15 +164,17 @@ void free_bridged(app_bridged_device_t* d) {
 
 // Look up (or create) the Matter endpoint that mirrors a given hubproto entity.
 std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id,
-                                      hubproto::DeviceType dt) {
+                                      hubproto::DeviceType dt, bool has_metering) {
   keystone::BridgedAddr addr{chip_id, entity_id};
   std::uint16_t ep = app_bridge_get_endpoint(&addr);
   if (ep != chip::kInvalidEndpointId) return ep;
   const std::uint32_t matter_dt = map_device_type(dt);
   if (matter_dt == 0) return chip::kInvalidEndpointId;
+  g_pending_has_metering = has_metering;
   app_bridged_device_t* bd = nullptr;
   esp_err_t err = app_bridge_create_new_device(g_node, g_aggregator_endpoint_id,
                                                matter_dt, &addr, &bd);
+  g_pending_has_metering = false;
   if (err != ESP_OK || !bd) {
     ESP_LOGE(kTag, "app_bridge_create_new_device failed for entity 0x%04x: %d",
              entity_id, err);
@@ -146,8 +182,9 @@ std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity
   }
   const std::uint16_t new_ep =
       esp_matter::endpoint::get_id(bd->get_matter_device()->endpoint);
-  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u",
-           entity_id, chip_id, static_cast<unsigned>(new_ep));
+  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u%s",
+           entity_id, chip_id, static_cast<unsigned>(new_ep),
+           has_metering ? " (with metering)" : "");
   return new_ep;
 }
 
@@ -162,14 +199,26 @@ void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
   while (rd.remaining > 0 && rd.valid) {
     std::uint8_t attr_id = 0;
     if (!hubproto::state_next_attr(rd, attr_id)) break;
-    if (attr_id != kAttrOnOff) break;  // unknown attr — can't skip w/o value_type
-    hubproto::Value v{};
-    if (!hubproto::state_consume(rd, hubproto::ValueType::Bool, v)) break;
-    esp_matter_attr_val_t mv = esp_matter_bool(v.as_bool());
-    attribute::update(ep, OnOff::Id, OnOff::Attributes::OnOff::Id, &mv);
-    ESP_LOGI(kTag, "STATE -> Matter ep=%u OnOff=%u", static_cast<unsigned>(ep),
-             static_cast<unsigned>(v.as_bool() ? 1 : 0));
-    return;
+    if (attr_id == kAttrOnOff) {
+      hubproto::Value v{};
+      if (!hubproto::state_consume(rd, hubproto::ValueType::Bool, v)) break;
+      esp_matter_attr_val_t mv = esp_matter_bool(v.as_bool());
+      attribute::update(ep, OnOff::Id, OnOff::Attributes::OnOff::Id, &mv);
+      ESP_LOGI(kTag, "STATE -> Matter ep=%u OnOff=%u", static_cast<unsigned>(ep),
+               static_cast<unsigned>(v.as_bool() ? 1 : 0));
+    } else if (attr_id == kAttrPowerW) {
+      hubproto::Value v{};
+      if (!hubproto::state_consume(rd, hubproto::ValueType::U16, v)) break;
+      const std::int64_t mw = static_cast<std::int64_t>(v.as_u16()) * 1000;
+      esp_matter_attr_val_t mv{};
+      mv.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT64;
+      mv.val.i64 = mw;
+      attribute::update(ep, kEpmClusterId, kEpmAttrActivePower, &mv);
+      ESP_LOGI(kTag, "STATE -> Matter ep=%u ActivePower=%lld mW",
+               static_cast<unsigned>(ep), static_cast<long long>(mw));
+    } else {
+      break;  // unknown attr — can't skip w/o value_type
+    }
   }
 }
 
@@ -182,7 +231,15 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
     case hubproto::MsgType::Declare: {
       hubproto::DeclareView view{};
       if (!hubproto::decode_declare(payload, len, view)) return;
-      ensure_bridged_endpoint(h.chip_id, view.entity_id, view.device_type);
+      bool has_metering = false;
+      for (std::uint8_t i = 0; i < view.attr_count; ++i) {
+        if (hubproto::declare_attr_at(view, i).attr_id == kAttrPowerW) {
+          has_metering = true;
+          break;
+        }
+      }
+      ensure_bridged_endpoint(h.chip_id, view.entity_id, view.device_type,
+                              has_metering);
       return;
     }
     case hubproto::MsgType::State:
@@ -260,7 +317,6 @@ extern "C" void app_main() {
 
   ESP_LOGI(kTag, "chip 0x%02x up (Matter Bridge); boot_id=%u", kOwnChipId,
            static_cast<unsigned>(g_boot_id));
-  bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);
 
   // --- Matter data model: Root + Aggregator + dynamic bridged endpoints ---
   node::config_t node_config;
@@ -297,6 +353,10 @@ extern "C" void app_main() {
   if (err != ESP_OK) {
     ESP_LOGE(kTag, "app_bridge_initialize: %d", err);
   }
+
+  // Send HELLO after bridge infra is ready — the brain replies with DECLAREs
+  // that need app_bridge to be initialized.
+  bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);
 
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(5000));
