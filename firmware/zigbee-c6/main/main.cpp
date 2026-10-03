@@ -583,30 +583,77 @@ void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint) {
   }
 }
 
+// Callback for boot-time NWK address lookup (esp_zb_zdo_nwk_addr_req).
+// ctx = index into g_switches (pointer-as-integer, same pattern as short_addr).
+// Runs in Zigbee stack context.
+void on_nwk_addr_resp(esp_zb_zdp_status_t status, esp_zb_zdo_nwk_addr_rsp_t* resp,
+                      void* ctx) {
+  const auto idx = static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(ctx));
+  if (idx >= kMaxSwitches) return;
+  ZbSwitch& s = g_switches[idx];
+  if (!s.in_use) return;
+
+  const std::uint16_t nwk_addr = (resp != nullptr) ? resp->nwk_addr : 0xFFFF;
+
+  if (status != ESP_ZB_ZDP_STATUS_SUCCESS) {
+    // Device is currently offline. It will send DEVICE_ANNCE when it comes back;
+    // discover_device() will then update its short_addr and rearm it.
+    ESP_LOGW(kTag,
+             "NWK addr lookup failed for entity 0x%04x (offline?) — will rearm on announce",
+             static_cast<unsigned>(s.entity_id));
+    return;
+  }
+
+  if (s.short_addr != nwk_addr) {
+    ESP_LOGI(kTag, "entity 0x%04x: short addr 0x%04x -> 0x%04x (updated)",
+             static_cast<unsigned>(s.entity_id),
+             static_cast<unsigned>(s.short_addr), static_cast<unsigned>(nwk_addr));
+    s.short_addr = nwk_addr;
+    persist_switches();
+  }
+
+  // Publish cached STATE so the brain's `home` shows the last-known value
+  // immediately while the fresh async read is in flight.
+  if (s.on_off_valid) send_state_on_off(s);
+  if (s.has_metering && s.last_power_w != kPowerUnpublished) {
+    const std::uint16_t cached = s.last_power_w;
+    s.last_power_w = kPowerUnpublished;  // force past the dedup guard
+    send_state_power_w(s, cached);
+  }
+
+  setup_reporting(s);
+  read_device_state(nwk_addr, s.endpoint);
+  ESP_LOGI(kTag, "re-armed entity 0x%04x (device 0x%04x)",
+           static_cast<unsigned>(s.entity_id), static_cast<unsigned>(nwk_addr));
+}
+
 // After a reboot, entities come back from NVS but their reporting/bindings and
 // current state were never re-established this run. Once the network is up,
-// re-bind + reconfigure On/Off reporting and read the current state so the brain
-// gets a STATE for each restored device (runs in stack context via a scheduler
-// alarm). Fresh joins already do this in the discovery path.
+// broadcast a ZDO NWK address request for each restored entity to confirm its
+// current short address (which may have changed), then rearm reporting and read
+// live state. Runs in stack context via a scheduler alarm.
 void rearm_restored(std::uint8_t /*unused*/) {
-  for (auto& s : g_switches) {
+  std::size_t n = 0;
+  for (std::size_t i = 0; i < kMaxSwitches; ++i) {
+    ZbSwitch& s = g_switches[i];
     if (!s.in_use) continue;
-    // Push last-known values from NVS as STATE right away so the brain's `home`
-    // shows the real state instead of "?" until the async read comes back. The
-    // fresh read still runs and will correct anything that changed while we
-    // were down (a physical toggle, a metering shift).
-    if (s.on_off_valid) send_state_on_off(s);
-    if (s.has_metering && s.last_power_w != kPowerUnpublished) {
-      const std::uint16_t cached = s.last_power_w;
-      s.last_power_w = kPowerUnpublished;  // force a resend past the dedup
-      send_state_power_w(s, cached);
-    }
-    setup_reporting(s);
-    read_device_state(s.short_addr, s.endpoint);
-    ESP_LOGI(kTag, "re-armed restored entity 0x%04x (device 0x%04x)",
+    ESP_LOGI(kTag,
+             "boot re-discover entity 0x%04x ieee=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
              static_cast<unsigned>(s.entity_id),
-             static_cast<unsigned>(s.short_addr));
+             s.ieee[7], s.ieee[6], s.ieee[5], s.ieee[4],
+             s.ieee[3], s.ieee[2], s.ieee[1], s.ieee[0]);
+    esp_zb_zdo_nwk_addr_req_param_t req{};
+    std::memcpy(req.ieee_addr_of_interest, s.ieee, sizeof(esp_zb_ieee_addr_t));
+    req.dst_nwk_addr = 0xFFFF;  // broadcast — device may have a different short addr
+    req.request_type = 0;       // single-device response
+    req.start_index = 0;
+    esp_zb_zdo_nwk_addr_req(&req, on_nwk_addr_resp,
+                             reinterpret_cast<void*>(static_cast<std::uintptr_t>(i)));
+    ++n;
   }
+  if (n > 0)
+    ESP_LOGI(kTag, "boot re-discover: issued NWK addr requests for %u entity(ies)",
+             static_cast<unsigned>(n));
 }
 
 // ---- Zigbee discovery (Stage 1/2a) ---------------------------------------
