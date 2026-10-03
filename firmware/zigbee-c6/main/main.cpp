@@ -570,12 +570,14 @@ void setup_reporting(const ZbSwitch& s) {
                      ESP_ZB_ZCL_ATTR_TYPE_S16, 5, 30, &kPowerDelta);
   }
   if (s.has_energy_meter) {
-    // CurrentSummationDelivered: UINT48, no delta configured (avoids UINT48
-    // delta complexity). Report at most once per 5s, at least every hour.
+    // CurrentSummationDelivered: UINT48 (6 bytes LE). SDK requires a non-null
+    // delta pointer for analog types — passing nullptr crashes (memcpy from 0).
+    // delta=1 Wh means report on any 1 Wh change, at most every 5s.
+    static std::uint8_t kEnergyDelta[6] = {1, 0, 0, 0, 0, 0};  // 1 Wh UINT48 LE
     bind_cluster(s, ESP_ZB_ZCL_CLUSTER_ID_METERING);
     configure_report(s, ESP_ZB_ZCL_CLUSTER_ID_METERING,
                      ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
-                     ESP_ZB_ZCL_ATTR_TYPE_U48, 5, 3600, nullptr);
+                     ESP_ZB_ZCL_ATTR_TYPE_U48, 5, 3600, kEnergyDelta);
   }
   const char* suffix = (s.has_metering && s.has_energy_meter) ? " (on_off + power + energy)"
                        : s.has_metering                       ? " (on_off + power)"
@@ -961,11 +963,11 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
           const auto* raw = static_cast<const std::uint8_t*>(v->attribute.data.value);
           switch (v->attribute.id) {
             case ESP_ZB_ZCL_ATTR_METERING_MULTIPLIER_ID: {
+              // ZCL spec: UINT24, 3 bytes LE (not UINT32)
               const std::uint32_t val =
                   static_cast<std::uint32_t>(raw[0]) |
                   (static_cast<std::uint32_t>(raw[1]) << 8) |
-                  (static_cast<std::uint32_t>(raw[2]) << 16) |
-                  (static_cast<std::uint32_t>(raw[3]) << 24);
+                  (static_cast<std::uint32_t>(raw[2]) << 16);
               s->metering_mul = (val == 0) ? 1u : val;
               persist_switches();
               ESP_LOGI(kTag, "entity 0x%04x Metering Multiplier=%lu",
@@ -974,11 +976,11 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
               break;
             }
             case ESP_ZB_ZCL_ATTR_METERING_DIVISOR_ID: {
+              // ZCL spec: UINT24, 3 bytes LE (not UINT32)
               const std::uint32_t val =
                   static_cast<std::uint32_t>(raw[0]) |
                   (static_cast<std::uint32_t>(raw[1]) << 8) |
-                  (static_cast<std::uint32_t>(raw[2]) << 16) |
-                  (static_cast<std::uint32_t>(raw[3]) << 24);
+                  (static_cast<std::uint32_t>(raw[2]) << 16);
               s->metering_div = (val == 0) ? 1u : val;
               persist_switches();
               ESP_LOGI(kTag, "entity 0x%04x Metering Divisor=%lu",
