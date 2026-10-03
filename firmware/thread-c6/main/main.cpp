@@ -354,6 +354,37 @@ extern "C" void app_main() {
     ESP_LOGE(kTag, "app_bridge_initialize: %d", err);
   }
 
+  // Deduplicate bridged endpoints restored from NVS: prior builds had a
+  // BridgedAddr padding bug (memcmp on a struct with a padding byte) that
+  // created a new endpoint on every reflash for the same entity.
+  {
+    std::uint16_t eps[MAX_BRIDGED_DEVICE_COUNT]{};
+    esp_matter_bridge::get_bridged_endpoint_ids(eps);
+    for (int i = 0; i < MAX_BRIDGED_DEVICE_COUNT; ++i) {
+      if (eps[i] == 0) continue;
+      auto* bd_i = static_cast<keystone::BridgedDevice*>(
+          app_bridge_get_device(eps[i]));
+      if (!bd_i) continue;
+      keystone::BridgedAddr addr_i = bd_i->addr();
+      if (addr_i.entity_id == 0) continue;
+      for (int j = i + 1; j < MAX_BRIDGED_DEVICE_COUNT; ++j) {
+        if (eps[j] == 0) continue;
+        auto* bd_j = static_cast<keystone::BridgedDevice*>(
+            app_bridge_get_device(eps[j]));
+        if (!bd_j) continue;
+        keystone::BridgedAddr addr_j = bd_j->addr();
+        if (addr_i.chip_id == addr_j.chip_id &&
+            addr_i.entity_id == addr_j.entity_id) {
+          ESP_LOGW(kTag, "removing duplicate bridged ep %u (same as ep %u "
+                   "for entity 0x%04x)", static_cast<unsigned>(eps[j]),
+                   static_cast<unsigned>(eps[i]), addr_i.entity_id);
+          app_bridge_remove_device(bd_j);
+          eps[j] = 0;
+        }
+      }
+    }
+  }
+
   // Send HELLO after bridge infra is ready — the brain replies with DECLAREs
   // that need app_bridge to be initialized.
   bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);

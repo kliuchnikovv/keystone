@@ -33,7 +33,9 @@ esp_err_t BridgedDevice::set_dev_addr(const void* addr) {
 
 bool BridgedDevice::check_dev_addr(const void* addr) {
   if (addr && m_dev_addr_ctx) {
-    return std::memcmp(m_dev_addr_ctx, addr, sizeof(BridgedAddr)) == 0;
+    const auto* a = static_cast<const BridgedAddr*>(addr);
+    const auto* b = static_cast<const BridgedAddr*>(m_dev_addr_ctx);
+    return a->chip_id == b->chip_id && a->entity_id == b->entity_id;
   }
   return false;
 }
