@@ -60,8 +60,10 @@ SemaphoreHandle_t g_bus_mtx = nullptr;
 // A Zigbee On/Off device maps to device_type=switch, attr on_off(0x01) bool,
 // plus optional metering attributes when the device exposes them.
 constexpr std::uint8_t kOnOffAttr = 0x01;
-constexpr std::uint8_t kPowerWAttr = 0x13;  // instantaneous active power, W
-constexpr std::uint16_t kPowerUnpublished = 0xFFFF;  // sentinel for "no STATE sent yet"
+constexpr std::uint8_t kPowerWAttr = 0x13;   // instantaneous active power, W
+constexpr std::uint8_t kEnergyWhAttr = 0x14; // cumulative energy, Wh (U32)
+constexpr std::uint16_t kPowerUnpublished = 0xFFFF;
+constexpr std::uint32_t kEnergyUnpublished = 0xFFFFFFFF;
 
 // ---- Zigbee constants -----------------------------------------------------
 constexpr std::uint8_t kCoordEndpoint = 1;
@@ -84,6 +86,10 @@ struct ZbSwitch {
   std::uint16_t ac_power_mul;      // ActivePower multiplier (default 1)
   std::uint16_t ac_power_div;      // ActivePower divisor    (default 1)
   std::uint16_t last_power_w;      // last computed power in W (for STATE dedup)
+  bool has_energy_meter;           // device exposes Metering cluster (0x0702)
+  std::uint32_t metering_mul;      // Metering Multiplier (default 1)
+  std::uint32_t metering_div;      // Metering Divisor    (default 1)
+  std::uint32_t last_energy_wh;    // last sent energy in Wh (for STATE dedup)
 };
 
 constexpr std::size_t kMaxSwitches = 32;
@@ -150,10 +156,11 @@ void restore_switches() {
   std::size_t n = 0;
   for (auto& s : g_switches) {
     if (!s.in_use) continue;
-    // Metering divisor/multiplier get re-read at rearm; guard against a divisor
-    // of 0 in old NVS blobs that predate this field.
     if (s.ac_power_div == 0) s.ac_power_div = 1;
     if (s.ac_power_mul == 0) s.ac_power_mul = 1;
+    if (s.metering_div == 0) s.metering_div = 1;
+    if (s.metering_mul == 0) s.metering_mul = 1;
+    if (s.last_energy_wh == 0 && !s.has_energy_meter) s.last_energy_wh = kEnergyUnpublished;
     ++n;
   }
   if (n > 0) ESP_LOGI(kTag, "restored %u switch entity(ies) from NVS",
@@ -199,6 +206,10 @@ ZbSwitch* register_switch(std::uint16_t short_addr, const esp_zb_ieee_addr_t iee
       s.ac_power_mul = 1;
       s.ac_power_div = 1;
       s.last_power_w = kPowerUnpublished;
+      s.has_energy_meter = false;
+      s.metering_mul = 1;
+      s.metering_div = 1;
+      s.last_energy_wh = kEnergyUnpublished;
       persist_switches();
       return &s;
     }
@@ -248,14 +259,17 @@ void send_declarations() {
   std::size_t declared = 0;
   for (auto& s : g_switches) {
     if (!s.in_use) continue;
-    // Always: on_off. Optionally: power_w if the device exposes metering.
-    hubproto::AttrDecl attrs[2] = {
-        {kOnOffAttr, hubproto::ValueType::Bool, rw_report}, {}};
+    // Always: on_off. Optionally: power_w (Electrical Measurement) and/or energy_wh (Metering).
+    hubproto::AttrDecl attrs[3] = {
+        {kOnOffAttr, hubproto::ValueType::Bool, rw_report}, {}, {}};
     std::uint8_t attr_count = 1;
     if (s.has_metering) {
       attrs[attr_count++] = {kPowerWAttr, hubproto::ValueType::U16, r_report};
     }
-    std::uint8_t buf[24];
+    if (s.has_energy_meter) {
+      attrs[attr_count++] = {kEnergyWhAttr, hubproto::ValueType::U32, r_report};
+    }
+    std::uint8_t buf[32];
     auto r = hubproto::encode_declare(s.entity_id, hubproto::DeviceType::Switch,
                                       attrs, attr_count, buf, sizeof(buf));
     if (r.ok) {
@@ -282,6 +296,31 @@ void send_state_power_w(ZbSwitch& s, std::uint16_t watts) {
     ESP_LOGI(kTag, "STATE entity 0x%04x power_w=%u",
              static_cast<unsigned>(s.entity_id), static_cast<unsigned>(watts));
   }
+}
+
+void send_state_energy_wh(ZbSwitch& s, std::uint32_t wh) {
+  if (wh == s.last_energy_wh) return;
+  s.last_energy_wh = wh;
+  const hubproto::StateEntry e[1] = {{kEnergyWhAttr, hubproto::Value::make_u32(wh)}};
+  std::uint8_t buf[16];
+  auto r = hubproto::encode_state(s.entity_id, e, 1, buf, sizeof(buf));
+  if (r.ok) {
+    publish_locked(make_header(hubproto::MsgType::State, s.entity_id, 0), buf, r.len);
+    ESP_LOGI(kTag, "STATE entity 0x%04x energy_wh=%lu",
+             static_cast<unsigned>(s.entity_id), static_cast<unsigned long>(wh));
+  }
+}
+
+// Scale raw CurrentSummationDelivered (uint48, lower 32 bits) by
+// Metering Multiplier/Divisor → Wh. UnitOfMeasure=0 means kWh per ZCL spec,
+// but IKEA uses divisor=1 and raw value already in Wh. We don't read
+// UnitOfMeasure; just apply raw * mul / div and let the brain display it.
+std::uint32_t scale_summation(const ZbSwitch& s, std::uint64_t raw) {
+  if (s.metering_div == 0) return 0;
+  const std::uint64_t scaled =
+      raw * static_cast<std::uint64_t>(s.metering_mul) /
+      static_cast<std::uint64_t>(s.metering_div);
+  return scaled > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<std::uint32_t>(scaled);
 }
 
 // Apply the cached ACPower multiplier/divisor to a raw ActivePower reading
@@ -530,9 +569,20 @@ void setup_reporting(const ZbSwitch& s) {
                      ESP_ZB_ZCL_ATTR_ELECTRICAL_MEASUREMENT_ACTIVE_POWER_ID,
                      ESP_ZB_ZCL_ATTR_TYPE_S16, 5, 30, &kPowerDelta);
   }
+  if (s.has_energy_meter) {
+    // CurrentSummationDelivered: UINT48, no delta configured (avoids UINT48
+    // delta complexity). Report at most once per 5s, at least every hour.
+    bind_cluster(s, ESP_ZB_ZCL_CLUSTER_ID_METERING);
+    configure_report(s, ESP_ZB_ZCL_CLUSTER_ID_METERING,
+                     ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
+                     ESP_ZB_ZCL_ATTR_TYPE_U48, 5, 3600, nullptr);
+  }
+  const char* suffix = (s.has_metering && s.has_energy_meter) ? " (on_off + power + energy)"
+                       : s.has_metering                       ? " (on_off + power)"
+                       : s.has_energy_meter                   ? " (on_off + energy)"
+                                                              : " (on_off)";
   ESP_LOGI(kTag, "bound + configured reporting for entity 0x%04x%s",
-           static_cast<unsigned>(s.entity_id),
-           s.has_metering ? " (on_off + power)" : " (on_off)");
+           static_cast<unsigned>(s.entity_id), suffix);
 }
 
 // Read current On/Off + Basic identity from a joined device's endpoint 1.
@@ -581,6 +631,22 @@ void read_device_state(std::uint16_t short_addr, std::uint8_t endpoint) {
     em.attr_field = em_attrs;
     esp_zb_zcl_read_attr_cmd_req(&em);
   }
+  if (sw != nullptr && sw->has_energy_meter) {
+    static std::uint16_t metering_attrs[3] = {
+        ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID,
+        ESP_ZB_ZCL_ATTR_METERING_MULTIPLIER_ID,
+        ESP_ZB_ZCL_ATTR_METERING_DIVISOR_ID,
+    };
+    esp_zb_zcl_read_attr_cmd_t metering{};
+    metering.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
+    metering.zcl_basic_cmd.dst_endpoint = endpoint;
+    metering.zcl_basic_cmd.src_endpoint = kCoordEndpoint;
+    metering.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    metering.clusterID = ESP_ZB_ZCL_CLUSTER_ID_METERING;
+    metering.attr_number = 3;
+    metering.attr_field = metering_attrs;
+    esp_zb_zcl_read_attr_cmd_req(&metering);
+  }
 }
 
 // Callback for boot-time NWK address lookup (esp_zb_zdo_nwk_addr_req).
@@ -619,6 +685,11 @@ void on_nwk_addr_resp(esp_zb_zdp_status_t status, esp_zb_zdo_nwk_addr_rsp_t* res
     const std::uint16_t cached = s.last_power_w;
     s.last_power_w = kPowerUnpublished;  // force past the dedup guard
     send_state_power_w(s, cached);
+  }
+  if (s.has_energy_meter && s.last_energy_wh != kEnergyUnpublished) {
+    const std::uint32_t cached = s.last_energy_wh;
+    s.last_energy_wh = kEnergyUnpublished;  // force past the dedup guard
+    send_state_energy_wh(s, cached);
   }
 
   setup_reporting(s);
@@ -687,10 +758,12 @@ void log_joined_simple_desc(esp_zb_zdp_status_t status,
   const std::uint16_t* clusters = desc->app_cluster_list;
   bool has_on_off = false;
   bool has_metering = false;
+  bool has_energy = false;
   for (std::uint8_t i = 0; i < desc->app_input_cluster_count; ++i) {
     ESP_LOGI(kTag, "    [in ] cluster 0x%04x", static_cast<unsigned>(clusters[i]));
     if (clusters[i] == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) has_on_off = true;
     if (clusters[i] == ESP_ZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT) has_metering = true;
+    if (clusters[i] == ESP_ZB_ZCL_CLUSTER_ID_METERING) has_energy = true;
   }
   for (std::uint8_t i = 0; i < desc->app_output_cluster_count; ++i) {
     const std::uint16_t c = clusters[desc->app_input_cluster_count + i];
@@ -702,10 +775,14 @@ void log_joined_simple_desc(esp_zb_zdp_status_t status,
     ZbSwitch* s = register_switch(short_addr, g_pending_ieee, desc->endpoint);
     if (s != nullptr) {
       s->has_metering = has_metering;
+      s->has_energy_meter = has_energy;
       persist_switches();
+      const char* suffix2 = (has_metering && has_energy) ? " (power + energy)"
+                            : has_metering                ? " (with power)"
+                            : has_energy                  ? " (with energy)"
+                                                          : "";
       ESP_LOGI(kTag, "mapped device 0x%04x ep%u -> switch entity 0x%04x%s",
-               short_addr, desc->endpoint, static_cast<unsigned>(s->entity_id),
-               has_metering ? " (with metering)" : "");
+               short_addr, desc->endpoint, static_cast<unsigned>(s->entity_id), suffix2);
       setup_reporting(*s);
       read_device_state(short_addr, desc->endpoint);
       send_hello();  // topology changed -> brain re-QUERYs and gets this entity
@@ -773,6 +850,14 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
         const auto* raw = static_cast<const std::uint8_t*>(m->attribute.data.value);
         const std::int16_t rawP = static_cast<std::int16_t>(raw[0] | (raw[1] << 8));
         send_state_power_w(*s, scale_active_power(*s, rawP));
+      } else if (m->cluster == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
+                 m->attribute.id ==
+                     ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID) {
+        // CurrentSummationDelivered: UINT48, 6 bytes LE
+        const auto* raw = static_cast<const std::uint8_t*>(m->attribute.data.value);
+        std::uint64_t summation = 0;
+        for (int b = 5; b >= 0; --b) summation = (summation << 8) | raw[b];
+        send_state_energy_wh(*s, scale_summation(*s, summation));
       }
       break;
     }
@@ -867,6 +952,52 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
               ESP_LOGW(kTag, "unhandled EM attr 0x%04x (data type 0x%02x)",
                        static_cast<unsigned>(v->attribute.id),
                        static_cast<unsigned>(v->attribute.data.type));
+              break;
+          }
+        } else if (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_METERING &&
+                   v->attribute.data.value != nullptr) {
+          ZbSwitch* s = find_by_addr(src, m->info.src_endpoint);
+          if (s == nullptr) continue;
+          const auto* raw = static_cast<const std::uint8_t*>(v->attribute.data.value);
+          switch (v->attribute.id) {
+            case ESP_ZB_ZCL_ATTR_METERING_MULTIPLIER_ID: {
+              const std::uint32_t val =
+                  static_cast<std::uint32_t>(raw[0]) |
+                  (static_cast<std::uint32_t>(raw[1]) << 8) |
+                  (static_cast<std::uint32_t>(raw[2]) << 16) |
+                  (static_cast<std::uint32_t>(raw[3]) << 24);
+              s->metering_mul = (val == 0) ? 1u : val;
+              persist_switches();
+              ESP_LOGI(kTag, "entity 0x%04x Metering Multiplier=%lu",
+                       static_cast<unsigned>(s->entity_id),
+                       static_cast<unsigned long>(s->metering_mul));
+              break;
+            }
+            case ESP_ZB_ZCL_ATTR_METERING_DIVISOR_ID: {
+              const std::uint32_t val =
+                  static_cast<std::uint32_t>(raw[0]) |
+                  (static_cast<std::uint32_t>(raw[1]) << 8) |
+                  (static_cast<std::uint32_t>(raw[2]) << 16) |
+                  (static_cast<std::uint32_t>(raw[3]) << 24);
+              s->metering_div = (val == 0) ? 1u : val;
+              persist_switches();
+              ESP_LOGI(kTag, "entity 0x%04x Metering Divisor=%lu",
+                       static_cast<unsigned>(s->entity_id),
+                       static_cast<unsigned long>(s->metering_div));
+              break;
+            }
+            case ESP_ZB_ZCL_ATTR_METERING_CURRENT_SUMMATION_DELIVERED_ID: {
+              std::uint64_t summation = 0;
+              for (int b = 5; b >= 0; --b) summation = (summation << 8) | raw[b];
+              const std::uint32_t wh = scale_summation(*s, summation);
+              ESP_LOGI(kTag, "entity 0x%04x CurrentSummation raw=%llu -> %lu Wh",
+                       static_cast<unsigned>(s->entity_id),
+                       static_cast<unsigned long long>(summation),
+                       static_cast<unsigned long>(wh));
+              send_state_energy_wh(*s, wh);
+              break;
+            }
+            default:
               break;
           }
         } else {
