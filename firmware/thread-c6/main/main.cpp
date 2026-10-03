@@ -33,6 +33,7 @@
 
 #include "esp_matter.h"
 #include "esp_matter_ota.h"
+#include "integration.h"
 #include "esp_openthread.h"
 #include "esp_openthread_types.h"
 #include <app/server/Server.h>
@@ -63,6 +64,7 @@ constexpr int kUartRxGpio = 4;
 constexpr std::uint8_t kOwnChipId = 0x02;
 constexpr std::uint8_t kAttrOnOff = 0x01;
 constexpr std::uint8_t kAttrPowerW = 0x13;
+constexpr std::uint8_t kAttrEnergyWh = 0x14;
 
 // Matter Electrical Power Measurement cluster (0x0090).
 // ActivePower (0x0008) is nullable int64, milliwatts.
@@ -74,6 +76,7 @@ constexpr std::uint32_t kEpmAttrPowerMode = 0x0000;
 // so the create_bridged_clusters callback can pick it up. Both run on the same
 // task, so no race.
 bool g_pending_has_metering = false;
+bool g_pending_has_energy = false;
 
 core::UartTransport* g_bus = nullptr;
 std::uint8_t g_boot_id = 0;
@@ -150,6 +153,17 @@ esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep,
                  static_cast<unsigned>(esp_matter::endpoint::get_id(ep)));
       }
     }
+    if (g_pending_has_energy) {
+      // EEM cluster: ImportedEnergy + CumulativeEnergy features.
+      // create() internally adds CumulativeEnergyImported attribute (managed).
+      cluster::electrical_energy_measurement::config_t eem_cfg;
+      eem_cfg.feature_flags =
+          cluster::electrical_energy_measurement::feature::imported_energy::get_id() |
+          cluster::electrical_energy_measurement::feature::cumulative_energy::get_id();
+      cluster::electrical_energy_measurement::create(ep, &eem_cfg, CLUSTER_FLAG_SERVER);
+      ESP_LOGI(kTag, "added ElectricalEnergyMeasurement cluster to ep %u",
+               static_cast<unsigned>(esp_matter::endpoint::get_id(ep)));
+    }
     return ESP_OK;
   }
   return ESP_ERR_INVALID_ARG;
@@ -164,17 +178,20 @@ void free_bridged(app_bridged_device_t* d) {
 
 // Look up (or create) the Matter endpoint that mirrors a given hubproto entity.
 std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id,
-                                      hubproto::DeviceType dt, bool has_metering) {
+                                      hubproto::DeviceType dt, bool has_metering,
+                                      bool has_energy) {
   keystone::BridgedAddr addr{chip_id, entity_id};
   std::uint16_t ep = app_bridge_get_endpoint(&addr);
   if (ep != chip::kInvalidEndpointId) return ep;
   const std::uint32_t matter_dt = map_device_type(dt);
   if (matter_dt == 0) return chip::kInvalidEndpointId;
   g_pending_has_metering = has_metering;
+  g_pending_has_energy = has_energy;
   app_bridged_device_t* bd = nullptr;
   esp_err_t err = app_bridge_create_new_device(g_node, g_aggregator_endpoint_id,
                                                matter_dt, &addr, &bd);
   g_pending_has_metering = false;
+  g_pending_has_energy = false;
   if (err != ESP_OK || !bd) {
     ESP_LOGE(kTag, "app_bridge_create_new_device failed for entity 0x%04x: %d",
              entity_id, err);
@@ -182,9 +199,10 @@ std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity
   }
   const std::uint16_t new_ep =
       esp_matter::endpoint::get_id(bd->get_matter_device()->endpoint);
-  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u%s",
+  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u%s%s",
            entity_id, chip_id, static_cast<unsigned>(new_ep),
-           has_metering ? " (with metering)" : "");
+           has_metering ? " (metering)" : "",
+           has_energy ? " (energy)" : "");
   return new_ep;
 }
 
@@ -216,6 +234,20 @@ void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
       attribute::update(ep, kEpmClusterId, kEpmAttrActivePower, &mv);
       ESP_LOGI(kTag, "STATE -> Matter ep=%u ActivePower=%lld mW",
                static_cast<unsigned>(ep), static_cast<long long>(mw));
+    } else if (attr_id == kAttrEnergyWh) {
+      hubproto::Value v{};
+      if (!hubproto::state_consume(rd, hubproto::ValueType::U32, v)) break;
+      const std::uint32_t wh = v.as_u32();
+      using EMS = ElectricalEnergyMeasurement::Structs::EnergyMeasurementStruct::Type;
+      using NEMS = chip::app::DataModel::Nullable<EMS>;
+      EMS imported;
+      imported.energy = static_cast<std::int64_t>(wh) * 1000LL;  // Wh -> mWh
+      NEMS ni, ne;
+      ni.SetNonNull(imported);
+      // ne stays null (no export measurement)
+      ElectricalEnergyMeasurement::NotifyCumulativeEnergyMeasured(ep, ni, ne);
+      ESP_LOGI(kTag, "STATE -> Matter ep=%u CumulativeEnergyImported=%u Wh",
+               static_cast<unsigned>(ep), static_cast<unsigned>(wh));
     } else {
       break;  // unknown attr — can't skip w/o value_type
     }
@@ -232,14 +264,14 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
       hubproto::DeclareView view{};
       if (!hubproto::decode_declare(payload, len, view)) return;
       bool has_metering = false;
+      bool has_energy = false;
       for (std::uint8_t i = 0; i < view.attr_count; ++i) {
-        if (hubproto::declare_attr_at(view, i).attr_id == kAttrPowerW) {
-          has_metering = true;
-          break;
-        }
+        const auto a = hubproto::declare_attr_at(view, i);
+        if (a.attr_id == kAttrPowerW) has_metering = true;
+        if (a.attr_id == kAttrEnergyWh) has_energy = true;
       }
       ensure_bridged_endpoint(h.chip_id, view.entity_id, view.device_type,
-                              has_metering);
+                              has_metering, has_energy);
       return;
     }
     case hubproto::MsgType::State:
