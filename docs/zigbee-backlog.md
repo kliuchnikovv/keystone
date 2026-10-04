@@ -1,13 +1,15 @@
 # Zigbee backlog — what a full Zigbee coordinator needs
 
-State today (branch `phase6-zigbee`, commits `2b362d6`..`e0d91ee`): the C6
-coordinator forms a network on the on-chip 802.15.4 radio, persists joined
-devices to NVS, bridges one class of device — an On/Off switch (verified with
-an IKEA INSPELNING plug) — as a `switch` entity to the brain, and answers
-COMMANDs with honest CmdAcks driven by the device's Default Response.
+State today (`main`, commit `6ad8bd2`): the C6 coordinator forms a network on
+the on-chip 802.15.4 radio, persists joined devices to NVS (boot-time ZDO
+re-discovery for short-address changes), bridges On/Off switch, power metering
+(ActivePower W, CumulativeEnergy Wh), and energy (Metering cluster) as
+`switch` entities with attrs `on_off`, `power_w`, `energy_wh` to the brain,
+and answers COMMANDs with honest CmdAcks. Verified hardware: IKEA INSPELNING
+plug, all three attribute families flowing end-to-end.
 
-That's roughly the smallest working Zigbee slice. What's missing to call this
-a real coordinator, ordered by how much it enables in the home:
+What's missing to call this a real coordinator, ordered by how much it enables
+in the home:
 
 ## 1. More device types (ZCL clusters → SPEC §6.1 device_types)
 
@@ -42,16 +44,16 @@ typical apartment:
   `device_type=button` attr `event(0x60) enum8` (single/double/long press).
   Physical scene switches.
 
-## 2. Metering (the plug's other clusters)
+## 2. Metering (the plug's other clusters) ✅ done (Stage 2c + 2d)
 
-- **Metering** cluster `0x0702` — `CurrentSummationDelivered` (energy in Wh)
-  and its DivisorFormatting.
-- **Electrical Measurement** cluster `0x0b04` — `RMSVoltage`, `RMSCurrent`,
-  `ActivePower`, with `ACPowerDivisor/Multiplier`.
-- Reads divisors once at DECLARE time, caches, applies to reports so the
-  brain sees clean units (Watts, kWh). New SPEC attrs, say `power(0x13) i16`
-  in W and `energy(0x14) u16` in Wh (or a bigger type if we want kWh
-  totals). See also **stateful helpers** in [brain-backlog](brain-backlog.md).
+- ✅ **Electrical Measurement** cluster `0x0b04` — `ActivePower`, scaled by
+  `ACPowerMultiplier/Divisor` → `power_w(0x13) U16` in W (Stage 2c).
+- ✅ **Metering** cluster `0x0702` — `CurrentSummationDelivered`, scaled by
+  `Multiplier/Divisor` (UINT24, LE) → `energy_wh(0x14) U32` in Wh (Stage 2d).
+- Divisors read once at join time, cached per device. Brain sees clean units.
+- See also **stateful helpers** in [brain-backlog](brain-backlog.md).
+- Missing: `RMSVoltage`, `RMSCurrent` — add as `voltage_v` / `current_ma` if
+  a device surfaces them.
 
 ## 3. Multi-endpoint devices
 
@@ -114,10 +116,11 @@ when a device needs one and there's no standard cluster equivalent.
 
 ## Order-of-work suggestion
 
-1. Stage 2c (metering) — closes the story on the one device we already own.
-2. First **sensor** (occupancy or contact) — enables the first real rule.
-3. Multi-endpoint — cheap and unlocks many devices.
-4. `pair` / `unpair` / `identify` — makes the coordinator usable day-to-day.
-5. IAS Zone family — a lot of practical sensors live here.
-6. Level + Color — first real light bulb.
-7. Everything else as devices appear.
+1. ✅ Stage 2c (Electrical Measurement — power_w) — done.
+2. ✅ Stage 2d (Metering cluster — energy_wh) — done.
+3. First **sensor** (occupancy or contact) — enables the first real rule.
+4. Multi-endpoint — cheap and unlocks many devices.
+5. `pair` / `unpair` / `identify` — makes the coordinator usable day-to-day.
+6. IAS Zone family — a lot of practical sensors live here.
+7. Level + Color — first real light bulb.
+8. Everything else as devices appear.

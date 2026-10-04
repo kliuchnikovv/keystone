@@ -1,10 +1,12 @@
 # Matter backlog — what a full Matter bridge needs
 
-State today (branch `phase6-zigbee`, commit `f4b23cf`): the second C6 exists,
-is soldered in, runs a bring-up scaffold (chip 0x02, HELLO + heartbeat only,
-no Thread, no Matter). The brain talks to it over UART2 through the
-ChipRouter. That's the whole Matter-side story so far — roughly 1% of what
-we need.
+State today (`main`, commit `6ad8bd2`): `thread-c6` is a full Matter Bridge
+(aggregator endpoint 0x000E + dynamic bridged endpoints via `app_bridge_*`,
+persisted NVS). Apple Home commissioned it over BLE + Thread; every toggle in
+Home flips the real IKEA plug end-to-end. Bridged endpoints carry On/Off
+Light + EPM (ActivePower W) + EEM (CumulativeEnergyImported Wh) clusters when
+declared. Build path: Docker image `espressif/esp-matter:release-v1.6_idf_v5.5.5`
+(Route 3 below); flash from host esptool.
 
 Matter is a stack of independent pieces. Each has its own effort and its own
 failure mode; put together they let Apple Home / Google Home / Alexa see the
@@ -136,17 +138,32 @@ critical for MVP, worth planning before shipping.
    Trigger: brain re-plays every known DECLARE to chip 0x02 the moment
    `RadioCoordinator` marks Matter ready, so Bridge can build endpoints
    for entities it wasn't around for the first time.
+5a. ✅ **EPM cluster** (0x0090, ActivePower) on bridged endpoints that declare
+    `power_w(0x13)` — `attribute::update` with nullable int64 milliwatts
+    (Stage 2c). Hardware-verified: INSPELNING → STATE(power_w) → Matter
+    ActivePower attribute.
+5b. ✅ **EEM cluster** (0x0091, CumulativeEnergyImported) on bridged endpoints
+    that declare `energy_wh(0x14)` — `NotifyCumulativeEnergyMeasured()` with
+    int64 milliwatt-hours (Stage 2e). Cluster confirmed on hardware; full
+    STATE path triggers after ≥1 Wh accumulation.
 6. Additional Matter device types matching the Zigbee ones as they come
    online. Today only Switch → On/Off Light is wired
    (`map_device_type()` in `thread-c6/main/main.cpp`); adding
    dimmable_light, color_control, occupancy_sensor, etc. is a lookup
    table + a few extra clusters in `create_bridged_clusters()`.
-7. Multi-fabric + polish (removing test-DAC warning, DAC certification,
+7. NVS-restore limitation: EEM/EPM clusters are only added on fresh endpoint
+   creation (`g_pending_has_metering/energy` flags set before
+   `app_bridge_create_new_device()`). NVS-restored endpoints get only
+   `on_off_light` clusters — workaround: erase NVS to force fresh creation.
+   Fix: pass cluster flags through NVS or reconstruct from DECLARE at
+   bridge init.
+8. Multi-fabric + polish (removing test-DAC warning, DAC certification,
    Matter OTA).
 
-Steps 1–5 done on `phase6-zigbee` (branch), hardware-verified end-to-end
-with an IKEA INSPELNING plug: Apple Home talks to a bridged endpoint via
-Thread → C6#2 → UART → brain → Zigbee → plug flips.
+Steps 1–5b done on `main`, hardware-verified end-to-end with an IKEA
+INSPELNING plug: Apple Home talks to a bridged endpoint via Thread → C6#2 →
+UART → brain → Zigbee → plug flips; EPM ActivePower confirmed; EEM cluster
+created and confirmed (energy_wh flow active after ≥1 Wh).
 
 ## Known blockers
 

@@ -1,12 +1,13 @@
 # Brain backlog — what the brain still needs to become a real hub
 
-State today (branch `phase6-zigbee`, last commit `e0d91ee`): the brain (S3)
-runs `EntityRegistry` + `RadioCoordinator` + `StateMachine` +
-`CommandDispatcher` + `RuleEngine` on top of a `ChipRouter` that binds
-UART1↔Zigbee C6 (chip 0x01) and UART2↔Thread C6 (chip 0x02). Interactive
-console over USB-Serial-JTAG: `home`, `get`, `on|off|toggle`, `in`,
-`timers`, `cancel`, `chips`, `log`. Self-heal QUERY plus heartbeats from both
-C6s make the hub come up on its own after a brain reboot.
+State today (`main`, commit `6ad8bd2`): the brain (S3) runs `EntityRegistry` +
+`RadioCoordinator` + `StateMachine` + `CommandDispatcher` + `RuleEngine` on
+top of a `ChipRouter` that binds UART1↔Zigbee C6 (chip 0x01) and
+UART2↔Thread C6 (chip 0x02). Interactive console over USB-Serial-JTAG:
+`home`, `get`, `on|off|toggle`, `in`, `timers`, `cancel`, `chips`, `log`.
+Self-heal QUERY + heartbeats from both C6s make the hub come up on its own.
+Brain cross-forwards DECLARE+STATE+COMMAND between chips (Zigbee↔Matter).
+76/76 host tests.
 
 That's a working single-user, single-radio-family dev hub. To be a real home
 hub, the brain needs the following, ordered roughly by how much home wiring
