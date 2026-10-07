@@ -28,6 +28,8 @@ enum class MsgType : std::uint8_t {
   OtaEnd      = 0x54,  // brain→chip   all bytes sent: verify + activate
   OtaEndAck   = 0x55,  // chip→brain   verify result (chip reboots after Ok)
   OtaAbort    = 0x56,  // either       drop the transfer
+  OtaInfoReq  = 0x57,  // brain→chip   which image are you running? (empty)
+  OtaInfo     = 0x58,  // chip→brain   running slot, confirmed?, last OTA'd slot + sha256
 };
 
 // Reserved identities (SPEC §4.2).

@@ -61,6 +61,7 @@ void OtaReceiver::handle(const hubproto::Header& h, const std::uint8_t* payload,
     case MsgType::OtaChunk: on_chunk(h, payload, len); break;
     case MsgType::OtaEnd:   on_end(h); break;
     case MsgType::OtaAbort: drop(); break;
+    case MsgType::OtaInfoReq: on_info_req(h); break;
     default: break;
   }
 }
@@ -147,8 +148,17 @@ void OtaReceiver::on_end(const hubproto::Header& h) noexcept {
     reply_end_ack(h, s);
     return;
   }
+  sink_.record_image(sha_expected_);
   state_ = State::Finished;
   reply_end_ack(h, OtaStatus::Ok);
+}
+
+void OtaReceiver::on_info_req(const hubproto::Header& h) noexcept {
+  hubproto::OtaInfo info{};
+  if (!sink_.info(info)) return;
+  std::uint8_t buf[hubproto::kOtaInfoSize];
+  const auto r = hubproto::encode_ota_info(info, buf, sizeof(buf));
+  if (r.ok) reply(MsgType::OtaInfo, h, buf, r.len);
 }
 
 }  // namespace core

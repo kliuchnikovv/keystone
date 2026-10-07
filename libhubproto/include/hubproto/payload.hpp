@@ -261,4 +261,23 @@ EncodeResult encode_ota_end_ack(OtaStatus status, std::uint8_t* out,
 bool decode_ota_end_ack(const std::uint8_t* in, std::size_t len,
                         OtaStatus& out) noexcept;
 
+// ---- OTA verification (did the new image stay?) -----------------------------
+//   OTA_INFO_REQ : (empty)
+//   OTA_INFO     : running_slot(u8) flags(u8) last_ota_slot(u8) last_ota_sha256[32]
+// The chip remembers the slot and sha256 of the last image it accepted over OTA.
+// After the reboot the brain asks: if the chip runs that slot, the new image
+// stayed; if not, the bootloader rolled it back. Slot 0xFF = unknown / none.
+inline constexpr std::uint8_t kOtaSlotUnknown = 0xFF;
+inline constexpr std::uint8_t kOtaInfoFlagConfirmed = 0x01;  // running image is not pending verify
+inline constexpr std::size_t  kOtaInfoSize = 3 + kOtaSha256Size;
+
+struct OtaInfo {
+  std::uint8_t running_slot;
+  bool         confirmed;
+  std::uint8_t last_ota_slot;
+  std::uint8_t last_ota_sha256[kOtaSha256Size];
+};
+EncodeResult encode_ota_info(const OtaInfo& in, std::uint8_t* out, std::size_t cap) noexcept;
+bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noexcept;
+
 }  // namespace hubproto

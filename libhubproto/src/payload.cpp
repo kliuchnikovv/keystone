@@ -391,4 +391,23 @@ bool decode_ota_end_ack(const std::uint8_t* in, std::size_t len,
   return true;
 }
 
+EncodeResult encode_ota_info(const OtaInfo& in, std::uint8_t* out,
+                             std::size_t cap) noexcept {
+  if (cap < kOtaInfoSize) return {false, 0};
+  out[0] = in.running_slot;
+  out[1] = in.confirmed ? kOtaInfoFlagConfirmed : 0;
+  out[2] = in.last_ota_slot;
+  for (std::size_t i = 0; i < kOtaSha256Size; ++i) out[3 + i] = in.last_ota_sha256[i];
+  return {true, kOtaInfoSize};
+}
+
+bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noexcept {
+  if (len != kOtaInfoSize) return false;
+  out.running_slot = in[0];
+  out.confirmed = (in[1] & kOtaInfoFlagConfirmed) != 0;
+  out.last_ota_slot = in[2];
+  for (std::size_t i = 0; i < kOtaSha256Size; ++i) out.last_ota_sha256[i] = in[3 + i];
+  return true;
+}
+
 }  // namespace hubproto

@@ -19,6 +19,8 @@ bool is_known_type(std::uint8_t t) noexcept {
     case MsgType::OtaEnd:
     case MsgType::OtaEndAck:
     case MsgType::OtaAbort:
+    case MsgType::OtaInfoReq:
+    case MsgType::OtaInfo:
       return true;
   }
   return false;

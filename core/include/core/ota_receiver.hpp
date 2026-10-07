@@ -37,6 +37,14 @@ class OtaSink {
 
   // Drop a partially written image.
   virtual void abort() noexcept = 0;
+
+  // Called after finish() succeeded, with the image's SHA-256: remember it (and
+  // which slot it went to) so the brain can later ask whether it is the image
+  // that is running (see OtaInfo). Default: nothing to remember.
+  virtual void record_image(const std::uint8_t* /*sha256*/) noexcept {}
+
+  // Describe the running image for OTA_INFO. False = this sink cannot say.
+  virtual bool info(hubproto::OtaInfo& /*out*/) const noexcept { return false; }
 };
 
 class OtaReceiver {
@@ -76,6 +84,7 @@ class OtaReceiver {
   void on_begin(const hubproto::Header& h, const std::uint8_t* p, std::size_t n) noexcept;
   void on_chunk(const hubproto::Header& h, const std::uint8_t* p, std::size_t n) noexcept;
   void on_end(const hubproto::Header& h) noexcept;
+  void on_info_req(const hubproto::Header& h) noexcept;
   void drop() noexcept;  // abort the sink, return to Idle
   void reply(hubproto::MsgType type, const hubproto::Header& req,
              const std::uint8_t* payload, std::size_t len) noexcept;

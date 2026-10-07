@@ -12,8 +12,35 @@ using namespace hubproto;
 TEST_CASE("OTA message types are known and sit at the documented codes") {
   CHECK(static_cast<std::uint8_t>(MsgType::OtaBegin) == 0x50);
   CHECK(static_cast<std::uint8_t>(MsgType::OtaAbort) == 0x56);
-  for (std::uint8_t t = 0x50; t <= 0x56; ++t) CHECK(is_known_type(t));
-  CHECK_FALSE(is_known_type(0x57));
+  for (std::uint8_t t = 0x50; t <= 0x58; ++t) CHECK(is_known_type(t));
+  CHECK_FALSE(is_known_type(0x59));
+}
+
+TEST_CASE("OTA_INFO has the documented layout and round-trips") {
+  OtaInfo in{};
+  in.running_slot = 1;
+  in.confirmed = true;
+  in.last_ota_slot = 0;
+  for (std::size_t i = 0; i < kOtaSha256Size; ++i) in.last_ota_sha256[i] = static_cast<std::uint8_t>(0xA0 + i);
+  std::array<std::uint8_t, 64> buf{};
+  auto r = encode_ota_info(in, buf.data(), buf.size());
+  REQUIRE(r.ok);
+  CHECK(r.len == 35);
+  CHECK(buf[0] == 1);
+  CHECK(buf[1] == 0x01);
+  CHECK(buf[2] == 0);
+  CHECK(buf[3] == 0xA0);
+  OtaInfo out{};
+  REQUIRE(decode_ota_info(buf.data(), r.len, out));
+  CHECK(out.running_slot == 1);
+  CHECK(out.confirmed);
+  CHECK(out.last_ota_slot == 0);
+  CHECK(out.last_ota_sha256[31] == 0xA0 + 31);
+  CHECK_FALSE(decode_ota_info(buf.data(), r.len - 1, out));
+  CHECK_FALSE(encode_ota_info(in, buf.data(), 34).ok);
+  in.confirmed = false;
+  encode_ota_info(in, buf.data(), buf.size());
+  CHECK(buf[1] == 0);
 }
 
 TEST_CASE("OTA_BEGIN has the exact little-endian layout and round-trips") {

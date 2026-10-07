@@ -179,6 +179,9 @@ class Reconciler {
     return d;
   }
 
+  // Mark the table changed from outside (e.g. an operator cleared entries).
+  void note_dirty() noexcept { dirty_ = true; }
+
   // The hub commanded entity/attr (wire to CommandDispatcher::on_send).
   void note_command(std::uint16_t entity, std::uint8_t attr,
                     const hubproto::Value& v) noexcept {
