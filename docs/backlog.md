@@ -322,3 +322,13 @@ Order-of-work suggestion:
    Flutter/Expo codebase — evaluate then, not now.
 4. Push + remote-access relay only when someone actually asks for them.
 
+
+## Firmware update from the phone app
+
+Today `ota <chip> <url> <sha256>` needs a console and an HTTP server for the
+image. Once there is a phone/web app (see above), it could upload the image
+itself: the brain exposes `POST /ota/<chip>` (Content-Length + SHA-256 header),
+streams the body straight into `OtaSender`, and reports progress via
+`GET /ota/status`. Open points: authentication (token at minimum) and image
+signing — images are unsigned today, so an open endpoint would let anyone on
+the LAN reflash the hub. Decide together with the app; see [ota.md](ota.md).
