@@ -30,6 +30,7 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "esp_matter.h"
 #include "esp_matter_ota.h"
@@ -43,8 +44,11 @@
 #include <app_bridged_device.h>
 #include "keystone_bridged_device.hpp"
 
+#include "esp_ota_sink.hpp"
+#include "esp_timer.h"
 #include "esp_uart_link.hpp"
 #include "nvs_boot_id.hpp"
+#include "core/ota_receiver.hpp"
 #include "core/uart_transport.hpp"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
@@ -78,7 +82,27 @@ constexpr std::uint32_t kEpmAttrPowerMode = 0x0000;
 bool g_pending_has_metering = false;
 bool g_pending_has_energy = false;
 
-core::UartTransport* g_bus = nullptr;
+// UartTransport::publish uses one shared encode buffer, but we publish from the
+// Matter task, the main loop and the UART RX task (OTA acks) — serialize it.
+class LockedBus final : public core::Bus {
+ public:
+  explicit LockedBus(core::Bus& inner) : inner_(inner), mu_(xSemaphoreCreateRecursiveMutex()) {}
+  bool publish(const hubproto::Header& h, const std::uint8_t* p,
+               std::size_t n) noexcept override {
+    xSemaphoreTakeRecursive(mu_, portMAX_DELAY);
+    const bool ok = inner_.publish(h, p, n);
+    xSemaphoreGiveRecursive(mu_);
+    return ok;
+  }
+  bool subscribe(MessageFn fn, void* ctx) noexcept override { return inner_.subscribe(fn, ctx); }
+
+ private:
+  core::Bus& inner_;
+  SemaphoreHandle_t mu_;
+};
+
+core::Bus* g_bus = nullptr;
+fw::OtaConfirmGate g_ota_confirm;
 std::uint8_t g_boot_id = 0;
 node_t* g_node = nullptr;
 std::uint16_t g_aggregator_endpoint_id = 0;
@@ -258,6 +282,7 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
                     const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
     case hubproto::MsgType::Query:
+      g_ota_confirm.note_link_ok();  // the brain is talking to us (docs/ota.md)
       g_bus->publish(header(hubproto::MsgType::DeclareEnd), nullptr, 0);
       return;
     case hubproto::MsgType::Declare: {
@@ -339,12 +364,31 @@ extern "C" void app_main() {
     c.port = UART_NUM_1;
     c.tx_gpio = kUartTxGpio;
     c.rx_gpio = kUartRxGpio;
+    c.task_stack = 4096;  // OTA writes flash from this task (docs/ota.md)
     return c;
   }());
   ESP_ERROR_CHECK(link.begin());
-  static core::UartTransport bus(link);
+  static core::UartTransport raw_bus(link);
+  static LockedBus bus(raw_bus);
   g_bus = &bus;
   bus.subscribe(&on_bus_message, nullptr);
+
+  // Firmware updates from the brain (docs/ota.md); polled from the UART RX task.
+  static fw::EspOtaSink ota_sink;
+  static core::OtaReceiver ota_rx(bus, ota_sink, [] {
+    core::OtaReceiver::Config c;
+    c.own_chip_id = kOwnChipId;
+    c.boot_id = g_boot_id;
+    return c;
+  }());
+  static auto ota_tick = [](void* ctx) {
+    auto* rx = static_cast<core::OtaReceiver*>(ctx);
+    const auto uptime_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+    g_ota_confirm.tick(uptime_ms);
+    rx->poll(uptime_ms);
+    if (rx->reboot_pending()) fw::ota_reboot_into_new_image(UART_NUM_1);
+  };
+  link.set_tick(ota_tick, &ota_rx);
   link.start();
 
   ESP_LOGI(kTag, "chip 0x%02x up (Matter Bridge); boot_id=%u", kOwnChipId,

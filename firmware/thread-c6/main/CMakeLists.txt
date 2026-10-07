@@ -7,7 +7,7 @@ idf_component_register(SRCS "main.cpp" "keystone_bridged_device.cpp"
                        PRIV_INCLUDE_DIRS "${ESP_MATTER_PATH}/examples/common/utils"
                                          "${ESP_MATTER_PATH}/components/esp_matter/data_model_provider/clusters/electrical_energy_measurement"
                        REQUIRES esp_matter esp_matter_bridge app_bridge
-                                core esp_uart_link hubproto nvs_boot_id
+                                core esp_uart_link esp_ota_sink hubproto nvs_boot_id
                                 nvs_flash esp_event esp_netif esp_timer openthread)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
