@@ -18,3 +18,9 @@ compile_commands.json
 *.o
 *.a
 .DS_Store
+
+# Local secrets
+firmware/*/main/wifi_secrets.h
+
+# PlatformIO build output
+.pio/
