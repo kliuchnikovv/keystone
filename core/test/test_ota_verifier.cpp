@@ -94,6 +94,18 @@ TEST_CASE("chip runs the old slot after the reboot -> RolledBack") {
   CHECK(r.ver.verdict() == V::RolledBack);
 }
 
+TEST_CASE("a chip with no OTA record cannot be judged -> NoRecord, not RolledBack") {
+  Rig r;
+  r.chip.boot_id = 6;
+  r.chip.info.running_slot = 0;
+  r.chip.info.confirmed = true;
+  r.chip.info.last_ota_slot = hubproto::kOtaSlotUnknown;
+  std::memset(r.chip.info.last_ota_sha256, 0, 32);
+  r.ver.start(kChip, r.sha, 5, 0);
+  r.ver.poll(0);
+  CHECK(r.ver.verdict() == V::NoRecord);
+}
+
 TEST_CASE("a different last-OTA sha is also a rollback") {
   Rig r;
   r.chip.boot_id = 6;

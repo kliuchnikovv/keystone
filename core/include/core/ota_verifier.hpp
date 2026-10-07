@@ -7,6 +7,8 @@
 //   - runs a different slot / the last OTA sha differs   -> RolledBack
 //   - runs the right slot but is still pending verify    -> keep waiting, and
 //                                                          RunningUnconfirmed at the deadline
+//   - the chip has no record of any OTA (old firmware did  -> NoRecord (can't tell)
+//     the update, so nothing was written down)
 //   - no usable answer by the deadline                   -> NoAnswer
 //
 // Answers from before the chip rebooted are ignored (boot_id unchanged), so the
@@ -28,7 +30,8 @@ namespace core {
 class OtaVerifier {
  public:
   enum class Verdict : std::uint8_t {
-    Idle, Waiting, Verified, RunningUnconfirmed, RolledBack, NoAnswer
+    Idle, Waiting, Verified, RunningUnconfirmed, RolledBack, NoAnswer,
+    NoRecord  // the chip has no OTA record: it was updated by firmware that predates OTA_INFO
   };
   struct Config {
     std::uint32_t request_interval_ms = 5000;
@@ -91,6 +94,10 @@ class OtaVerifier {
     hubproto::OtaInfo info{};
     if (!hubproto::decode_ota_info(p, n, info)) return;
 
+    if (info.last_ota_slot == hubproto::kOtaSlotUnknown) {
+      finish(Verdict::NoRecord);
+      return;
+    }
     const bool same_image =
         std::memcmp(info.last_ota_sha256, sha_, hubproto::kOtaSha256Size) == 0;
     const bool running_it = same_image && info.running_slot == info.last_ota_slot &&

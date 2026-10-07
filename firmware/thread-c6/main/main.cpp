@@ -405,6 +405,13 @@ extern "C" void app_main() {
   };
   link.set_tick(ota_tick, &ota_rx);
   link.start();
+#ifdef KS_TEST_CRASH
+  // Test image for the rollback path (docs/ota.md): crash well before the 30 s
+  // confirm grace, so the bootloader must revert to the previous slot.
+  xTaskCreate([](void*) { vTaskDelay(pdMS_TO_TICKS(8000)); abort(); }, "ks_crash", 2048,
+              nullptr, 5, nullptr);
+#endif
+
 
   ESP_LOGI(kTag, "chip 0x%02x up (Matter Bridge); boot_id=%u", kOwnChipId,
            static_cast<unsigned>(g_boot_id));

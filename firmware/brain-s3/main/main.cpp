@@ -57,6 +57,7 @@
 #include "core/chip_monitor.hpp"
 #include "core/command_dispatcher.hpp"
 #include "core/reconciler.hpp"
+#include "core/ota_verifier.hpp"
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
 #include "ota_job.hpp"
@@ -1139,6 +1140,43 @@ int cmd_name(int argc, char** argv) {
 // request queue: OtaJob is self-contained and thread-safe.
 fw::OtaJob* g_ota = nullptr;
 
+// After the chip accepts an image, the verifier asks it (once it has rebooted)
+// whether the NEW image is the one running, or the bootloader rolled it back.
+core::OtaVerifier* g_verifier = nullptr;
+struct VerifyRequest {
+  volatile bool pending = false;
+  std::uint8_t chip = 0;
+  std::uint8_t sha[32] = {};
+} g_verify_req;
+
+void on_ota_accepted(void* /*ctx*/, std::uint8_t chip, const std::uint8_t* sha) {
+  // Runs on the OTA task: just hand the request to the main loop.
+  g_verify_req.chip = chip;
+  std::memcpy(g_verify_req.sha, sha, 32);
+  g_verify_req.pending = true;
+}
+
+const char* verdict_text(core::OtaVerifier::Verdict v) {
+  switch (v) {
+    case core::OtaVerifier::Verdict::Idle: return "";
+    case core::OtaVerifier::Verdict::Waiting: return "verifying: waiting for the chip to come back on the new image...";
+    case core::OtaVerifier::Verdict::Verified: return "VERIFIED: the new image is running and confirmed";
+    case core::OtaVerifier::Verdict::RunningUnconfirmed: return "new image is running but still NOT confirmed (pending verify)";
+    case core::OtaVerifier::Verdict::RolledBack: return "ROLLED BACK: the chip is NOT running the new image (the bootloader reverted it)";
+    case core::OtaVerifier::Verdict::NoRecord: return "cannot verify: the chip has no OTA record (it was updated by older firmware); the next update will be verifiable";
+    case core::OtaVerifier::Verdict::NoAnswer: return "UNKNOWN: the chip did not answer the verification request in time";
+  }
+  return "";
+}
+
+void on_verify_done(void* /*ctx*/, std::uint8_t chip, core::OtaVerifier::Verdict v) {
+  if (v == core::OtaVerifier::Verdict::Verified) {
+    ESP_LOGI(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
+  } else {
+    ESP_LOGE(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
+  }
+}
+
 bool parse_chip(const char* s, std::uint8_t& out) {
   if (std::strcmp(s, "zigbee") == 0 || std::strcmp(s, "1") == 0 || std::strcmp(s, "0x01") == 0) {
     out = kZigbeeChipId;
@@ -1157,6 +1195,9 @@ int cmd_ota(int argc, char** argv) {
     char buf[160];
     g_ota->describe(buf, sizeof(buf));
     printf("%s", buf);
+    if (g_verifier != nullptr && g_verifier->verdict() != core::OtaVerifier::Verdict::Idle) {
+      printf("chip 0x%02x: %s\n", g_verifier->chip(), verdict_text(g_verifier->verdict()));
+    }
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "abort") == 0) {
@@ -1272,6 +1313,10 @@ extern "C" void app_main(void) {
 
   static fw::OtaJob ota_job(bus);
   g_ota = &ota_job;
+  static core::OtaVerifier verifier(bus);
+  g_verifier = &verifier;
+  verifier.on_done(&on_verify_done, nullptr);
+  ota_job.on_accepted(&on_ota_accepted, nullptr);
 
   disp.on_result(&on_cmd_result, nullptr);
   bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
@@ -1317,6 +1362,12 @@ extern "C" void app_main(void) {
     const std::uint32_t t = now_ms(nullptr);
     disp.poll(t);
     monitor.poll(t);
+    if (g_verify_req.pending) {
+      g_verify_req.pending = false;
+      const auto* ci = monitor.info(g_verify_req.chip);
+      verifier.start(g_verify_req.chip, g_verify_req.sha, ci != nullptr ? ci->boot_id : 0, t);
+    }
+    verifier.poll(t);
     {
       xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
       const bool dirty = reconciler.take_dirty();

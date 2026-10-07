@@ -90,3 +90,23 @@ ota abort
 
 The server must send `Content-Length` (no chunked transfer). Serve an image from
 the Pi with `python3 -m http.server`. The console line limit is 384 chars.
+
+## Did the new image stay? (OTA_INFO, `core::OtaVerifier`)
+
+"Image accepted" only means the chip wrote and checked it. A bad image is reverted
+by the bootloader, and the chip then comes back on the old firmware — which looks
+like a successful update. So after every transfer the brain asks the chip which
+image it runs (hubproto 0x57/0x58): running slot, whether it is confirmed, and the
+slot + sha256 of the last image the chip accepted over OTA (kept in NVS namespace
+`ks_ota`). After the chip has rebooted (boot_id changed) the verdict is:
+
+| verdict | meaning |
+|---|---|
+| Verified | runs the slot + sha we sent and it is confirmed |
+| RolledBack | runs something else: the bootloader reverted the new image |
+| RunningUnconfirmed | new image runs but is still pending verify at the 2 min deadline |
+| NoRecord | the chip has no OTA record (the update was done by firmware older than OTA_INFO) — cannot tell |
+| NoAnswer | no usable reply in time |
+
+It shows in the log and in `ota status`. Hardware-verified on zigbee-c6 with a test
+image (`-DKS_TEST_CRASH`, aborts 8 s after boot): `FLAPPING` + `ROLLED BACK`.

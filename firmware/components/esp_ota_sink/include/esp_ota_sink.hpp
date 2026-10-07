@@ -20,6 +20,10 @@ class EspOtaSink final : public core::OtaSink {
   bool write(const std::uint8_t* data, std::size_t len) noexcept override;
   hubproto::OtaStatus finish() noexcept override;
   void abort() noexcept override;
+  // Remember the slot + sha256 of the accepted image in NVS, so OTA_INFO can say
+  // whether the image that is running is the one that was sent.
+  void record_image(const std::uint8_t* sha256) noexcept override;
+  bool info(hubproto::OtaInfo& out) const noexcept override;
 
  private:
   const esp_partition_t* part_ = nullptr;

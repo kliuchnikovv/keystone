@@ -227,6 +227,7 @@ void OtaJob::run() noexcept {
                   static_cast<unsigned>(chip_id_), static_cast<unsigned>(total_),
                   static_cast<unsigned>((now_ms() - started_ms_) / 1000));
     finish(true, m);
+    if (accepted_fn_ != nullptr) accepted_fn_(accepted_ctx_, chip_id_, sha256_);
   } else {
     finish(false, failure_text(failure, status));
   }

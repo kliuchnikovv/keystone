@@ -29,6 +29,12 @@ class OtaJob {
              char* err, std::size_t err_cap) noexcept;
 
   void abort() noexcept;
+
+  // Called from the job task when an image was accepted by the chip: the chip is
+  // about to reboot into it. `sha256` is the image digest.
+  using AcceptedFn = void (*)(void* ctx, std::uint8_t chip_id, const std::uint8_t* sha256);
+  void on_accepted(AcceptedFn fn, void* ctx) noexcept { accepted_fn_ = fn; accepted_ctx_ = ctx; }
+
   bool running() const noexcept { return running_; }
 
   // One human-readable line: idle / progress / last result.
@@ -88,6 +94,8 @@ class OtaJob {
   std::size_t pre_pos_ = 0;
 
   char result_[96] = "no update run since boot";
+  AcceptedFn accepted_fn_ = nullptr;
+  void* accepted_ctx_ = nullptr;
 };
 
 }  // namespace fw
