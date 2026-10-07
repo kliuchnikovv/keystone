@@ -101,6 +101,15 @@ class LockedBus final : public core::Bus {
   SemaphoreHandle_t mu_;
 };
 
+// Last OnOff the brain told us per bridged endpoint (-1 = unknown). Matter calls
+// our PRE_UPDATE callback for OUR OWN attribute::update() too; without this the
+// STATE we mirror comes straight back as a COMMAND, which re-triggers the plug
+// and any rule reacting to it (seen: an on/off ping-pong lasting seconds).
+constexpr int kMaxEpTracked = 32;
+volatile std::int8_t g_last_onoff[kMaxEpTracked] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+
 core::Bus* g_bus = nullptr;
 fw::OtaConfirmGate g_ota_confirm;
 std::uint8_t g_boot_id = 0;
@@ -245,6 +254,7 @@ void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
       hubproto::Value v{};
       if (!hubproto::state_consume(rd, hubproto::ValueType::Bool, v)) break;
       esp_matter_attr_val_t mv = esp_matter_bool(v.as_bool());
+      if (ep < kMaxEpTracked) g_last_onoff[ep] = v.as_bool() ? 1 : 0;
       attribute::update(ep, OnOff::Id, OnOff::Attributes::OnOff::Id, &mv);
       ESP_LOGI(kTag, "STATE -> Matter ep=%u OnOff=%u", static_cast<unsigned>(ep),
                static_cast<unsigned>(v.as_bool() ? 1 : 0));
@@ -317,6 +327,11 @@ esp_err_t attribute_update_cb(callback_type_t type, uint16_t endpoint_id,
   auto* kbd = static_cast<keystone::BridgedDevice*>(bd);
   keystone::BridgedAddr addr = kbd->addr();
   if (addr.entity_id == 0) return ESP_OK;
+  // Echo of our own mirror of the brain's STATE — not a controller's request.
+  if (endpoint_id < kMaxEpTracked &&
+      g_last_onoff[endpoint_id] == (val->val.b ? 1 : 0)) {
+    return ESP_OK;
+  }
   send_command_on_off(addr.entity_id, val->val.b);
   return ESP_OK;
 }
