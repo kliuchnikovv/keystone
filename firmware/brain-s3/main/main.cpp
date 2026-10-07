@@ -912,15 +912,30 @@ int cmd_toggle(int argc, char** argv) {
   return set_onoff(argv[1], !cur_on);
 }
 
+// A timer's action value. "toggle" is stored as U8 2 (a Bool attribute can never
+// hold it): it is resolved against the live state when the timer fires.
+bool is_toggle(const hubproto::Value& v) {
+  return v.type == hubproto::ValueType::U8 && v.raw[0] == 2;
+}
+const char* timer_action_text(const hubproto::Value& v) {
+  return is_toggle(v) ? "toggle" : (v.as_bool() ? "on" : "off");
+}
+
 int cmd_in(int argc, char** argv) {
-  if (argc < 4) { printf("usage: in <sec> <on|off> <id_or_name>\n"); return 1; }
+  if (argc < 4) { printf("usage: in <sec> <on|off|toggle> <id_or_name>\n"); return 1; }
   const long sec = std::strtol(argv[1], nullptr, 10);
+  const bool toggle = std::strcmp(argv[2], "toggle") == 0;
+  if (!toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
+    printf("usage: in <sec> <on|off|toggle> <id_or_name>\n");
+    return 1;
+  }
   const bool on = std::strcmp(argv[2], "on") == 0;
   char buf[128];
   Req r{};
   r.kind = REQ_TIMER;
   r.target = argv[3];
   r.val = on;
+  r.idx = toggle ? 1 : 0;  // REQ_TIMER: 1 = toggle
   r.delay_ms = static_cast<std::uint32_t>(sec) * 1000u;
   r.out = buf;
   r.out_cap = sizeof(buf);
@@ -1172,6 +1187,8 @@ const char* verdict_text(core::OtaVerifier::Verdict v) {
 void on_verify_done(void* /*ctx*/, std::uint8_t chip, core::OtaVerifier::Verdict v) {
   if (v == core::OtaVerifier::Verdict::Verified) {
     ESP_LOGI(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
+  } else if (v == core::OtaVerifier::Verdict::NoRecord) {
+    ESP_LOGW(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
   } else {
     ESP_LOGE(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
   }
@@ -1435,17 +1452,30 @@ extern "C" void app_main(void) {
     // Fire due timers.
     struct TimerFireContext {
       Dispatcher*   disp;
+      Registry*     reg;
       std::uint32_t now_ms;
       bool          fired;
     };
-    TimerFireContext fc{&disp, t, false};
+    TimerFireContext fc{&disp, &reg, t, false};
     timer_table.poll(t, s_time_synced ? static_cast<std::uint64_t>(time(nullptr)) : 0,
                      [](void* ctx, std::size_t slot, std::uint16_t entity_id,
                         std::uint8_t attr_id, const hubproto::Value& val) {
                        auto* c = static_cast<TimerFireContext*>(ctx);
                        c->fired = true;
                        std::uint16_t seq = 0;
-                       c->disp->send(entity_id, attr_id, val, c->now_ms, seq);
+                       hubproto::Value v = val;
+                       if (is_toggle(val)) {
+                         // Resolve against the live state; unknown state -> nothing to flip.
+                         hubproto::Value cur{};
+                         if (!c->reg->get_value(entity_id, attr_id, cur) ||
+                             cur.type != hubproto::ValueType::Bool) {
+                           ESP_LOGW(kTag, "timer #%u: toggle skipped, state of 0x%04x unknown",
+                                    static_cast<unsigned>(slot), static_cast<unsigned>(entity_id));
+                           return;
+                         }
+                         v = hubproto::Value::make_bool(!cur.as_bool());
+                       }
+                       c->disp->send(entity_id, attr_id, v, c->now_ms, seq);
                        ESP_LOGI(kTag, "timer #%u fired: entity 0x%04x attr 0x%02x (seq=%u)",
                                 static_cast<unsigned>(slot), static_cast<unsigned>(entity_id),
                                 static_cast<unsigned>(attr_id), static_cast<unsigned>(seq));
@@ -1551,8 +1581,9 @@ extern "C" void app_main(void) {
           }
           time_t cur_epoch = 0;
           if (s_time_synced) time(&cur_epoch);
-          int slot = timer_table.schedule(id, kOnOffAttr,
-                                          hubproto::Value::make_bool(r->val),
+          const hubproto::Value action =
+              r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
+          int slot = timer_table.schedule(id, kOnOffAttr, action,
                                           r->delay_ms, t,
                                           static_cast<std::uint64_t>(cur_epoch));
           if (slot < 0) {
@@ -1563,12 +1594,12 @@ extern "C" void app_main(void) {
             if (name != nullptr) {
               std::snprintf(r->out, r->out_cap,
                             "timer #%d: 0x%04x (%s) -> %s in %us\n", slot,
-                            static_cast<unsigned>(id), name, r->val ? "on" : "off",
+                            static_cast<unsigned>(id), name, timer_action_text(action),
                             static_cast<unsigned>(r->delay_ms / 1000u));
             } else {
               std::snprintf(r->out, r->out_cap,
                             "timer #%d: 0x%04x -> %s in %us\n", slot,
-                            static_cast<unsigned>(id), r->val ? "on" : "off",
+                            static_cast<unsigned>(id), timer_action_text(action),
                             static_cast<unsigned>(r->delay_ms / 1000u));
             }
           }
@@ -1596,12 +1627,12 @@ extern "C" void app_main(void) {
               off += static_cast<std::size_t>(std::snprintf(
                   r->out + off, r->out_cap - off, "#%u: 0x%04x (%s) -> %s in %us\n",
                   static_cast<unsigned>(i), static_cast<unsigned>(tm->entity_id), name,
-                  tm->value.as_bool() ? "on" : "off", static_cast<unsigned>(left)));
+                  timer_action_text(tm->value), static_cast<unsigned>(left)));
             } else {
               off += static_cast<std::size_t>(std::snprintf(
                   r->out + off, r->out_cap - off, "#%u: 0x%04x -> %s in %us\n",
                   static_cast<unsigned>(i), static_cast<unsigned>(tm->entity_id),
-                  tm->value.as_bool() ? "on" : "off", static_cast<unsigned>(left)));
+                  timer_action_text(tm->value), static_cast<unsigned>(left)));
             }
             if (off >= r->out_cap) break;
           }

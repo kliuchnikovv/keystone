@@ -38,6 +38,12 @@ set(EXTRA_COMPONENT_DIRS
 
 project(keystone_thread_c6)
 
+# KS_TEST_CRASH=1 builds an image that aborts 8 s after boot, to exercise the OTA
+# rollback path (docs/ota.md). Never flash it for real use.
+if(DEFINED ENV{KS_TEST_CRASH})
+    idf_build_set_property(COMPILE_DEFINITIONS "KS_TEST_CRASH" APPEND)
+endif()
+
 idf_build_set_property(CXX_COMPILE_OPTIONS "-std=gnu++17;-Os;-DCHIP_HAVE_CONFIG_H;-Wno-overloaded-virtual" APPEND)
 idf_build_set_property(C_COMPILE_OPTIONS "-Os" APPEND)
 # For RISC-V chips, project_include.cmake sets -Wno-format but leaves the -Wformat-derived flags on.
