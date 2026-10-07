@@ -8,7 +8,8 @@ add_executable(core_tests
   test_state_machine.cpp
   test_command_dispatcher.cpp
   test_rule_engine.cpp
-  test_entity_names.cpp)
+  test_entity_names.cpp
+  test_timer_table.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 
