@@ -84,9 +84,9 @@ The current console is good enough for debug. For daily use it wants:
 
 We started this with `chips`. To finish:
 
-- **Heartbeat watchdog**: mark a chip *silent* if no heartbeat for N ×
-  interval, surface in `chips` with status, fail in-flight COMMANDs to it
-  fast instead of retrying into the void.
+- ~~**Heartbeat watchdog**~~ ✅ done (`core::ChipMonitor`): silent after 20 s, shown
+  in `chips`, COMMANDs to a dead chip fail at once, silent chips are probed with
+  QUERY, reboots and flapping (≥3 in 5 min) are logged.
 - **`self` entity per chip** — device_type=chip, attributes for uptime, free
   heap, boot_id, TX/RX counters, CRC errors. Feeds `chips` and, later,
   Matter diagnostic clusters. (Detail: [../backlog.md](backlog.md#chip-health-timeouts-and-recovery)).

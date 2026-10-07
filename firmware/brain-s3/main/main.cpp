@@ -54,6 +54,7 @@
 #include "core/entity_registry.hpp"
 #include "core/radio_coordinator.hpp"
 #include "core/state_machine.hpp"
+#include "core/chip_monitor.hpp"
 #include "core/command_dispatcher.hpp"
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
@@ -259,6 +260,35 @@ struct ChipStats {
   std::uint32_t last_rx_ms;
 };
 ChipStats g_chip_stats[16] = {};
+
+core::ChipMonitor* g_monitor = nullptr;  // set in app_main
+
+const char* chip_label(std::uint8_t id) {
+  return id == 1 ? "zigbee" : id == 2 ? "thread" : "?";
+}
+
+void on_chip_event(void* /*ctx*/, std::uint8_t chip, core::ChipMonitor::Event ev,
+                   std::uint32_t value) {
+  switch (ev) {
+    case core::ChipMonitor::Event::Lost:
+      ESP_LOGW(kTag, "chip 0x%02x (%s) LOST: silent for %lu s — commands to it fail fast",
+               chip, chip_label(chip), static_cast<unsigned long>(value / 1000));
+      break;
+    case core::ChipMonitor::Event::Resumed:
+      ESP_LOGI(kTag, "chip 0x%02x (%s) is back after %lu s", chip, chip_label(chip),
+               static_cast<unsigned long>(value / 1000));
+      break;
+    case core::ChipMonitor::Event::Rebooted:
+      ESP_LOGI(kTag, "chip 0x%02x (%s) rebooted (reboot #%lu seen)", chip,
+               chip_label(chip), static_cast<unsigned long>(value));
+      break;
+    case core::ChipMonitor::Event::Flapping:
+      ESP_LOGE(kTag, "chip 0x%02x (%s) is FLAPPING: %lu reboots in 5 min "
+               "(crash loop, or the bootloader keeps reverting a bad OTA image)",
+               chip, chip_label(chip), static_cast<unsigned long>(value));
+      break;
+  }
+}
 
 void on_bus_traffic(void* /*ctx*/, const hubproto::Header& h,
                     const std::uint8_t* /*p*/, std::size_t /*len*/) {
@@ -1141,6 +1171,10 @@ extern "C" void app_main(void) {
   static core::RadioCoordinator<Registry> coord(bus, reg);
   static core::StateMachine<Registry> sm(bus, reg);
   static Dispatcher disp(bus, reg);
+  static core::ChipMonitor monitor(bus, &now_ms, nullptr);
+  g_monitor = &monitor;
+  monitor.on_event(&on_chip_event, nullptr);
+  disp.set_alive_filter(&core::ChipMonitor::alive_thunk, &monitor);
   static Rules rules(disp, &now_ms, nullptr);
 
   static fw::OtaJob ota_job(bus);
@@ -1180,6 +1214,7 @@ extern "C" void app_main(void) {
   while (true) {
     const std::uint32_t t = now_ms(nullptr);
     disp.poll(t);
+    monitor.poll(t);
 
     if (s_clock_just_synced) {
       s_clock_just_synced = false;
@@ -1425,21 +1460,26 @@ extern "C" void app_main(void) {
         }
         case REQ_CHIPS: {
           const std::uint32_t now = now_ms(nullptr);
-          const char* labels[] = {"?", "zigbee", "thread"};
           std::size_t off = 0;
           for (std::uint8_t id = 1; id <= 15 && off < r->out_cap; ++id) {
-            const auto& cs = g_chip_stats[id];
+            const auto* ci = g_monitor->info(id);
             const bool known = coord.chip_known(id);
-            if (!known && cs.rx_frames == 0) continue;
-            const char* lbl = id < (sizeof(labels)/sizeof(labels[0])) ? labels[id] : "?";
-            const std::uint32_t age = cs.last_rx_ms ? (now - cs.last_rx_ms) : 0;
+            if (ci == nullptr && !known) continue;
+            const char* status = ci != nullptr && ci->silent ? "SILENT"
+                                 : coord.chip_ready(id)      ? "ready"
+                                 : known                     ? "seen (not ready)"
+                                                             : "silent";
+            const std::uint32_t age = ci != nullptr ? (now - ci->last_rx_ms) : 0;
             off += static_cast<std::size_t>(std::snprintf(
                 r->out + off, r->out_cap - off,
-                "chip 0x%02x (%s): %s, %lu frames, last rx %lus ago\n",
-                id, lbl,
-                coord.chip_ready(id) ? "ready" : (known ? "seen (not ready)" : "silent"),
-                static_cast<unsigned long>(cs.rx_frames),
-                static_cast<unsigned long>(age / 1000)));
+                "chip 0x%02x (%s): %s, %lu frames, last rx %lus ago, boot_id %u, "
+                "%lu reboot(s) seen (%u in 5 min)\n",
+                id, chip_label(id), status,
+                static_cast<unsigned long>(ci != nullptr ? ci->rx_frames : 0),
+                static_cast<unsigned long>(age / 1000),
+                static_cast<unsigned>(ci != nullptr ? ci->boot_id : 0),
+                static_cast<unsigned long>(ci != nullptr ? ci->reboots : 0),
+                g_monitor->recent_reboots(id, now)));
           }
           if (off == 0) std::snprintf(r->out, r->out_cap, "no chips seen yet\n");
           break;
