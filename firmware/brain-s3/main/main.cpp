@@ -56,6 +56,7 @@
 #include "core/state_machine.hpp"
 #include "core/chip_monitor.hpp"
 #include "core/command_dispatcher.hpp"
+#include "core/reconciler.hpp"
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
 #include "ota_job.hpp"
@@ -177,6 +178,7 @@ constexpr std::uint8_t  kOnOffAttr = 0x01;
 using Registry = core::EntityRegistry<>;
 using Dispatcher = core::CommandDispatcher<Registry>;
 using Rules = core::RuleEngine<Dispatcher>;
+using Reconciler = core::Reconciler<Dispatcher>;
 
 // Multi-UART glue: presents itself to the core as a single core::Bus, routes
 // outgoing publish() to the underlying UartTransport whose bound chip_id
@@ -309,6 +311,45 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
            static_cast<unsigned>(attr_id), static_cast<int>(status));
 }
 
+// Desired state (docs/backlog.md § Recovery). Reconciler is touched from the main
+// loop and from the UART RX tasks, so every entry point takes this mutex.
+const char* attr_name(std::uint8_t id);
+void fmt_value(char* buf, std::size_t cap, hubproto::ValueType vt, const hubproto::Value& v);
+
+Reconciler* g_rec = nullptr;
+Registry* g_reg = nullptr;
+SemaphoreHandle_t g_rec_mu = nullptr;
+
+void rec_note_command(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
+                      const hubproto::Value& v) {
+  xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+  g_rec->note_command(entity, attr, v);
+  xSemaphoreGiveRecursive(g_rec_mu);
+}
+
+void rec_on_report(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
+                   const hubproto::Value& v, bool had, bool changed) {
+  xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+  g_rec->on_report(entity, attr, v, had, changed);
+  xSemaphoreGiveRecursive(g_rec_mu);
+}
+
+void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
+                  std::uint8_t attr, const hubproto::Value& actual,
+                  const hubproto::Value& desired) {
+  char a[24], d[24];
+  fmt_value(a, sizeof(a), actual.type, actual);
+  fmt_value(d, sizeof(d), desired.type, desired);
+  const char* an = attr_name(attr);
+  if (kind == Reconciler::Kind::Corrected) {
+    ESP_LOGW(kTag, "reconcile: 0x%04x %s is %s but the hub last set %s -> corrective COMMAND sent",
+             static_cast<unsigned>(entity), an ? an : "attr", a, d);
+  } else {
+    ESP_LOGI(kTag, "reconcile: 0x%04x %s changed to %s outside the hub (was %s) -> adopted",
+             static_cast<unsigned>(entity), an ? an : "attr", a, d);
+  }
+}
+
 // Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
 // co-processor (chip 0x02) exposes endpoints that mirror registry entities
 // living on the Zigbee coordinator (chip 0x01). We re-emit:
@@ -342,6 +383,13 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     bus->publish(q, nullptr, 0);
     ESP_LOGI(kTag, "kick Zigbee QUERY because Matter came up");
   } else if (h.type == hubproto::MsgType::Command && h.chip_id == kThreadChipId) {
+    // A Matter controller (Apple Home...) asked for this: the hub's intent.
+    hubproto::ValueType vt{};
+    hubproto::Command cmd{};
+    if (len >= 3 && g_reg != nullptr && g_reg->value_type_of(h.entity_id, p[2], vt) &&
+        hubproto::decode_command(p, len, vt, cmd)) {
+      rec_note_command(nullptr, cmd.entity_id, cmd.attr_id, cmd.value);
+    }
     hubproto::Header fwd = h;
     fwd.chip_id = kZigbeeChipId;
     bus->publish(fwd, p, len);
@@ -357,7 +405,7 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
-               REQ_RULE };
+               REQ_RULE, REQ_DESIRED };
 
 struct Req {
   ReqKind kind;
@@ -526,6 +574,38 @@ void restore_timers(core::TimerTable<8>& timers, std::uint32_t now_ms, std::uint
         ESP_LOGI(kTag, "restored %u timer(s) from NVS",
                  static_cast<unsigned>(timers.active_count()));
       }
+    }
+  }
+  nvs_close(h);
+}
+
+void persist_desired() {
+  nvs_handle_t h;
+  std::uint8_t buf[core::DesiredState<32>::kHeaderSize + 32 * core::DesiredState<32>::kEntryWireSize];
+  xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+  const std::size_t n = g_rec->desired().count() == 0 ? 0 : g_rec->desired().save(buf, sizeof(buf));
+  xSemaphoreGiveRecursive(g_rec_mu);
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  if (n > 0) {
+    nvs_set_blob(h, "desired", buf, n);
+  } else {
+    nvs_erase_key(h, "desired");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_desired(Reconciler& rec) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::uint8_t buf[core::DesiredState<32>::kHeaderSize + 32 * core::DesiredState<32>::kEntryWireSize];
+  std::size_t sz = sizeof(buf);
+  if (nvs_get_blob(h, "desired", buf, &sz) == ESP_OK) {
+    if (rec.desired().load(buf, sz, now_ms(nullptr))) {
+      ESP_LOGI(kTag, "restored %u desired value(s) from NVS",
+               static_cast<unsigned>(rec.desired().count()));
+    } else {
+      ESP_LOGW(kTag, "stored desired state is corrupt — ignored");
     }
   }
   nvs_close(h);
@@ -881,6 +961,18 @@ int cmd_rule(int argc, char** argv) {
   return 0;
 }
 
+int cmd_desired(int argc, char** argv) {
+  static char buf[1024];
+  Req r{};
+  r.kind = REQ_DESIRED;
+  r.argc = argc;
+  r.argv = argv;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
 int cmd_pair(int argc, char** argv) {
   const long sec = argc > 1 ? std::strtol(argv[1], nullptr, 10) : 180;
   char buf[64];
@@ -1127,6 +1219,7 @@ void start_console() {
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
   reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | status | abort - update a C6 over the link", &cmd_ota);
+  reg_cmd("desired", "desired [clear <id_or_name>|all] - what the hub last asked each attribute to be", &cmd_desired);
   reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
 
@@ -1186,6 +1279,15 @@ extern "C" void app_main(void) {
 
   restore_rules(rules);  // user rules from NVS (`rule add ...`)
 
+  g_rec_mu = xSemaphoreCreateRecursiveMutex();
+  g_reg = &reg;
+  static Reconciler reconciler(disp, &now_ms, nullptr);
+  g_rec = &reconciler;
+  restore_desired(reconciler);
+  reconciler.on_event(&on_reconcile, nullptr);
+  disp.on_send(&rec_note_command, nullptr);
+  sm.on_report(&rec_on_report, nullptr);
+
   sm.on_change(&Rules::on_state_change, &rules);
   sm.on_change(&on_state_change, nullptr);
 
@@ -1215,6 +1317,12 @@ extern "C" void app_main(void) {
     const std::uint32_t t = now_ms(nullptr);
     disp.poll(t);
     monitor.poll(t);
+    {
+      xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+      const bool dirty = reconciler.take_dirty();
+      xSemaphoreGiveRecursive(g_rec_mu);
+      if (dirty) persist_desired();
+    }
 
     if (s_clock_just_synced) {
       s_clock_just_synced = false;
@@ -1620,6 +1728,38 @@ extern "C" void app_main(void) {
         case REQ_RULE:
           handle_rule(r, reg, rules);
           break;
+        case REQ_DESIRED: {
+          xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+          auto& des = reconciler.desired();
+          if (r->argc >= 2 && std::strcmp(r->argv[1], "clear") == 0 && r->argc == 3) {
+            std::uint16_t id = 0;
+            if (std::strcmp(r->argv[2], "all") == 0) {
+              des.clear_all();
+              std::snprintf(r->out, r->out_cap, "all desired values cleared\n");
+            } else if (!reg.resolve(r->argv[2], id)) {
+              std::snprintf(r->out, r->out_cap, "%s: not found\n", r->argv[2]);
+            } else {
+              const std::size_t n = des.clear_entity(id);
+              std::snprintf(r->out, r->out_cap, "0x%04x: %u desired value(s) cleared\n",
+                            static_cast<unsigned>(id), static_cast<unsigned>(n));
+            }
+            reconciler.note_dirty();
+          } else {
+            std::size_t off = static_cast<std::size_t>(std::snprintf(
+                r->out, r->out_cap, "%u desired value(s):\n",
+                static_cast<unsigned>(des.count())));
+            for (std::size_t i = 0; i < des.count() && off < r->out_cap; ++i) {
+              const auto* e = des.at(i);
+              char t[48], v[24];
+              fmt_target(t, sizeof(t), reg, e->entity_id, e->attr_id);
+              fmt_value(v, sizeof(v), e->value.type, e->value);
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "  %s = %s\n", t, v));
+            }
+          }
+          xSemaphoreGiveRecursive(g_rec_mu);
+          break;
+        }
         case REQ_NAME_SET: {
           std::uint16_t id = 0;
           if (!reg.resolve(r->target, id)) {

@@ -109,6 +109,10 @@ it*. We never fabricate a desired from an actual — otherwise a physical human
 toggle would be silently reverted, which is the classic worst behavior of
 smart-home hubs.
 
+> **Status:** desired state + reconciler are implemented (see CLAUDE.md § Status,
+> "Desired-state reconciliation"). Still open from this section: per-action
+> `after_deadline` policy for timers and gap/stale markers.
+
 Depends on: persistent timer table (small); a `desired` field on AttrState
 (small); a reconciler tick in the brain loop (small); Phase 7 recorder for the
 gap-annotation part (later).
