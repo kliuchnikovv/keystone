@@ -286,4 +286,109 @@ bool state_consume(StateReader& reader, ValueType vt, Value& out) noexcept {
   return true;
 }
 
+// ---- OTA ------------------------------------------------------------------
+
+namespace {
+
+void put32(std::uint8_t* p, std::uint32_t v) noexcept {
+  p[0] = static_cast<std::uint8_t>(v & 0xFF);
+  p[1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+  p[2] = static_cast<std::uint8_t>((v >> 16) & 0xFF);
+  p[3] = static_cast<std::uint8_t>((v >> 24) & 0xFF);
+}
+
+std::uint32_t get32(const std::uint8_t* p) noexcept {
+  return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
+         (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
+}
+
+bool is_known_ota_status(std::uint8_t s) noexcept {
+  return s <= static_cast<std::uint8_t>(OtaStatus::Unsupported);
+}
+
+}  // namespace
+
+EncodeResult encode_ota_begin(const OtaBegin& in, std::uint8_t* out,
+                              std::size_t cap) noexcept {
+  constexpr std::size_t need = 4 + kOtaSha256Size;
+  if (cap < need) return {false, 0};
+  put32(out, in.total_size);
+  for (std::size_t i = 0; i < kOtaSha256Size; ++i) out[4 + i] = in.sha256[i];
+  return {true, need};
+}
+
+bool decode_ota_begin(const std::uint8_t* in, std::size_t len, OtaBegin& out) noexcept {
+  if (len != 4 + kOtaSha256Size) return false;
+  out.total_size = get32(in);
+  for (std::size_t i = 0; i < kOtaSha256Size; ++i) out.sha256[i] = in[4 + i];
+  return true;
+}
+
+EncodeResult encode_ota_begin_ack(const OtaBeginAck& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept {
+  if (cap < 3) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(in.status);
+  out[1] = static_cast<std::uint8_t>(in.chunk_size & 0xFF);
+  out[2] = static_cast<std::uint8_t>((in.chunk_size >> 8) & 0xFF);
+  return {true, 3};
+}
+
+bool decode_ota_begin_ack(const std::uint8_t* in, std::size_t len,
+                          OtaBeginAck& out) noexcept {
+  if (len != 3 || !is_known_ota_status(in[0])) return false;
+  out.status = static_cast<OtaStatus>(in[0]);
+  out.chunk_size = static_cast<std::uint16_t>(in[1] | (in[2] << 8));
+  return true;
+}
+
+EncodeResult encode_ota_chunk(std::uint32_t offset, const std::uint8_t* data,
+                              std::size_t data_len, std::uint8_t* out,
+                              std::size_t cap) noexcept {
+  if (data_len == 0 || data_len > kOtaMaxChunk) return {false, 0};
+  const std::size_t need = kOtaChunkHeader + data_len;
+  if (cap < need) return {false, 0};
+  put32(out, offset);
+  for (std::size_t i = 0; i < data_len; ++i) out[kOtaChunkHeader + i] = data[i];
+  return {true, need};
+}
+
+bool decode_ota_chunk(const std::uint8_t* in, std::size_t len,
+                      OtaChunkView& out) noexcept {
+  if (len <= kOtaChunkHeader || len - kOtaChunkHeader > kOtaMaxChunk) return false;
+  out.offset = get32(in);
+  out.data = in + kOtaChunkHeader;
+  out.len = len - kOtaChunkHeader;
+  return true;
+}
+
+EncodeResult encode_ota_chunk_ack(const OtaChunkAck& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept {
+  if (cap < 5) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(in.status);
+  put32(out + 1, in.next_offset);
+  return {true, 5};
+}
+
+bool decode_ota_chunk_ack(const std::uint8_t* in, std::size_t len,
+                          OtaChunkAck& out) noexcept {
+  if (len != 5 || !is_known_ota_status(in[0])) return false;
+  out.status = static_cast<OtaStatus>(in[0]);
+  out.next_offset = get32(in + 1);
+  return true;
+}
+
+EncodeResult encode_ota_end_ack(OtaStatus status, std::uint8_t* out,
+                                std::size_t cap) noexcept {
+  if (cap < 1) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(status);
+  return {true, 1};
+}
+
+bool decode_ota_end_ack(const std::uint8_t* in, std::size_t len,
+                        OtaStatus& out) noexcept {
+  if (len != 1 || !is_known_ota_status(in[0])) return false;
+  out = static_cast<OtaStatus>(in[0]);
+  return true;
+}
+
 }  // namespace hubproto

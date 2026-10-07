@@ -185,4 +185,80 @@ bool state_next_attr(StateReader& reader, std::uint8_t& attr_id) noexcept;
 // Returns false (and clears reader.valid) on a bad type or truncation.
 bool state_consume(StateReader& reader, ValueType vt, Value& out) noexcept;
 
+// ---- OTA (firmware update of a co-processor) ------------------------------
+// Stop-and-wait transfer driven by the brain. The header `seq` of each request
+// is echoed in its ack; `entity_id` is 0 (the message is about the chip).
+//
+//   OTA_BEGIN                        : total_size(u32) sha256[32]
+//   OTA_BEGIN_ACK                    : status(u8) chunk_size(u16)
+//   OTA_CHUNK                        : offset(u32) data[1..kOtaMaxChunk]
+//   OTA_CHUNK_ACK                    : status(u8) next_offset(u32)
+//   OTA_END                          : (empty)
+//   OTA_END_ACK                      : status(u8)
+//   OTA_ABORT                        : (empty)
+//
+// The chip writes a chunk only at its `next_offset`. A chunk it already has (the
+// brain resent it because the ack was lost) is confirmed with Ok and not written
+// again; a chunk that skips ahead gets BadOffset + the offset the chip expects.
+// A resent END after the image was accepted is confirmed with Ok as well.
+
+inline constexpr std::size_t kOtaSha256Size = 32;
+inline constexpr std::size_t kOtaChunkHeader = 4;                 // offset(u32)
+inline constexpr std::size_t kOtaMaxChunk = 240;                  // data bytes
+static_assert(kOtaChunkHeader + kOtaMaxChunk <= 255, "must fit one frame (kMaxPayloadSize)");
+
+enum class OtaStatus : std::uint8_t {
+  Ok         = 0,
+  Busy       = 1,  // another transfer is in progress
+  TooLarge   = 2,  // image does not fit the inactive slot
+  BadState   = 3,  // message not valid in the current state
+  BadOffset  = 4,  // chunk is not at next_offset (next_offset tells where)
+  WriteFail  = 5,  // flash write failed
+  VerifyFail = 6,  // size / sha256 / image validation failed
+  Unsupported = 7, // this chip cannot be updated over the link
+};
+
+struct OtaBegin {
+  std::uint32_t total_size;
+  std::uint8_t  sha256[kOtaSha256Size];
+};
+EncodeResult encode_ota_begin(const OtaBegin& in, std::uint8_t* out,
+                              std::size_t cap) noexcept;
+bool decode_ota_begin(const std::uint8_t* in, std::size_t len, OtaBegin& out) noexcept;
+
+struct OtaBeginAck {
+  OtaStatus     status;
+  std::uint16_t chunk_size;  // data bytes per chunk the chip wants (<= kOtaMaxChunk)
+};
+EncodeResult encode_ota_begin_ack(const OtaBeginAck& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept;
+bool decode_ota_begin_ack(const std::uint8_t* in, std::size_t len,
+                          OtaBeginAck& out) noexcept;
+
+// Zero-copy view of a decoded OTA_CHUNK; `data` points into the input buffer.
+struct OtaChunkView {
+  std::uint32_t       offset;
+  const std::uint8_t* data;
+  std::size_t         len;
+};
+EncodeResult encode_ota_chunk(std::uint32_t offset, const std::uint8_t* data,
+                              std::size_t data_len, std::uint8_t* out,
+                              std::size_t cap) noexcept;
+bool decode_ota_chunk(const std::uint8_t* in, std::size_t len,
+                      OtaChunkView& out) noexcept;
+
+struct OtaChunkAck {
+  OtaStatus     status;
+  std::uint32_t next_offset;  // the byte the chip wants next
+};
+EncodeResult encode_ota_chunk_ack(const OtaChunkAck& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept;
+bool decode_ota_chunk_ack(const std::uint8_t* in, std::size_t len,
+                          OtaChunkAck& out) noexcept;
+
+EncodeResult encode_ota_end_ack(OtaStatus status, std::uint8_t* out,
+                                std::size_t cap) noexcept;
+bool decode_ota_end_ack(const std::uint8_t* in, std::size_t len,
+                        OtaStatus& out) noexcept;
+
 }  // namespace hubproto

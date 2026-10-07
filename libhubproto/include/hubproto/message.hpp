@@ -20,6 +20,14 @@ enum class MsgType : std::uint8_t {
   CmdAck     = 0x21,
   Query      = 0x30,
   Heartbeat  = 0x40,
+  // Firmware update of a co-processor (see payload.hpp, OTA section).
+  OtaBegin    = 0x50,  // brain→chip   size + sha256 of the image
+  OtaBeginAck = 0x51,  // chip→brain   accepted / refused, chunk size
+  OtaChunk    = 0x52,  // brain→chip   offset + data
+  OtaChunkAck = 0x53,  // chip→brain   next expected offset
+  OtaEnd      = 0x54,  // brain→chip   all bytes sent: verify + activate
+  OtaEndAck   = 0x55,  // chip→brain   verify result (chip reboots after Ok)
+  OtaAbort    = 0x56,  // either       drop the transfer
 };
 
 // Reserved identities (SPEC §4.2).
