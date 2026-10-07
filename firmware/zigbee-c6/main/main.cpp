@@ -36,8 +36,10 @@
 
 #include "esp_zigbee_core.h"
 
+#include "esp_ota_sink.hpp"
 #include "esp_uart_link.hpp"
 #include "nvs_boot_id.hpp"
+#include "core/ota_receiver.hpp"
 #include "core/uart_transport.hpp"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
@@ -483,6 +485,8 @@ void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
                      const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
     case hubproto::MsgType::Query:
+      // The brain is talking to us: a freshly OTA'd image has proven itself.
+      fw::ota_confirm_running_image();
       send_declarations();
       // Also re-read current state from each device so the brain gets a fresh
       // STATE for every entity after (re-)declaration, not just at first join.
@@ -1162,12 +1166,29 @@ extern "C" void app_main(void) {
     c.port = UART_NUM_1;
     c.tx_gpio = kUartTxGpio;
     c.rx_gpio = kUartRxGpio;
+    c.task_stack = 4096;  // OTA writes flash from this task (docs/ota.md)
     return c;
   }());
   ESP_ERROR_CHECK(link.begin());
   static core::UartTransport bus(link);
   g_bus = &bus;
   bus.subscribe(&on_uart_message, nullptr);
+
+  // Firmware updates from the brain (docs/ota.md). The receiver polls from the
+  // UART RX task (link tick) so it is serialized with inbound messages.
+  static fw::EspOtaSink ota_sink;
+  static core::OtaReceiver ota_rx(bus, ota_sink, [] {
+    core::OtaReceiver::Config c;
+    c.own_chip_id = kOwnChipId;
+    c.boot_id = g_boot_id;
+    return c;
+  }());
+  static auto ota_tick = [](void* ctx) {
+    auto* rx = static_cast<core::OtaReceiver*>(ctx);
+    rx->poll(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+    if (rx->reboot_pending()) fw::ota_reboot_into_new_image(UART_NUM_1);
+  };
+  link.set_tick(ota_tick, &ota_rx);
   link.start();
   ESP_LOGI(kTag, "chip 0x%02x up; boot_id=%u", kOwnChipId,
            static_cast<unsigned>(g_boot_id));

@@ -41,6 +41,15 @@ class EspUartLink final : public core::ByteLink {
   bool write(const std::uint8_t* data, std::size_t len) noexcept override;
   void set_receiver(ReceiveFn fn, void* ctx) noexcept override;
 
+  // Optional periodic hook, run in the RX task at least every ~20 ms (once per
+  // read timeout). Because it shares the RX task with inbound delivery, work done
+  // here is serialized with message handling and needs no locking against it.
+  using TickFn = void (*)(void* ctx);
+  void set_tick(TickFn fn, void* ctx) noexcept {
+    tick_ = fn;
+    tick_ctx_ = ctx;
+  }
+
  private:
   static void rx_task(void* arg);
   void run_rx();
@@ -48,6 +57,8 @@ class EspUartLink final : public core::ByteLink {
   Config cfg_;
   ReceiveFn rx_ = nullptr;
   void* rx_ctx_ = nullptr;
+  TickFn tick_ = nullptr;
+  void* tick_ctx_ = nullptr;
 };
 
 }  // namespace fw

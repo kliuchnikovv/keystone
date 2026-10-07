@@ -1,8 +1,17 @@
 # Partition table for the Zigbee coordinator (ESP32-C6, 4 MB flash).
 # zb_storage/zb_fct are required by esp-zigbee-lib (network + factory data).
-# Name,       Type, SubType, Offset,   Size, Flags
+#
+# Two OTA slots so the brain can update this chip over the UART link (see
+# docs/ota.md). zb_storage and zb_fct deliberately stay at the offsets they had
+# with the old single-`factory` layout (0x140000 / 0x144000): they hold the
+# joined Zigbee network, and moving them would force every device to re-pair.
+# otadata + ota_0 reuse the old `factory` region (0x10000..0x140000).
+#
+# Name,       Type, SubType, Offset,   Size,     Flags
 nvs,          data, nvs,     0x9000,   0x6000,
 phy_init,     data, phy,     0xf000,   0x1000,
-factory,      app,  factory, 0x10000,  1216K,
-zb_storage,   data, fat,     ,         16K,
-zb_fct,       data, fat,     ,         1K,
+otadata,      data, ota,     0x10000,  0x2000,
+ota_0,        app,  ota_0,   0x20000,  0x120000,
+zb_storage,   data, fat,     0x140000, 16K,
+zb_fct,       data, fat,     0x144000, 1K,
+ota_1,        app,  ota_1,   0x150000, 0x120000,

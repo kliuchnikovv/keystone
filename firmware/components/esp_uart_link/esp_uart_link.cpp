@@ -59,6 +59,7 @@ void EspUartLink::run_rx() {
     if (n > 0 && rx_ != nullptr) {
       rx_(rx_ctx_, buf, static_cast<std::size_t>(n));
     }
+    if (tick_ != nullptr) tick_(tick_ctx_);
   }
 }
 

@@ -3,4 +3,4 @@
 # shared protocol/transport components come from ../components (EXTRA_COMPONENT_DIRS).
 idf_component_register(SRCS "main.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES core esp_uart_link hubproto nvs_boot_id nvs_flash esp_timer)
+                       REQUIRES core esp_uart_link esp_ota_sink hubproto nvs_boot_id nvs_flash esp_timer)
