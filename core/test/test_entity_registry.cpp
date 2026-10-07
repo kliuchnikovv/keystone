@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 #include "core/entity_registry.hpp"
 #include "hubproto/payload.hpp"
@@ -177,4 +178,40 @@ TEST_CASE("declare fails when an entity has more attrs than capacity") {
   DeclareBytes light(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
   CHECK_FALSE(reg.declare(0x01, light.view));
   CHECK(reg.size() == 0);
+}
+
+TEST_CASE("EntityRegistry naming, resolution and persistence across clear_chip") {
+  core::EntityRegistry<> reg;
+  DeclareBytes plug(0x0100, DeviceType::Switch, kSwitchAttrs.data(), 1);
+  REQUIRE(reg.declare(0x01, plug.view));
+
+  CHECK(reg.name_of(0x0100) == nullptr);
+  CHECK(reg.set_name(0x0100, "livingroom_plug"));
+  CHECK(std::string(reg.name_of(0x0100)) == "livingroom_plug");
+
+  // find_by_name
+  const auto* found = reg.find_by_name("livingroom_plug");
+  REQUIRE(found != nullptr);
+  CHECK(found->entity_id == 0x0100);
+  CHECK(reg.find_by_name("nonexistent") == nullptr);
+
+  // resolve
+  std::uint16_t resolved_id = 0;
+  CHECK(reg.resolve("livingroom_plug", resolved_id));
+  CHECK(resolved_id == 0x0100);
+  CHECK(reg.resolve("0x0100", resolved_id));
+  CHECK(resolved_id == 0x0100);
+
+  // clear_chip should NOT delete the user-assigned name
+  reg.clear_chip(0x01);
+  CHECK(reg.size() == 0);
+  CHECK(std::string(reg.name_of(0x0100)) == "livingroom_plug");
+
+  // re-declaring the entity allows find_by_name immediately
+  REQUIRE(reg.declare(0x01, plug.view));
+  CHECK(reg.find_by_name("livingroom_plug") != nullptr);
+
+  // clear_name removes it
+  CHECK(reg.clear_name(0x0100));
+  CHECK(reg.name_of(0x0100) == nullptr);
 }

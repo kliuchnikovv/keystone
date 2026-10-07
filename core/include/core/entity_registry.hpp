@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/entity_names.hpp"
 #include "hubproto/payload.hpp"
 
 namespace core {
@@ -31,10 +32,12 @@ struct EntityT {
   bool                in_use;
 };
 
-template <std::size_t MaxEntities = 64, std::size_t MaxAttrs = 8>
+template <std::size_t MaxEntities = 64, std::size_t MaxAttrs = 8,
+          std::size_t MaxNameLen = 24>
 class EntityRegistry {
  public:
   using Entity = EntityT<MaxAttrs>;
+  using Names = EntityNames<MaxEntities, MaxNameLen>;
 
   // Add or replace an entity from a decoded DECLARE, owned by `chip_id`. Returns
   // false if the entity has more than MaxAttrs attributes or the table is full.
@@ -45,6 +48,34 @@ class EntityRegistry {
 
   // Find a live entity by id, or nullptr.
   const Entity* find(std::uint16_t entity_id) const noexcept;
+
+  // Find a live entity by name, or nullptr.
+  const Entity* find_by_name(const char* name) const noexcept {
+    std::uint16_t id = 0;
+    if (!names_.get_id(name, id)) return nullptr;
+    return find(id);
+  }
+
+  // Resolve a string (name or hex/dec literal) to an entity id.
+  bool resolve(const char* str, std::uint16_t& out_id) const noexcept {
+    return names_.resolve(str, out_id);
+  }
+
+  // Names management
+  Names& names() noexcept { return names_; }
+  const Names& names() const noexcept { return names_; }
+
+  const char* name_of(std::uint16_t entity_id) const noexcept {
+    return names_.get_name(entity_id);
+  }
+
+  bool set_name(std::uint16_t entity_id, const char* name) noexcept {
+    return names_.set_name(entity_id, name);
+  }
+
+  bool clear_name(std::uint16_t entity_id) noexcept {
+    return names_.clear_name(entity_id);
+  }
 
   // Enumerate live entities by compacted index in [0, size()): returns the i-th
   // in-use entity, or nullptr if index is out of range. Lets callers (a console,
@@ -65,19 +96,21 @@ class EntityRegistry {
                  hubproto::Value& out) const noexcept;
 
   // Remove every entity owned by `chip_id` (boot_id resync). Returns the count.
+  // Note: user-assigned entity names are NOT cleared on chip resync.
   std::size_t clear_chip(std::uint8_t chip_id) noexcept;
 
  private:
   Entity* slot_for(std::uint16_t entity_id) noexcept;  // existing slot, or a free one
 
   Entity entities_[MaxEntities] = {};
+  Names  names_{};
 };
 
 // ---- implementation -------------------------------------------------------
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-typename EntityRegistry<MaxEntities, MaxAttrs>::Entity*
-EntityRegistry<MaxEntities, MaxAttrs>::slot_for(std::uint16_t entity_id) noexcept {
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+typename EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::Entity*
+EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::slot_for(std::uint16_t entity_id) noexcept {
   for (auto& e : entities_) {
     if (e.in_use && e.entity_id == entity_id) return &e;
   }
@@ -87,8 +120,8 @@ EntityRegistry<MaxEntities, MaxAttrs>::slot_for(std::uint16_t entity_id) noexcep
   return nullptr;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-bool EntityRegistry<MaxEntities, MaxAttrs>::declare(
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::declare(
     std::uint8_t chip_id, const hubproto::DeclareView& view) noexcept {
   if (view.attr_count > MaxAttrs) return false;
   Entity* e = slot_for(view.entity_id);
@@ -109,8 +142,8 @@ bool EntityRegistry<MaxEntities, MaxAttrs>::declare(
   return true;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-std::size_t EntityRegistry<MaxEntities, MaxAttrs>::size() const noexcept {
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+std::size_t EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::size() const noexcept {
   std::size_t n = 0;
   for (const auto& e : entities_) {
     if (e.in_use) ++n;
@@ -118,8 +151,8 @@ std::size_t EntityRegistry<MaxEntities, MaxAttrs>::size() const noexcept {
   return n;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-auto EntityRegistry<MaxEntities, MaxAttrs>::find(std::uint16_t entity_id)
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+auto EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::find(std::uint16_t entity_id)
     const noexcept -> const Entity* {
   for (const auto& e : entities_) {
     if (e.in_use && e.entity_id == entity_id) return &e;
@@ -127,8 +160,8 @@ auto EntityRegistry<MaxEntities, MaxAttrs>::find(std::uint16_t entity_id)
   return nullptr;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-auto EntityRegistry<MaxEntities, MaxAttrs>::entity_at(std::size_t index)
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+auto EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::entity_at(std::size_t index)
     const noexcept -> const Entity* {
   std::size_t n = 0;
   for (const auto& e : entities_) {
@@ -139,8 +172,8 @@ auto EntityRegistry<MaxEntities, MaxAttrs>::entity_at(std::size_t index)
   return nullptr;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-bool EntityRegistry<MaxEntities, MaxAttrs>::value_type_of(
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::value_type_of(
     std::uint16_t entity_id, std::uint8_t attr_id,
     hubproto::ValueType& out) const noexcept {
   const Entity* e = find(entity_id);
@@ -154,8 +187,8 @@ bool EntityRegistry<MaxEntities, MaxAttrs>::value_type_of(
   return false;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-bool EntityRegistry<MaxEntities, MaxAttrs>::set_value(
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::set_value(
     std::uint16_t entity_id, std::uint8_t attr_id,
     const hubproto::Value& v) noexcept {
   for (auto& e : entities_) {
@@ -172,8 +205,8 @@ bool EntityRegistry<MaxEntities, MaxAttrs>::set_value(
   return false;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-bool EntityRegistry<MaxEntities, MaxAttrs>::get_value(
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::get_value(
     std::uint16_t entity_id, std::uint8_t attr_id,
     hubproto::Value& out) const noexcept {
   const Entity* e = find(entity_id);
@@ -188,8 +221,8 @@ bool EntityRegistry<MaxEntities, MaxAttrs>::get_value(
   return false;
 }
 
-template <std::size_t MaxEntities, std::size_t MaxAttrs>
-std::size_t EntityRegistry<MaxEntities, MaxAttrs>::clear_chip(
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+std::size_t EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::clear_chip(
     std::uint8_t chip_id) noexcept {
   std::size_t removed = 0;
   for (auto& e : entities_) {
