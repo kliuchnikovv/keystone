@@ -171,9 +171,6 @@ constexpr int kThRxGpio = 9;
 constexpr std::uint8_t kZigbeeChipId = 0x01;
 constexpr std::uint8_t kThreadChipId = 0x02;
 
-constexpr std::uint16_t kOccupancy = 0x0010;
-constexpr std::uint8_t  kOccupiedAttr = 0x50;
-constexpr std::uint16_t kLight = 0x0020;
 constexpr std::uint8_t  kOnOffAttr = 0x01;
 
 using Registry = core::EntityRegistry<>;
@@ -243,9 +240,6 @@ class ChipRouter final : public core::Bus {
 std::uint32_t now_ms(void* /*ctx*/) {
   return static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 }
-
-bool is_true(const hubproto::Value& v) { return v.as_bool(); }
-bool is_false(const hubproto::Value& v) { return !v.as_bool(); }
 
 // Background events are noisy, so they're at DEBUG level by default (off).
 // Toggle with the `log` console command. Command results and one-shot events
@@ -332,7 +326,8 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_PAIR, REQ_UNPAIR, REQ_IDENTIFY,
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
-               REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST };
+               REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
+               REQ_RULE };
 
 struct Req {
   ReqKind kind;
@@ -347,6 +342,8 @@ struct Req {
   const char* pass;     // for REQ_WIFI_JOIN
   const char* tz;       // for REQ_TZ
   const char* name;     // for REQ_NAME_SET
+  int argc;             // for REQ_RULE: the console words, alive until `done`
+  char** argv;
   SemaphoreHandle_t done;
 };
 
@@ -367,12 +364,50 @@ const char* dt_name(hubproto::DeviceType t) {
   return "?";
 }
 
+const char* attr_name(std::uint8_t id) {
+  return id == kOnOffAttr ? "on_off"
+         : id == 0x13     ? "power_w"
+         : id == 0x14     ? "energy_wh"
+                          : nullptr;
+}
+
+// Format a bare value (e.g. "on", "200", "(1,2)").
+void fmt_value(char* buf, std::size_t cap, hubproto::ValueType vt,
+               const hubproto::Value& v) {
+  switch (vt) {
+    case hubproto::ValueType::Bool:
+      std::snprintf(buf, cap, "%s", v.as_bool() ? "on" : "off");
+      break;
+    case hubproto::ValueType::U8:
+      std::snprintf(buf, cap, "%u", static_cast<unsigned>(v.as_u8()));
+      break;
+    case hubproto::ValueType::I16:
+      std::snprintf(buf, cap, "%d", static_cast<int>(v.as_i16()));
+      break;
+    case hubproto::ValueType::U16:
+      std::snprintf(buf, cap, "%u", static_cast<unsigned>(v.as_u16()));
+      break;
+    case hubproto::ValueType::U32:
+      std::snprintf(buf, cap, "%lu", static_cast<unsigned long>(v.as_u32()));
+      break;
+    case hubproto::ValueType::Enum8:
+      std::snprintf(buf, cap, "%u", static_cast<unsigned>(v.as_enum8()));
+      break;
+    case hubproto::ValueType::F32:
+      std::snprintf(buf, cap, "%.2f", static_cast<double>(v.as_f32()));
+      break;
+    case hubproto::ValueType::XyColor: {
+      std::uint16_t x = 0, y = 0;
+      v.as_xy(x, y);
+      std::snprintf(buf, cap, "(%u,%u)", static_cast<unsigned>(x), static_cast<unsigned>(y));
+      break;
+    }
+  }
+}
+
 // Format an attribute's current value into `buf` (e.g. "on_off=on", "0x02=200").
 void fmt_attr(char* buf, std::size_t cap, const core::AttrState& a) {
-  const char* name = a.attr_id == kOnOffAttr    ? "on_off"
-                     : a.attr_id == 0x13        ? "power_w"
-                     : a.attr_id == 0x14        ? "energy_wh"
-                                                : nullptr;
+  const char* name = attr_name(a.attr_id);
   char idbuf[8];
   if (name == nullptr) {
     std::snprintf(idbuf, sizeof(idbuf), "0x%02x", static_cast<unsigned>(a.attr_id));
@@ -382,35 +417,9 @@ void fmt_attr(char* buf, std::size_t cap, const core::AttrState& a) {
     std::snprintf(buf, cap, "%s=?", name);
     return;
   }
-  switch (a.value_type) {
-    case hubproto::ValueType::Bool:
-      std::snprintf(buf, cap, "%s=%s", name, a.value.as_bool() ? "on" : "off");
-      break;
-    case hubproto::ValueType::U8:
-      std::snprintf(buf, cap, "%s=%u", name, static_cast<unsigned>(a.value.as_u8()));
-      break;
-    case hubproto::ValueType::I16:
-      std::snprintf(buf, cap, "%s=%d", name, static_cast<int>(a.value.as_i16()));
-      break;
-    case hubproto::ValueType::U16:
-      std::snprintf(buf, cap, "%s=%u", name, static_cast<unsigned>(a.value.as_u16()));
-      break;
-    case hubproto::ValueType::U32:
-      std::snprintf(buf, cap, "%s=%lu", name, static_cast<unsigned long>(a.value.as_u32()));
-      break;
-    case hubproto::ValueType::Enum8:
-      std::snprintf(buf, cap, "%s=%u", name, static_cast<unsigned>(a.value.as_enum8()));
-      break;
-    case hubproto::ValueType::F32:
-      std::snprintf(buf, cap, "%s=%.2f", name, static_cast<double>(a.value.as_f32()));
-      break;
-    case hubproto::ValueType::XyColor: {
-      std::uint16_t x = 0, y = 0;
-      a.value.as_xy(x, y);
-      std::snprintf(buf, cap, "%s=(%u,%u)", name, static_cast<unsigned>(x), static_cast<unsigned>(y));
-      break;
-    }
-  }
+  char vb[24];
+  fmt_value(vb, sizeof(vb), a.value_type, a.value);
+  std::snprintf(buf, cap, "%s=%s", name, vb);
 }
 
 // Submit a request to the main loop and wait for it to fill `r.out`.
@@ -490,6 +499,251 @@ void restore_timers(core::TimerTable<8>& timers, std::uint32_t now_ms, std::uint
     }
   }
   nvs_close(h);
+}
+
+void persist_rules(const Rules& rules) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  std::uint8_t buf[Rules::kHeaderSize + 16 * Rules::kEntryWireSize];
+  const std::size_t n = rules.stored_count() == 0 ? 0 : rules.save(buf, sizeof(buf));
+  if (n > 0) {
+    nvs_set_blob(h, "rules", buf, n);
+  } else {
+    nvs_erase_key(h, "rules");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_rules(Rules& rules) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::uint8_t buf[Rules::kHeaderSize + 16 * Rules::kEntryWireSize];
+  std::size_t sz = sizeof(buf);
+  if (nvs_get_blob(h, "rules", buf, &sz) == ESP_OK) {
+    if (rules.load(buf, sz)) {
+      ESP_LOGI(kTag, "restored %u rule(s) from NVS", static_cast<unsigned>(rules.rule_count()));
+    } else {
+      ESP_LOGW(kTag, "stored rules are corrupt — ignored");
+    }
+  }
+  nvs_close(h);
+}
+
+// ---- `rule` console command: parsing + handling (runs on the main loop) ----
+
+bool parse_attr(const char* s, std::uint8_t& out) {
+  static const struct { const char* n; std::uint8_t id; } kNames[] = {
+      {"on_off", kOnOffAttr}, {"power_w", 0x13}, {"energy_wh", 0x14}};
+  for (const auto& e : kNames) {
+    if (std::strcmp(s, e.n) == 0) { out = e.id; return true; }
+  }
+  char* end = nullptr;
+  const long v = std::strtol(s, &end, 0);
+  if (end == s || *end != '\0' || v < 0 || v > 255) return false;
+  out = static_cast<std::uint8_t>(v);
+  return true;
+}
+
+bool parse_value(const char* s, hubproto::ValueType vt, hubproto::Value& out) {
+  char* end = nullptr;
+  auto integer = [&](long lo, long hi, long& v) {
+    v = std::strtol(s, &end, 0);
+    return end != s && *end == '\0' && v >= lo && v <= hi;
+  };
+  long v = 0;
+  switch (vt) {
+    case hubproto::ValueType::Bool:
+      if (!std::strcmp(s, "on") || !std::strcmp(s, "true") || !std::strcmp(s, "1")) {
+        out = hubproto::Value::make_bool(true);
+        return true;
+      }
+      if (!std::strcmp(s, "off") || !std::strcmp(s, "false") || !std::strcmp(s, "0")) {
+        out = hubproto::Value::make_bool(false);
+        return true;
+      }
+      return false;
+    case hubproto::ValueType::U8:
+      if (!integer(0, 255, v)) return false;
+      out = hubproto::Value::make_u8(static_cast<std::uint8_t>(v));
+      return true;
+    case hubproto::ValueType::Enum8:
+      if (!integer(0, 255, v)) return false;
+      out = hubproto::Value::make_enum8(static_cast<std::uint8_t>(v));
+      return true;
+    case hubproto::ValueType::I16:
+      if (!integer(-32768, 32767, v)) return false;
+      out = hubproto::Value::make_i16(static_cast<std::int16_t>(v));
+      return true;
+    case hubproto::ValueType::U16:
+      if (!integer(0, 65535, v)) return false;
+      out = hubproto::Value::make_u16(static_cast<std::uint16_t>(v));
+      return true;
+    case hubproto::ValueType::U32: {
+      if (s[0] == '-') return false;
+      const unsigned long u = std::strtoul(s, &end, 0);
+      if (end == s || *end != '\0') return false;
+      out = hubproto::Value::make_u32(static_cast<std::uint32_t>(u));
+      return true;
+    }
+    case hubproto::ValueType::F32: {
+      const float f = std::strtof(s, &end);
+      if (end == s || *end != '\0') return false;
+      out = hubproto::Value::make_f32(f);
+      return true;
+    }
+    case hubproto::ValueType::XyColor:
+      return false;  // not expressible on one console word
+  }
+  return false;
+}
+
+bool parse_op(const char* s, core::CmpOp& op) {
+  if (!std::strcmp(s, "==") || !std::strcmp(s, "=")) op = core::CmpOp::Eq;
+  else if (!std::strcmp(s, "!=")) op = core::CmpOp::Ne;
+  else if (!std::strcmp(s, "<")) op = core::CmpOp::Lt;
+  else if (!std::strcmp(s, "<=")) op = core::CmpOp::Le;
+  else if (!std::strcmp(s, ">")) op = core::CmpOp::Gt;
+  else if (!std::strcmp(s, ">=")) op = core::CmpOp::Ge;
+  else if (!std::strcmp(s, "any")) op = core::CmpOp::Always;
+  else return false;
+  return true;
+}
+
+const char* op_str(core::CmpOp op) {
+  switch (op) {
+    case core::CmpOp::Eq: return "==";
+    case core::CmpOp::Ne: return "!=";
+    case core::CmpOp::Lt: return "<";
+    case core::CmpOp::Le: return "<=";
+    case core::CmpOp::Gt: return ">";
+    case core::CmpOp::Ge: return ">=";
+    case core::CmpOp::Always: return "any";
+  }
+  return "?";
+}
+
+void fmt_target(char* buf, std::size_t cap, const Registry& reg, std::uint16_t id,
+                std::uint8_t attr) {
+  const char* name = reg.name_of(id);
+  const char* an = attr_name(attr);
+  char eb[24], ab[8];
+  if (name != nullptr) {
+    std::snprintf(eb, sizeof(eb), "%s", name);
+  } else {
+    std::snprintf(eb, sizeof(eb), "0x%04x", static_cast<unsigned>(id));
+  }
+  if (an == nullptr) {
+    std::snprintf(ab, sizeof(ab), "0x%02x", static_cast<unsigned>(attr));
+    an = ab;
+  }
+  std::snprintf(buf, cap, "%s.%s", eb, an);
+}
+
+const char* kRuleUsage =
+    "usage:\n"
+    "  rule                     - list rules\n"
+    "  rule add <entity> <attr> <op> <value> then <entity> <attr> <value>\n"
+    "  rule add <entity> <attr> any then <entity> <attr> <value>   (any change)\n"
+    "  rule del <n>\n"
+    "  <op>: == != < <= > >=   <attr>: on_off power_w energy_wh or a number\n"
+    "  e.g. rule add plug power_w > 1500 then plug on_off off\n";
+
+void handle_rule(Req* r, const Registry& reg, Rules& rules) {
+  const int argc = r->argc;
+  char** argv = r->argv;
+  char* out = r->out;
+  const std::size_t cap = r->out_cap;
+
+  if (argc < 2 || std::strcmp(argv[1], "list") == 0) {
+    std::size_t off = static_cast<std::size_t>(std::snprintf(
+        out, cap, "%u rule(s):\n", static_cast<unsigned>(rules.rule_count())));
+    for (std::size_t i = 0; i < rules.rule_count() && off < cap; ++i) {
+      const core::Rule* ru = rules.rule_at(i);
+      char t[48], a[48], ov[24], av[24];
+      fmt_target(t, sizeof(t), reg, ru->trigger_entity, ru->trigger_attr);
+      fmt_target(a, sizeof(a), reg, ru->action_entity, ru->action_attr);
+      fmt_value(av, sizeof(av), ru->action_value.type, ru->action_value);
+      if (ru->match != nullptr) {
+        std::snprintf(ov, sizeof(ov), "<builtin>");
+      } else if (ru->op == core::CmpOp::Always) {
+        ov[0] = '\0';
+      } else {
+        fmt_value(ov, sizeof(ov), ru->operand.type, ru->operand);
+      }
+      off += static_cast<std::size_t>(std::snprintf(
+          out + off, cap - off, "  #%u  %s %s %s  ->  %s = %s\n",
+          static_cast<unsigned>(i), t, op_str(ru->op), ov, a, av));
+    }
+    return;
+  }
+
+  if (std::strcmp(argv[1], "del") == 0 && argc == 3) {
+    char* end = nullptr;
+    const long n = std::strtol(argv[2], &end, 10);
+    if (end == argv[2] || *end != '\0' || n < 0 || !rules.remove_rule(static_cast<std::size_t>(n))) {
+      std::snprintf(out, cap, "no such rule: %s\n", argv[2]);
+      return;
+    }
+    persist_rules(rules);
+    std::snprintf(out, cap, "rule #%ld deleted\n", n);
+    return;
+  }
+
+  if (std::strcmp(argv[1], "add") == 0 && argc >= 9) {
+    const bool any = std::strcmp(argv[4], "any") == 0;
+    const int base = any ? 5 : 6;  // index of "then"
+    if (argc != base + 4 || std::strcmp(argv[base], "then") != 0) {
+      std::snprintf(out, cap, "%s", kRuleUsage);
+      return;
+    }
+    core::Rule ru{};
+    ru.match = nullptr;
+    std::uint16_t tid = 0, aid = 0;
+    hubproto::ValueType tvt{}, avt{};
+    if (!reg.resolve(argv[2], tid) || reg.find(tid) == nullptr) {
+      std::snprintf(out, cap, "%s: trigger entity not found\n", argv[2]);
+      return;
+    }
+    if (!parse_attr(argv[3], ru.trigger_attr) || !reg.value_type_of(tid, ru.trigger_attr, tvt)) {
+      std::snprintf(out, cap, "%s: trigger attribute unknown for that entity\n", argv[3]);
+      return;
+    }
+    ru.trigger_entity = tid;
+    if (!parse_op(argv[4], ru.op)) {
+      std::snprintf(out, cap, "%s: bad operator\n", argv[4]);
+      return;
+    }
+    if (any) {
+      ru.operand.type = tvt;
+      ru.operand.len = static_cast<std::uint8_t>(hubproto::value_size(tvt));
+    } else if (!parse_value(argv[5], tvt, ru.operand)) {
+      std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[5]);
+      return;
+    }
+    if (!reg.resolve(argv[base + 1], aid) || reg.find(aid) == nullptr) {
+      std::snprintf(out, cap, "%s: action entity not found\n", argv[base + 1]);
+      return;
+    }
+    if (!parse_attr(argv[base + 2], ru.action_attr) || !reg.value_type_of(aid, ru.action_attr, avt)) {
+      std::snprintf(out, cap, "%s: action attribute unknown for that entity\n", argv[base + 2]);
+      return;
+    }
+    ru.action_entity = aid;
+    if (!parse_value(argv[base + 3], avt, ru.action_value)) {
+      std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[base + 3]);
+      return;
+    }
+    if (!rules.add_rule(ru)) {
+      std::snprintf(out, cap, "rule table full\n");
+      return;
+    }
+    persist_rules(rules);
+    std::snprintf(out, cap, "rule #%u added\n", static_cast<unsigned>(rules.rule_count() - 1));
+    return;
+  }
+
+  std::snprintf(out, cap, "%s", kRuleUsage);
 }
 
 int cmd_home(int /*argc*/, char** /*argv*/) {
@@ -579,6 +833,18 @@ int cmd_cancel(int argc, char** argv) {
   Req r{};
   r.kind = REQ_CANCEL;
   r.idx = static_cast<int>(std::strtol(argv[1], nullptr, 10));
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_rule(int argc, char** argv) {
+  static char buf[1536];  // only the console task calls this
+  Req r{};
+  r.kind = REQ_RULE;
+  r.argc = argc;
+  r.argv = argv;
   r.out = buf;
   r.out_cap = sizeof(buf);
   printf(submit(r) ? "%s" : "timeout\n", buf);
@@ -831,6 +1097,7 @@ void start_console() {
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
   reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | status | abort - update a C6 over the link", &cmd_ota);
+  reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -883,12 +1150,7 @@ extern "C" void app_main(void) {
   bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
   bus.subscribe(&on_bus_forward, &bus);     // Matter <-> Zigbee cross-chip mirror
 
-  core::Rule on_rule{kOccupancy, kOccupiedAttr, &is_true, kLight, kOnOffAttr,
-                     hubproto::Value::make_bool(true)};
-  core::Rule off_rule{kOccupancy, kOccupiedAttr, &is_false, kLight, kOnOffAttr,
-                      hubproto::Value::make_bool(false)};
-  rules.add_rule(on_rule);
-  rules.add_rule(off_rule);
+  restore_rules(rules);  // user rules from NVS (`rule add ...`)
 
   sm.on_change(&Rules::on_state_change, &rules);
   sm.on_change(&on_state_change, nullptr);
@@ -1315,6 +1577,9 @@ extern "C" void app_main(void) {
           std::snprintf(r->out, r->out_cap, "tz set to %s, current time: %s\n", r->tz, time_str);
           break;
         }
+        case REQ_RULE:
+          handle_rule(r, reg, rules);
+          break;
         case REQ_NAME_SET: {
           std::uint16_t id = 0;
           if (!reg.resolve(r->target, id)) {

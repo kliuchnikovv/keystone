@@ -18,15 +18,15 @@ they unlock.
 Today: hard-coded rules compiled into the firmware (`motion → light`, single
 if-then). To make rules a first-class thing users write and change:
 
-- **Rule storage** (NVS or SD) — load at boot, edit at runtime via console
-  or a file drop. Same shape as `core::Rule` but a small serialized form.
+- ~~**Rule storage**~~ ✅ done: rules are data (`CmpOp` + operand), stored in NVS
+  (`rules` blob), edited via the `rule` console command (`rule`, `rule add
+  <entity> <attr> <op> <value> then <entity> <attr> <value>`, `rule del <n>`).
 - **Multi-condition / multi-action** — today one trigger, one predicate,
   one action. Real homes want AND/OR, time windows, cool-downs.
 - **Time-of-day / sun** — `after sunset && motion → light`, `at 22:00 → all
   off`. Needs wall-clock time (see next item).
 - **Scenes** — a named group of desired attribute values applied at once
   (`scene evening`). Doubly useful with Groups & Scenes on the Zigbee side.
-- Console commands `rules`, `rule add ...`, `rule del <n>`, `rule show <n>`.
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
   the in-code table (SPEC §7 already flags this as a later option).
 
