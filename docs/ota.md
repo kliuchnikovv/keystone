@@ -29,7 +29,10 @@ OTA_END                  ───────────▶   check size + SHA
   `RadioCoordinator` resyncs (wipes the chip's entities) on any boot_id change.
 - Timeouts (sender): BEGIN 30 s (slot erase), chunk 1 s × 5 retries, END 20 s.
   The chip drops a transfer that is silent for 15 s.
-- Speed: ~11 KB/s at 115200 baud, so a 650 KB image takes roughly 1–1.5 min.
+- Speed: measured ~8.5 KB/s (about 80% of the 115200-baud line), 667 KB in
+  ~78 s. The UART RX loop must not ask `uart_read_bytes` for a full buffer: it
+  only returns early on timeout, which cost ~20 ms per short frame (acks) and
+  made the same transfer take 111 s.
 
 Code: `libhubproto` (codecs), `core/ota_sender.hpp` (brain),
 `core/ota_receiver.hpp` + `OtaSink` (chip), `firmware/components/esp_ota_sink`
@@ -42,9 +45,17 @@ Code: `libhubproto` (codecs), `core/ota_sender.hpp` (brain),
   header/checksum before it selects the new slot.
 - The bootloader runs with app rollback enabled: a new image boots
   "pending verify" and is reverted at the next reset **unless** it confirms
-  itself. The chip confirms when the brain sends its first QUERY, which proves
-  the UART link and the main loop work on the new image
-  (`fw::ota_confirm_running_image()`).
+  itself. `fw::OtaConfirmGate` confirms only after the brain's QUERY arrived
+  (link works) **and** the app has been up 30 s. Confirming earlier (we first
+  did it inside the QUERY handler) makes any crash right after it unrecoverable:
+  the image is already valid, so the chip crash-loops instead of rolling back.
+- Hardware-verified on zigbee-c6: a good image is confirmed at ~30 s; an image
+  that aborts 3 s after boot is rolled back by the bootloader on its own and the
+  chip comes back on the old slot; a wrong SHA-256 is refused with the running
+  image untouched; non-image data is refused at the first chunk (header check).
+- The brain only knows the *transfer* succeeded. If the new image then rolls
+  back, the brain sees the chip's HELLO twice (two boot_id changes); it does not
+  yet report "updated but rolled back".
 - Not covered yet: image *signing*. Anyone who can start an OTA with a matching
   SHA-256 can flash the chip. Secure boot / signed images are a later step.
 
@@ -65,3 +76,14 @@ esptool.py -p /dev/ttyACM0 read_flash 0x8000 0x1000 old_ptable.bin   # confirm l
 
 PlatformIO only honours `partitions.csv` when `board_build.partitions` is set
 (it is, in `platformio.ini`).
+
+## Usage
+
+```
+ota <zigbee|thread> <http(s)://url> <sha256-hex>   start (HTTPS uses the cert bundle)
+ota status                                         progress / last result
+ota abort
+```
+
+The server must send `Content-Length` (no chunked transfer). Serve an image from
+the Pi with `python3 -m http.server`. The console line limit is 384 chars.

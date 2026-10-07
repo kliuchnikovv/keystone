@@ -806,7 +806,7 @@ void start_console() {
   esp_console_repl_t* repl = nullptr;
   esp_console_repl_config_t rc = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   rc.prompt = "home>";
-  rc.max_cmdline_length = 128;
+  rc.max_cmdline_length = 384;  // `ota <chip> <url> <sha256>` is ~100-350 chars
   rc.task_stack_size = 8192;
   esp_console_dev_usb_serial_jtag_config_t hw =
       ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
