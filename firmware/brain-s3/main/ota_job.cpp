@@ -170,25 +170,28 @@ void OtaJob::run() noexcept {
     return;
   }
 
+  // Read the next chunk from HTTP while NOT holding the sender mutex.
+  auto prefetch = [&]() {
+    if (pre_pos_ != pre_len_ || http_remaining == 0) return;
+    const std::size_t want = http_remaining < sizeof(pre_) ? http_remaining : sizeof(pre_);
+    std::size_t got = 0;
+    int stalls = 0;
+    while (got < want && !abort_) {
+      const int r = esp_http_client_read(client, reinterpret_cast<char*>(pre_) + got,
+                                         static_cast<int>(want - got));
+      if (r > 0) { got += static_cast<std::size_t>(r); stalls = 0; continue; }
+      if (r < 0 || ++stalls > 50) break;  // error, or ~5 s with no data
+    }
+    pre_len_ = got;
+    pre_pos_ = 0;
+    http_remaining -= static_cast<std::uint32_t>(got);
+    // got < want leaves the sender with a short/empty prefetch: it fails with
+    // SourceError, which is the right outcome for a truncated download.
+  };
+
   unsigned last_pct = 101;
   for (;;) {
-    // Read the next chunk from HTTP while NOT holding the sender mutex.
-    if (pre_pos_ == pre_len_ && http_remaining > 0) {
-      const std::size_t want = http_remaining < sizeof(pre_) ? http_remaining : sizeof(pre_);
-      std::size_t got = 0;
-      int stalls = 0;
-      while (got < want && !abort_) {
-        const int r = esp_http_client_read(client, reinterpret_cast<char*>(pre_) + got,
-                                           static_cast<int>(want - got));
-        if (r > 0) { got += static_cast<std::size_t>(r); stalls = 0; continue; }
-        if (r < 0 || ++stalls > 50) break;  // error, or ~5 s with no data
-      }
-      pre_len_ = got;
-      pre_pos_ = 0;
-      http_remaining -= static_cast<std::uint32_t>(got);
-      // got < want leaves the sender with a short/empty prefetch: it fails with
-      // SourceError, which is the right outcome for a truncated download.
-    }
+    prefetch();
 
     xSemaphoreTake(mtx_, portMAX_DELAY);
     if (abort_) sender_.abort();
@@ -196,6 +199,10 @@ void OtaJob::run() noexcept {
     const bool done = sender_.finished();
     const std::uint32_t acked = sender_.acked();
     xSemaphoreGive(mtx_);
+
+    // The chunk we just sent is on the wire: read the next one from HTTP now,
+    // while the chip is writing and acking, instead of after the ack arrives.
+    if (!done) prefetch();
 
     const unsigned pct = static_cast<unsigned>((static_cast<std::uint64_t>(acked) * 100) / total_);
     if (pct / 10 != last_pct / 10 && !done) {

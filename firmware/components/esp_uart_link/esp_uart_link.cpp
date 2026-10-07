@@ -55,9 +55,21 @@ void EspUartLink::run_rx() {
   ESP_LOGI(kTag, "UART%d link up: tx=%d rx=%d @ %d baud",
            static_cast<int>(cfg_.port), cfg_.tx_gpio, cfg_.rx_gpio, cfg_.baud);
   for (;;) {
-    const int n = uart_read_bytes(cfg_.port, buf, chunk, pdMS_TO_TICKS(20));
-    if (n > 0 && rx_ != nullptr) {
-      rx_(rx_ctx_, buf, static_cast<std::size_t>(n));
+    // uart_read_bytes(len) only returns early on timeout, so asking for a full
+    // chunk made every short frame (an ack, the tail of a long frame) wait out
+    // the whole timeout: ~20 ms per message. Wait for the first byte, then take
+    // whatever else has already arrived without blocking.
+    int n = uart_read_bytes(cfg_.port, buf, 1, pdMS_TO_TICKS(20));
+    if (n > 0) {
+      std::size_t avail = 0;
+      uart_get_buffered_data_len(cfg_.port, &avail);
+      if (avail > 0) {
+        const std::size_t room = static_cast<std::size_t>(chunk - 1);
+        const int m = uart_read_bytes(cfg_.port, buf + 1,
+                                      static_cast<uint32_t>(avail < room ? avail : room), 0);
+        if (m > 0) n += m;
+      }
+      if (rx_ != nullptr) rx_(rx_ctx_, buf, static_cast<std::size_t>(n));
     }
     if (tick_ != nullptr) tick_(tick_ctx_);
   }

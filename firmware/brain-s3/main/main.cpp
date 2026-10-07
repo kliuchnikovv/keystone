@@ -395,9 +395,21 @@ void fmt_attr(char* buf, std::size_t cap, const core::AttrState& a) {
     case hubproto::ValueType::U16:
       std::snprintf(buf, cap, "%s=%u", name, static_cast<unsigned>(a.value.as_u16()));
       break;
-    default:
-      std::snprintf(buf, cap, "%s=<%u b>", name, static_cast<unsigned>(a.value.len));
+    case hubproto::ValueType::U32:
+      std::snprintf(buf, cap, "%s=%lu", name, static_cast<unsigned long>(a.value.as_u32()));
       break;
+    case hubproto::ValueType::Enum8:
+      std::snprintf(buf, cap, "%s=%u", name, static_cast<unsigned>(a.value.as_enum8()));
+      break;
+    case hubproto::ValueType::F32:
+      std::snprintf(buf, cap, "%s=%.2f", name, static_cast<double>(a.value.as_f32()));
+      break;
+    case hubproto::ValueType::XyColor: {
+      std::uint16_t x = 0, y = 0;
+      a.value.as_xy(x, y);
+      std::snprintf(buf, cap, "%s=(%u,%u)", name, static_cast<unsigned>(x), static_cast<unsigned>(y));
+      break;
+    }
   }
 }
 

@@ -103,6 +103,10 @@ esp_zb_ieee_addr_t g_pending_ieee = {};
 
 // Set once we've re-armed reporting for NVS-restored devices after a reboot.
 bool g_rearm_scheduled = false;
+// Set once the Zigbee stack has initialized. The scheduler must not be touched
+// before: a QUERY from the brain can arrive within milliseconds of our HELLO.
+volatile bool g_zb_stack_up = false;
+fw::OtaConfirmGate g_ota_confirm;
 
 // Pending brain COMMANDs awaiting a ZCL Default Response from the device.
 // Matched by ZCL tsn returned from esp_zb_zcl_on_off_cmd_req(): only on success
@@ -485,12 +489,16 @@ void on_uart_message(void* /*ctx*/, const hubproto::Header& h,
                      const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
     case hubproto::MsgType::Query:
-      // The brain is talking to us: a freshly OTA'd image has proven itself.
-      fw::ota_confirm_running_image();
+      g_ota_confirm.note_link_ok();  // the brain is talking to us
       send_declarations();
       // Also re-read current state from each device so the brain gets a fresh
       // STATE for every entity after (re-)declaration, not just at first join.
-      esp_zb_scheduler_alarm(refresh_states_cb, 0, 100);
+      // Before the stack is up there is nothing to read (and no scheduler yet);
+      // rearm_restored re-reads everything once the network is ready.
+      if (g_zb_stack_up && esp_zb_lock_acquire(portMAX_DELAY)) {
+        esp_zb_scheduler_alarm(refresh_states_cb, 0, 100);
+        esp_zb_lock_release();
+      }
       break;
     case hubproto::MsgType::Command: {
       // Peek entity_id before decoding — chip-meta commands live at entity_id 0
@@ -1058,6 +1066,7 @@ extern "C" void esp_zb_app_signal_handler(esp_zb_app_signal_t* signal_struct) {
   switch (sig) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
       ESP_LOGI(kTag, "stack initialized — loading stored network state");
+      g_zb_stack_up = true;
       esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
       break;
 
@@ -1185,7 +1194,9 @@ extern "C" void app_main(void) {
   }());
   static auto ota_tick = [](void* ctx) {
     auto* rx = static_cast<core::OtaReceiver*>(ctx);
-    rx->poll(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+    const auto uptime_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+    g_ota_confirm.tick(uptime_ms);
+    rx->poll(uptime_ms);
     if (rx->reboot_pending()) fw::ota_reboot_into_new_image(UART_NUM_1);
   };
   link.set_tick(ota_tick, &ota_rx);
