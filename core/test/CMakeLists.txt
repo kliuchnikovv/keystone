@@ -9,7 +9,9 @@ add_executable(core_tests
   test_command_dispatcher.cpp
   test_rule_engine.cpp
   test_entity_names.cpp
-  test_timer_table.cpp)
+  test_timer_table.cpp
+  test_sha256.cpp
+  test_ota.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 

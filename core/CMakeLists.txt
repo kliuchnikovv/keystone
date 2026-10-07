@@ -7,7 +7,10 @@
 # Phase 0: placeholder only. Real components land in Phases 3-5.
 add_library(core STATIC
   src/placeholder.cpp
-  src/uart_transport.cpp)
+  src/uart_transport.cpp
+  src/sha256.cpp
+  src/ota_receiver.cpp
+  src/ota_sender.cpp)
 
 target_include_directories(core PUBLIC include)
 target_link_libraries(core

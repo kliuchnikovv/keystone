@@ -8,6 +8,9 @@ idf_component_register(
   SRCS
     "${CORE}/src/placeholder.cpp"
     "${CORE}/src/uart_transport.cpp"
+    "${CORE}/src/sha256.cpp"
+    "${CORE}/src/ota_receiver.cpp"
+    "${CORE}/src/ota_sender.cpp"
   INCLUDE_DIRS
     "${CORE}/include"
   REQUIRES
