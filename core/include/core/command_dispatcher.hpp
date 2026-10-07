@@ -38,6 +38,15 @@ class CommandDispatcher {
     result_ctx_ = ctx;
   }
 
+  // Optional liveness filter (e.g. ChipMonitor::alive_thunk). A command for a
+  // chip it reports dead completes at once as Unreachable — no retries into the
+  // void — and pending ones fail on the next poll().
+  using AliveFn = bool (*)(void* ctx, std::uint8_t chip_id);
+  void set_alive_filter(AliveFn fn, void* ctx) noexcept {
+    alive_fn_ = fn;
+    alive_ctx_ = ctx;
+  }
+
   // Send a COMMAND for entity_id/attr_id with value `v`. Returns false if the
   // entity is unknown, the attribute is unknown or the value type mismatches, or
   // the pending table is full. On success `seq_out` receives the assigned seq.
@@ -81,6 +90,8 @@ class CommandDispatcher {
   std::uint16_t seq_counter_ = 1;
   ResultFn result_fn_ = nullptr;
   void* result_ctx_ = nullptr;
+  AliveFn alive_fn_ = nullptr;
+  void* alive_ctx_ = nullptr;
 };
 
 // ---- implementation -------------------------------------------------------
@@ -140,6 +151,15 @@ bool CommandDispatcher<Registry, MaxPending>::send(std::uint16_t entity_id,
   slot->attempts = 0;
   const std::uint16_t seq = slot->seq;
 
+  if (alive_fn_ != nullptr && !alive_fn_(alive_ctx_, slot->chip_id)) {
+    seq_out = seq;
+    if (result_fn_ != nullptr) {
+      result_fn_(result_ctx_, seq, entity_id, attr_id, hubproto::CmdAckStatus::Unreachable);
+    }
+    slot->in_use = false;
+    return true;
+  }
+
   transmit(*slot, now_ms);  // an ACK may arrive synchronously and free the slot
   seq_out = seq;
   return true;
@@ -168,6 +188,14 @@ template <typename Registry, std::size_t MaxPending>
 void CommandDispatcher<Registry, MaxPending>::poll(std::uint32_t now_ms) noexcept {
   for (auto& p : pending_) {
     if (!p.in_use) continue;
+    if (alive_fn_ != nullptr && !alive_fn_(alive_ctx_, p.chip_id)) {
+      if (result_fn_ != nullptr) {
+        result_fn_(result_ctx_, p.seq, p.entity_id, p.attr_id,
+                   hubproto::CmdAckStatus::Unreachable);
+      }
+      p.in_use = false;
+      continue;
+    }
     if ((now_ms - p.sent_ms) < cfg_.timeout_ms) continue;
 
     if (p.attempts < 1 + cfg_.max_retries) {

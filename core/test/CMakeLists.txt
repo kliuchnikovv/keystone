@@ -7,6 +7,7 @@ add_executable(core_tests
   test_radio_coordinator.cpp
   test_state_machine.cpp
   test_command_dispatcher.cpp
+  test_chip_monitor.cpp
   test_rule_engine.cpp
   test_entity_names.cpp
   test_timer_table.cpp

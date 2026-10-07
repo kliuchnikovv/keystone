@@ -209,3 +209,66 @@ TEST_CASE("a CMD_ACK with an unknown seq is ignored") {
 
   CHECK(log.results.empty());
 }
+
+namespace {
+struct Alive {
+  bool up = true;
+  static bool fn(void* ctx, std::uint8_t) { return static_cast<Alive*>(ctx)->up; }
+};
+}  // namespace
+
+TEST_CASE("a command to a dead chip fails at once, without being sent") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  declare_light(reg, 0x01, 0x0020);
+  core::CommandDispatcher<Registry> disp(brain, reg);
+  AckChip ackchip{&chip};
+  chip.subscribe(&AckChip::on, &ackchip);
+  ResultLog log;
+  disp.on_result(&ResultLog::on, &log);
+  Alive alive;
+  alive.up = false;
+  disp.set_alive_filter(&Alive::fn, &alive);
+
+  std::uint16_t seq = 0;
+  REQUIRE(disp.send(0x0020, 0x01, Value::make_bool(true), 0, seq));
+  CHECK(ackchip.received == 0);
+  REQUIRE(log.results.size() == 1);
+  CHECK(log.results[0].seq == seq);
+  CHECK(log.results[0].status == CmdAckStatus::Unreachable);
+  CHECK(disp.pending_count() == 0);
+
+  alive.up = true;  // back: works again
+  REQUIRE(disp.send(0x0020, 0x01, Value::make_bool(true), 0, seq));
+  CHECK(ackchip.received == 1);
+}
+
+TEST_CASE("a pending command fails fast when its chip goes dead") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  declare_light(reg, 0x01, 0x0020);
+  core::CommandDispatcher<Registry> disp(brain, reg);
+  AckChip ackchip{&chip};
+  ackchip.do_ack = false;  // never acks -> stays pending
+  chip.subscribe(&AckChip::on, &ackchip);
+  ResultLog log;
+  disp.on_result(&ResultLog::on, &log);
+  Alive alive;
+  disp.set_alive_filter(&Alive::fn, &alive);
+
+  std::uint16_t seq = 0;
+  REQUIRE(disp.send(0x0020, 0x01, Value::make_bool(true), 0, seq));
+  CHECK(disp.pending_count() == 1);
+  alive.up = false;
+  disp.poll(10);  // well before the retry timeout
+  REQUIRE(log.results.size() == 1);
+  CHECK(log.results[0].status == CmdAckStatus::Unreachable);
+  CHECK(disp.pending_count() == 0);
+  CHECK(ackchip.received == 1);  // no retries were sent
+}
