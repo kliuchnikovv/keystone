@@ -57,6 +57,7 @@
 #include "core/command_dispatcher.hpp"
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
+#include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
 #if __has_include("wifi_secrets.h")
@@ -197,10 +198,16 @@ class ChipRouter final : public core::Bus {
 
   bool publish(const hubproto::Header& h, const std::uint8_t* payload,
                std::size_t len) noexcept override {
+    // UartTransport::publish encodes into a shared buffer, so concurrent
+    // publishers (main loop, UART RX tasks forwarding, the OTA task) must not
+    // interleave. The router is the single funnel, so lock here.
+    xSemaphoreTakeRecursive(pub_mtx_, portMAX_DELAY);
+    bool ok = false;
     for (int i = 0; i < n_binds_; ++i) {
-      if (binds_[i].chip_id == h.chip_id) return binds_[i].bus->publish(h, payload, len);
+      if (binds_[i].chip_id == h.chip_id) { ok = binds_[i].bus->publish(h, payload, len); break; }
     }
-    return false;  // unknown chip: nowhere to send
+    xSemaphoreGiveRecursive(pub_mtx_);
+    return ok;  // false for an unknown chip: nowhere to send
   }
 
   bool subscribe(MessageFn fn, void* ctx) noexcept override {
@@ -226,6 +233,7 @@ class ChipRouter final : public core::Bus {
     for (int i = 0; i < n_subs_; ++i) subs_[i].fn(subs_[i].ctx, h, p, len);
   }
 
+  SemaphoreHandle_t pub_mtx_ = xSemaphoreCreateRecursiveMutex();
   Bind binds_[kMaxBinds] = {};
   int n_binds_ = 0;
   Sub subs_[kMaxSubs] = {};
@@ -727,6 +735,53 @@ int cmd_name(int argc, char** argv) {
   return 1;
 }
 
+// ota <chip> <url> <sha256> | ota status | ota abort. Not routed through the
+// request queue: OtaJob is self-contained and thread-safe.
+fw::OtaJob* g_ota = nullptr;
+
+bool parse_chip(const char* s, std::uint8_t& out) {
+  if (std::strcmp(s, "zigbee") == 0 || std::strcmp(s, "1") == 0 || std::strcmp(s, "0x01") == 0) {
+    out = kZigbeeChipId;
+    return true;
+  }
+  if (std::strcmp(s, "thread") == 0 || std::strcmp(s, "2") == 0 || std::strcmp(s, "0x02") == 0) {
+    out = kThreadChipId;
+    return true;
+  }
+  return false;
+}
+
+int cmd_ota(int argc, char** argv) {
+  if (g_ota == nullptr) { printf("ota not ready\n"); return 1; }
+  if (argc == 2 && std::strcmp(argv[1], "status") == 0) {
+    char buf[160];
+    g_ota->describe(buf, sizeof(buf));
+    printf("%s", buf);
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "abort") == 0) {
+    g_ota->abort();
+    printf("abort requested\n");
+    return 0;
+  }
+  std::uint8_t chip = 0;
+  if (argc != 4 || !parse_chip(argv[1], chip)) {
+    printf("usage:\n"
+           "  ota <zigbee|thread> <http(s)://url> <sha256-hex>  - update a C6 over the link\n"
+           "  ota status                                        - progress / last result\n"
+           "  ota abort                                         - stop the running update\n");
+    return 1;
+  }
+  char err[96];
+  if (!g_ota->start(chip, argv[2], argv[3], err, sizeof(err))) {
+    printf("ota: %s\n", err);
+    return 1;
+  }
+  printf("ota started for chip 0x%02x; watch `ota status` (the chip reboots at the end)\n",
+         static_cast<unsigned>(chip));
+  return 0;
+}
+
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
   c.command = name;
@@ -763,6 +818,7 @@ void start_console() {
   reg_cmd("wifi_scan", "scan for nearby Wi-Fi networks", &cmd_wifi_scan);
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
+  reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | status | abort - update a C6 over the link", &cmd_ota);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -807,6 +863,9 @@ extern "C" void app_main(void) {
   static core::StateMachine<Registry> sm(bus, reg);
   static Dispatcher disp(bus, reg);
   static Rules rules(disp, &now_ms, nullptr);
+
+  static fw::OtaJob ota_job(bus);
+  g_ota = &ota_job;
 
   disp.on_result(&on_cmd_result, nullptr);
   bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
