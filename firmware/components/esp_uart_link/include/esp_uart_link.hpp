@@ -22,7 +22,7 @@ class EspUartLink final : public core::ByteLink {
     uart_port_t port = UART_NUM_1;  // UART0 is the USB console; use UART1 for the link
     int tx_gpio = -1;
     int rx_gpio = -1;
-    int baud = 115200;
+    int baud = 921600;  // both ends must match; ~8x OTA speed (docs/ota.md)
     int rx_buffer = 1024;  // must be > 128
     int tx_buffer = 1024;
     int rx_chunk = 256;    // bytes read per uart_read_bytes() call

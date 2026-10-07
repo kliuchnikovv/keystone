@@ -29,8 +29,11 @@ OTA_END                  ───────────▶   check size + SHA
   `RadioCoordinator` resyncs (wipes the chip's entities) on any boot_id change.
 - Timeouts (sender): BEGIN 30 s (slot erase), chunk 1 s × 5 retries, END 20 s.
   The chip drops a transfer that is silent for 15 s.
-- Speed: measured ~8.5 KB/s (about 80% of the 115200-baud line), 667 KB in
-  ~78 s. The UART RX loop must not ask `uart_read_bytes` for a full buffer: it
+- Speed: the link runs at 921600 baud (`EspUartLink::Config::baud`, both ends
+  must match, so changing it needs a USB flash of every chip). Measured ~39 KB/s,
+  667 KB in 17 s (was ~8.5 KB/s / 78 s at 115200); thread-c6's 1.68 MB took 194 s
+  at 115200. Now stop-and-wait latency (flash write + task wakeups) dominates; a
+  multi-chunk window would be the next step. The UART RX loop must not ask `uart_read_bytes` for a full buffer: it
   only returns early on timeout, which cost ~20 ms per short frame (acks) and
   made the same transfer take 111 s.
 
