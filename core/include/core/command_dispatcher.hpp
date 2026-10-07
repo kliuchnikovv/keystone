@@ -47,6 +47,15 @@ class CommandDispatcher {
     alive_ctx_ = ctx;
   }
 
+  // Called for every command the hub sends, before it goes out (and even if the
+  // chip turns out to be dead) — the hook for "remember what we asked for".
+  using SendObserverFn = void (*)(void* ctx, std::uint16_t entity_id,
+                                  std::uint8_t attr_id, const hubproto::Value& v);
+  void on_send(SendObserverFn fn, void* ctx) noexcept {
+    send_obs_ = fn;
+    send_obs_ctx_ = ctx;
+  }
+
   // Send a COMMAND for entity_id/attr_id with value `v`. Returns false if the
   // entity is unknown, the attribute is unknown or the value type mismatches, or
   // the pending table is full. On success `seq_out` receives the assigned seq.
@@ -92,6 +101,8 @@ class CommandDispatcher {
   void* result_ctx_ = nullptr;
   AliveFn alive_fn_ = nullptr;
   void* alive_ctx_ = nullptr;
+  SendObserverFn send_obs_ = nullptr;
+  void* send_obs_ctx_ = nullptr;
 };
 
 // ---- implementation -------------------------------------------------------
@@ -141,6 +152,8 @@ bool CommandDispatcher<Registry, MaxPending>::send(std::uint16_t entity_id,
     if (!p.in_use) { slot = &p; break; }
   }
   if (slot == nullptr) return false;
+
+  if (send_obs_ != nullptr) send_obs_(send_obs_ctx_, entity_id, attr_id, v);
 
   slot->in_use = true;
   slot->seq = next_seq();

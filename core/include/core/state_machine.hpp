@@ -31,6 +31,17 @@ class StateMachine {
   // Register a change handler. Returns false if the table is full.
   bool on_change(ChangeFn fn, void* ctx) noexcept;
 
+  // Called for EVERY applied STATE entry, changed or not. `had_before` is false
+  // for the first value learned for the attribute (after a boot, or a chip
+  // reboot cleared the registry); `changed` says whether the value differs.
+  using ReportFn = void (*)(void* ctx, std::uint16_t entity_id, std::uint8_t attr_id,
+                            const hubproto::Value& value, bool had_before, bool changed);
+  bool on_report(ReportFn fn, void* ctx) noexcept {
+    if (fn == nullptr || report_count_ >= kMaxReportSubs) return false;
+    report_subs_[report_count_++] = {fn, ctx};
+    return true;
+  }
+
  private:
   static void on_msg(void* ctx, const hubproto::Header& h,
                      const std::uint8_t* payload, std::size_t len) noexcept {
@@ -50,6 +61,14 @@ class StateMachine {
   Registry& reg_;
   Sub subs_[MaxSubscribers];
   int sub_count_ = 0;
+
+  static constexpr int kMaxReportSubs = 2;
+  struct ReportSub {
+    ReportFn fn = nullptr;
+    void* ctx = nullptr;
+  };
+  ReportSub report_subs_[kMaxReportSubs];
+  int report_count_ = 0;
 };
 
 // ---- implementation -------------------------------------------------------
@@ -95,8 +114,10 @@ void StateMachine<Registry, MaxSubscribers>::handle(const hubproto::Header& h,
     hubproto::Value previous{};
     const bool had = reg_.get_value(r.entity_id, attr_id, previous);
     if (!reg_.set_value(r.entity_id, attr_id, value)) continue;
-    if (!had || previous != value) {
-      notify(r.entity_id, attr_id, value);
+    const bool changed = !had || previous != value;
+    if (changed) notify(r.entity_id, attr_id, value);
+    for (int i = 0; i < report_count_; ++i) {
+      report_subs_[i].fn(report_subs_[i].ctx, r.entity_id, attr_id, value, had, changed);
     }
   }
 }
