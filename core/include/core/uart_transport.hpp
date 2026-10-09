@@ -22,6 +22,13 @@ class UartTransport final : public Bus {
                std::size_t payload_len) noexcept override;
   bool subscribe(MessageFn fn, void* ctx) noexcept override;
 
+  // Cumulative link statistics. rx/tx count frames this transport successfully
+  // received/sent; bad counts inbound blocks the frame layer dropped (COBS/CRC/
+  // unknown type). Used by the co-processor self entity (device_type=Chip).
+  std::size_t rx_frames() const noexcept { return rx_frames_; }
+  std::size_t tx_frames() const noexcept { return tx_frames_; }
+  std::size_t bad_frames() const noexcept { return reader_.bad_frames(); }
+
   static constexpr int kMaxSubscribers = 4;
 
  private:
@@ -37,6 +44,8 @@ class UartTransport final : public Bus {
   hubproto::FrameReader<> reader_;
   Subscriber subs_[kMaxSubscribers];
   int sub_count_ = 0;
+  std::size_t rx_frames_ = 0;
+  std::size_t tx_frames_ = 0;
   std::uint8_t out_[hubproto::kMaxFrameSize];
 };
 

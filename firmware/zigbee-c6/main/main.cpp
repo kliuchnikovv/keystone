@@ -244,11 +244,24 @@ void publish_locked(const hubproto::Header& h, const std::uint8_t* buf,
   xSemaphoreGive(g_bus_mtx);
 }
 
-// Fires from an esp_timer; heartbeats every 5s so the brain can (a) see this
-// chip's liveness in `chips` and (b) self-heal after a brain reboot even
-// without a fresh HELLO from our side (any inbound message wakes up
-// RadioCoordinator's QUERY on an unknown chip).
 void heartbeat_cb(void* /*arg*/) {
+  const std::uint32_t now_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
+  hubproto::ChipSelf self{};
+  self.uptime_s = now_s;
+  self.heap_free = esp_get_free_heap_size();
+  self.boot_id = g_boot_id;
+  if (g_bus != nullptr) {
+    self.rx_frames = static_cast<std::uint32_t>(g_bus->rx_frames());
+    self.tx_frames = static_cast<std::uint32_t>(g_bus->tx_frames());
+    self.crc_errors = static_cast<std::uint16_t>(g_bus->bad_frames());
+  }
+
+  std::uint8_t buf[64];
+  auto r = hubproto::encode_chip_self_state(kOwnChipId, self, buf, sizeof(buf));
+  if (r.ok) {
+    publish_locked(make_header(hubproto::MsgType::State, kOwnChipId, 0),
+                   buf, r.len);
+  }
   publish_locked(make_header(hubproto::MsgType::Heartbeat, 0x0000, 0), nullptr, 0);
 }
 
@@ -258,6 +271,13 @@ void send_hello() {
 }
 
 void send_declarations() {
+  std::uint8_t sbuf[64];
+  auto sr = hubproto::encode_chip_self_declare(kOwnChipId, sbuf, sizeof(sbuf));
+  if (sr.ok) {
+    publish_locked(make_header(hubproto::MsgType::Declare, kOwnChipId, 0),
+                   sbuf, sr.len);
+  }
+
   const std::uint8_t rw_report =
       hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable;
   const std::uint8_t r_report =

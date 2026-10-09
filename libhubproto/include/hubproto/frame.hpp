@@ -46,11 +46,13 @@ class FrameReader {
  public:
   bool push(std::uint8_t b) noexcept {
     if (b == 0x00) {
+      const bool had_bytes = accum_len_ > 0 || overflow_;
       const bool ok = !overflow_ && accum_len_ > 0 &&
                       detail::decode_block(accum_, accum_len_, decoded_,
                                            sizeof(decoded_), header_, payload_len_);
       accum_len_ = 0;
       overflow_ = false;
+      if (had_bytes && !ok) ++bad_frames_;
       return ok;
     }
     if (accum_len_ < sizeof(accum_)) {
@@ -65,11 +67,17 @@ class FrameReader {
   const std::uint8_t* payload() const noexcept { return decoded_ + kHeaderSize; }
   std::size_t payload_len() const noexcept { return payload_len_; }
 
+  // Number of non-empty blocks dropped since construction (bad COBS, short
+  // block, CRC mismatch, unknown type, or an overlong frame). A link-quality
+  // signal, surfaced through the chip self entity's crc_errors.
+  std::size_t bad_frames() const noexcept { return bad_frames_; }
+
  private:
   std::uint8_t accum_[Cap];
   std::uint8_t decoded_[Cap];
   std::size_t accum_len_ = 0;
   std::size_t payload_len_ = 0;
+  std::size_t bad_frames_ = 0;
   Header header_{};
   bool overflow_ = false;
 };

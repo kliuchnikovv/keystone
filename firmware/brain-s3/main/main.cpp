@@ -439,6 +439,7 @@ const char* dt_name(hubproto::DeviceType t) {
     case hubproto::DeviceType::Occupancy: return "occupancy";
     case hubproto::DeviceType::Contact: return "contact";
     case hubproto::DeviceType::Button: return "button";
+    case hubproto::DeviceType::Chip: return "chip";
   }
   return "?";
 }
@@ -1670,6 +1671,29 @@ extern "C" void app_main(void) {
                 static_cast<unsigned>(ci != nullptr ? ci->boot_id : 0),
                 static_cast<unsigned long>(ci != nullptr ? ci->reboots : 0),
                 g_monitor->recent_reboots(id, now)));
+            hubproto::Value v{};
+            if (reg.get_value(id, hubproto::chip_attr::kHeapFree, v)) {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "  telemetry: heap %lu, ",
+                  static_cast<unsigned long>(v.as_u32())));
+            }
+            if (reg.get_value(id, hubproto::chip_attr::kUptimeS, v)) {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "uptime %lu s, ",
+                  static_cast<unsigned long>(v.as_u32())));
+            }
+            if (reg.get_value(id, hubproto::chip_attr::kTxFrames, v)) {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "tx_frames %lu, ",
+                  static_cast<unsigned long>(v.as_u32())));
+            }
+            if (reg.get_value(id, hubproto::chip_attr::kCrcErrors, v)) {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "crc_errors %u\n",
+                  static_cast<unsigned>(v.as_u16())));
+            } else if (reg.find(id) != nullptr) {
+              off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, "\n"));
+            }
           }
           if (off == 0) std::snprintf(r->out, r->out_cap, "no chips seen yet\n");
           break;

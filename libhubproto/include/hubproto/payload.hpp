@@ -26,6 +26,10 @@ enum class DeviceType : std::uint8_t {
   Occupancy = 0x07,
   Contact   = 0x08,
   Button    = 0x09,
+  // The co-processor itself, as a first-class entity (entity_id 0x0000): its
+  // telemetry (uptime, heap, link counters) reaches the brain as ordinary
+  // STATE updates. Not a Matter accessory — the bridge skips it.
+  Chip      = 0x0A,
 };
 
 // Value encoding of an attribute (SPEC §6.2).
@@ -184,6 +188,38 @@ bool state_next_attr(StateReader& reader, std::uint8_t& attr_id) noexcept;
 // Consume the next entry's attr_id + value, interpreting the value as `vt`.
 // Returns false (and clears reader.valid) on a bad type or truncation.
 bool state_consume(StateReader& reader, ValueType vt, Value& out) noexcept;
+
+// ---- Chip self entity (device_type=Chip, entity_id 0x0000) ----------------
+// Every co-processor declares one self entity and periodically reports its
+// health as a single STATE. attr_id semantics are scoped to device_type (SPEC
+// §5), so these ids don't clash with a light's on_off(0x01) etc. The brain gets
+// chip health through the ordinary registry/STATE plumbing — no new message.
+namespace chip_attr {
+inline constexpr std::uint8_t kUptimeS   = 0x70;  // u32 seconds since boot
+inline constexpr std::uint8_t kHeapFree  = 0x71;  // u32 bytes of free heap
+inline constexpr std::uint8_t kBootId    = 0x72;  // u8  reboot counter (NVS)
+inline constexpr std::uint8_t kRxFrames  = 0x73;  // u32 frames received from the brain
+inline constexpr std::uint8_t kTxFrames  = 0x74;  // u32 frames sent to the brain
+inline constexpr std::uint8_t kCrcErrors = 0x75;  // u16 frames dropped (bad CRC/COBS)
+}  // namespace chip_attr
+
+// Canonical telemetry carried by the self entity.
+struct ChipSelf {
+  std::uint32_t uptime_s;
+  std::uint32_t heap_free;
+  std::uint8_t  boot_id;
+  std::uint32_t rx_frames;
+  std::uint32_t tx_frames;
+  std::uint16_t crc_errors;
+};
+
+// Encode the self entity's DECLARE (device_type=Chip, six attrs).
+EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t* out,
+                                      std::size_t cap) noexcept;
+
+// Encode a STATE update for the self entity carrying all six attributes at once.
+EncodeResult encode_chip_self_state(std::uint16_t self_entity_id, const ChipSelf& s,
+                                    std::uint8_t* out, std::size_t cap) noexcept;
 
 // ---- OTA (firmware update of a co-processor) ------------------------------
 // Stop-and-wait transfer driven by the brain. The header `seq` of each request

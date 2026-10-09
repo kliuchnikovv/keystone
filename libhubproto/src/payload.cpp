@@ -1,5 +1,7 @@
 #include "hubproto/payload.hpp"
 
+#include "hubproto/message.hpp"  // kSelfEntityId
+
 namespace hubproto {
 
 std::size_t value_size(ValueType vt) noexcept {
@@ -284,6 +286,36 @@ bool state_consume(StateReader& reader, ValueType vt, Value& out) noexcept {
   reader.p += 1 + sz;
   --reader.remaining;
   return true;
+}
+
+// ---- Chip self entity -----------------------------------------------------
+
+EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t* out,
+                                      std::size_t cap) noexcept {
+  const std::uint8_t ro =
+      kFlagReadable | kFlagReportable;  // telemetry is read-only
+  const AttrDecl attrs[6] = {
+      {chip_attr::kUptimeS,   ValueType::U32, ro},
+      {chip_attr::kHeapFree,  ValueType::U32, ro},
+      {chip_attr::kBootId,    ValueType::U8,  ro},
+      {chip_attr::kRxFrames,  ValueType::U32, ro},
+      {chip_attr::kTxFrames,  ValueType::U32, ro},
+      {chip_attr::kCrcErrors, ValueType::U16, ro},
+  };
+  return encode_declare(self_entity_id, DeviceType::Chip, attrs, 6, out, cap);
+}
+
+EncodeResult encode_chip_self_state(std::uint16_t self_entity_id, const ChipSelf& s,
+                                    std::uint8_t* out, std::size_t cap) noexcept {
+  const StateEntry e[6] = {
+      {chip_attr::kUptimeS,   Value::make_u32(s.uptime_s)},
+      {chip_attr::kHeapFree,  Value::make_u32(s.heap_free)},
+      {chip_attr::kBootId,    Value::make_u8(s.boot_id)},
+      {chip_attr::kRxFrames,  Value::make_u32(s.rx_frames)},
+      {chip_attr::kTxFrames,  Value::make_u32(s.tx_frames)},
+      {chip_attr::kCrcErrors, Value::make_u16(s.crc_errors)},
+  };
+  return encode_state(self_entity_id, e, 6, out, cap);
 }
 
 // ---- OTA ------------------------------------------------------------------

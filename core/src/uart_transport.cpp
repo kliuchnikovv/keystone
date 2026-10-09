@@ -11,7 +11,9 @@ bool UartTransport::publish(const hubproto::Header& header,
                             std::size_t payload_len) noexcept {
   auto r = hubproto::encode_frame(header, payload, payload_len, out_, sizeof(out_));
   if (!r.ok) return false;
-  return link_.write(out_, r.len);
+  const bool ok = link_.write(out_, r.len);
+  if (ok) ++tx_frames_;
+  return ok;
 }
 
 bool UartTransport::subscribe(MessageFn fn, void* ctx) noexcept {
@@ -31,6 +33,7 @@ void UartTransport::handle_bytes(const std::uint8_t* data,
                                  std::size_t len) noexcept {
   for (std::size_t i = 0; i < len; ++i) {
     if (reader_.push(data[i])) {
+      ++rx_frames_;
       const hubproto::Header& h = reader_.header();
       const std::uint8_t* payload = reader_.payload();
       const std::size_t plen = reader_.payload_len();

@@ -291,10 +291,17 @@ void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
 void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
                     const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
-    case hubproto::MsgType::Query:
+    case hubproto::MsgType::Query: {
       g_ota_confirm.note_link_ok();  // the brain is talking to us (docs/ota.md)
+      std::uint8_t sbuf[64];
+      auto sr = hubproto::encode_chip_self_declare(kOwnChipId, sbuf, sizeof(sbuf));
+      if (sr.ok) {
+        g_bus->publish(header(hubproto::MsgType::Declare, kOwnChipId),
+                       sbuf, sr.len);
+      }
       g_bus->publish(header(hubproto::MsgType::DeclareEnd), nullptr, 0);
       return;
+    }
     case hubproto::MsgType::Declare: {
       hubproto::DeclareView view{};
       if (!hubproto::decode_declare(payload, len, view)) return;
@@ -489,6 +496,20 @@ extern "C" void app_main() {
 
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(5000));
+    const std::uint32_t now_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
+    hubproto::ChipSelf self{};
+    self.uptime_s = now_s;
+    self.heap_free = esp_get_free_heap_size();
+    self.boot_id = g_boot_id;
+    self.rx_frames = static_cast<std::uint32_t>(raw_bus.rx_frames());
+    self.tx_frames = static_cast<std::uint32_t>(raw_bus.tx_frames());
+    self.crc_errors = static_cast<std::uint16_t>(raw_bus.bad_frames());
+
+    std::uint8_t buf[64];
+    auto r = hubproto::encode_chip_self_state(kOwnChipId, self, buf, sizeof(buf));
+    if (r.ok) {
+      bus.publish(header(hubproto::MsgType::State, kOwnChipId), buf, r.len);
+    }
     bus.publish(header(hubproto::MsgType::Heartbeat), nullptr, 0);
   }
 }
