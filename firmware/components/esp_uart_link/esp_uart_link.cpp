@@ -1,5 +1,6 @@
 #include "esp_uart_link.hpp"
 
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -24,8 +25,13 @@ esp_err_t EspUartLink::begin() noexcept {
   if (err != ESP_OK) return err;
   err = uart_param_config(cfg_.port, &uc);
   if (err != ESP_OK) return err;
-  return uart_set_pin(cfg_.port, cfg_.tx_gpio, cfg_.rx_gpio, UART_PIN_NO_CHANGE,
-                      UART_PIN_NO_CHANGE);
+  err = uart_set_pin(cfg_.port, cfg_.tx_gpio, cfg_.rx_gpio, UART_PIN_NO_CHANGE,
+                     UART_PIN_NO_CHANGE);
+  if (err != ESP_OK) return err;
+  // The peer's TX is high-Z while it resets or boots (or is being flashed), so an
+  // undriven RX line picks up noise and shows as bad frames (crc_errors). A UART
+  // idles high — pull RX up so a silent peer reads as idle, not as garbage.
+  return gpio_set_pull_mode(static_cast<gpio_num_t>(cfg_.rx_gpio), GPIO_PULLUP_ONLY);
 }
 
 void EspUartLink::start() noexcept {

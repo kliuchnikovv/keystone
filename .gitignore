@@ -5,6 +5,7 @@ cmake-build-*/
 
 # ESP-IDF per-app build output
 firmware/*/build/
+firmware/*/build-docker/
 firmware/*/sdkconfig
 firmware/*/sdkconfig.old
 firmware/*/managed_components/
