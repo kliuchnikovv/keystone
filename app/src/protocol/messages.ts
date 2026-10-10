@@ -131,13 +131,21 @@ export interface Welcome {
   v: number;
   hub: HubInfo;
 }
+/**
+ * The snapshot may be split into parts that each fit one frame. Part 0 resets the
+ * client's lists, every part appends the items it carries, and the part with
+ * `last: true` completes it. A single-frame snapshot is `part: 0, last: true`
+ * (both fields may then be omitted). Sections absent from a part carry nothing.
+ */
 export interface Snapshot {
   type: 'snapshot';
-  entities: Entity[];
-  chips: Chip[];
-  rules: Rule[];
-  schedules: Schedule[];
-  timers: Timer[];
+  part?: number;
+  last?: boolean;
+  entities?: Entity[];
+  chips?: Chip[];
+  rules?: Rule[];
+  schedules?: Schedule[];
+  timers?: Timer[];
 }
 export interface StateEvent {
   type: 'state';

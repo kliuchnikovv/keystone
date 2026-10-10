@@ -59,10 +59,16 @@ No `hello` ⇒ no other message is processed.
 
 ## 4. Snapshot and events (hub → client)
 
-`snapshot` is the whole picture right after `welcome`:
+`snapshot` is the whole picture right after `welcome`. A frame is at most 4096
+bytes, so a big home is sent in **parts**: `part` counts from 0, **part 0 resets
+the client's lists**, every part appends the items it carries, and the part with
+`"last": true` completes the snapshot (a small home is one frame with `part: 0`,
+`last: true`). Sections a part does not carry are simply absent. The hub also
+re-sends a snapshot (part 0 again) if it ever had to drop events for a client, so
+a client must treat part 0 as "start over" at any time:
 
 ```jsonc
-{ "type": "snapshot",
+{ "type": "snapshot", "part": 0, "last": true,
   "entities": [
     { "id": 256, "name": "plug1", "chip": 1, "device": "switch",
       "attrs": [

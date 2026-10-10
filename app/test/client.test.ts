@@ -115,6 +115,49 @@ describe('handshake', () => {
   });
 });
 
+describe('split snapshot', () => {
+  it('a snapshot in several parts is assembled and only then ready', async () => {
+    await hub.close();
+    hub = await MockHub.start({ helloTimeoutMs: 300, ackDelayMs: 10, snapshotChunk: 7 });
+    hub.addEntities(30); // 3 default + 30 = 33 entities -> 5 frames of 7
+    const c = client({ url: hub.url });
+    const statuses: string[] = [];
+    const sizes: number[] = [];
+    c.subscribe(() => {
+      statuses.push(c.getSnapshot().status);
+      sizes.push(c.getSnapshot().entities.length);
+    });
+    c.connect();
+    await ready(c);
+    const s = c.getSnapshot();
+    expect(s.entities).toHaveLength(33);
+    expect(new Set(s.entities.map((e) => e.id)).size).toBe(33);
+    expect(s.chips).toHaveLength(2);
+    // Never 'ready' while only part of the home was known.
+    const firstReady = statuses.indexOf('ready');
+    expect(sizes[firstReady]).toBe(33);
+    expect(sizes.some((n) => n > 0 && n < 33)).toBe(true);
+  });
+
+  it('a resync replaces the lists instead of duplicating them', async () => {
+    await hub.close();
+    hub = await MockHub.start({ helloTimeoutMs: 300, ackDelayMs: 10, snapshotChunk: 5 });
+    hub.addEntities(12);
+    const c = client({ url: hub.url });
+    c.connect();
+    await ready(c);
+    hub.setValue(0x0200, 0x01, true);
+    await until(() => attrValue(c.getSnapshot(), 0x0200, 0x01) === true, 'value before resync');
+    hub.resync();
+    await new Promise((r) => setTimeout(r, 150));
+    const s = c.getSnapshot();
+    expect(s.entities).toHaveLength(15);
+    expect(s.chips).toHaveLength(2);
+    expect(s.status).toBe('ready');
+    expect(attrValue(s, 0x0200, 0x01)).toBe(true);
+  });
+});
+
 describe('events', () => {
   it('a device-side change reaches every connected client', async () => {
     const a = client();

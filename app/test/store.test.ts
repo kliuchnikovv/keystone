@@ -21,6 +21,23 @@ describe('reduce', () => {
     expect(s.chips.map((c) => c.label)).toEqual(['zigbee', 'thread']);
   });
 
+  it('a split snapshot is only ready after the last part, and part 0 starts over', () => {
+    const ents = defaultEntities();
+    let s = withStatus(initialState, 'authenticating');
+    s = reduce(s, { type: 'snapshot', part: 0, last: false, entities: ents.slice(0, 2) });
+    expect(s.status).toBe('authenticating');
+    expect(s.entities).toHaveLength(2);
+    s = reduce(s, { type: 'snapshot', part: 1, last: true, entities: ents.slice(2), chips: defaultChips() });
+    expect(s.status).toBe('ready');
+    expect(s.entities.map((e) => e.id)).toEqual(ents.map((e) => e.id));
+    expect(s.chips).toHaveLength(2);
+    // A resync (part 0 again) replaces, it does not duplicate.
+    s = reduce(s, { type: 'snapshot', part: 0, last: true, entities: ents.slice(0, 1), chips: [] });
+    expect(s.entities).toHaveLength(1);
+    expect(s.chips).toEqual([]);
+    expect(s.status).toBe('ready');
+  });
+
   it('a state event changes one attribute and keeps untouched objects identical', () => {
     const a = reduce(initialState, snapshot());
     const b = reduce(a, { type: 'state', entity: 0x0100, attr: 0x13, value: 42 });

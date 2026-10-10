@@ -35,6 +35,8 @@ export interface MockHubOptions {
   ackDelayMs?: number;
   lockoutMs?: number;
   name?: string;
+  /** Entities per snapshot frame (0 = everything in one frame), to exercise parts. */
+  snapshotChunk?: number;
 }
 
 interface TimerEntry {
@@ -140,6 +142,7 @@ export class MockHub {
       ackDelayMs: 20,
       lockoutMs: 60_000,
       name: 'mock-home',
+      snapshotChunk: 0,
       ...options,
     };
     const wss = new WebSocketServer({ port: opts.port, host: '127.0.0.1', maxPayload: MAX_FRAME_BYTES });
@@ -278,14 +281,44 @@ export class MockHub {
       v: PROTOCOL_VERSION,
       hub: { name: this.opts.name, fw: 'mock', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true },
     });
-    this.sendTo(c.ws, {
-      type: 'snapshot',
-      entities: this.entities,
-      chips: this.chips,
-      rules: this.rules,
-      schedules: this.schedules,
-      timers: this.timerList(),
-    });
+    this.sendSnapshot(c.ws);
+  }
+
+  /** Send the whole picture, in parts of `snapshotChunk` entities if configured. */
+  private sendSnapshot(ws: WebSocket): void {
+    const n = this.opts.snapshotChunk > 0 ? this.opts.snapshotChunk : Math.max(1, this.entities.length);
+    let part = 0;
+    for (let i = 0; i < this.entities.length || part === 0; i += n) {
+      const lastEntities = i + n >= this.entities.length;
+      this.sendTo(ws, {
+        type: 'snapshot',
+        part: part++,
+        last: lastEntities,
+        entities: this.entities.slice(i, i + n),
+        ...(lastEntities
+          ? { chips: this.chips, rules: this.rules, schedules: this.schedules, timers: this.timerList() }
+          : {}),
+      });
+      if (lastEntities) break;
+    }
+  }
+
+  /** Re-send the snapshot to every client (what the real hub does after an event overflow). */
+  resync(): void {
+    for (const c of this.clients) if (c.authed) this.sendSnapshot(c.ws);
+  }
+
+  /** Add `count` plain switches (ids from 0x0200) to the home, before clients connect. */
+  addEntities(count: number): void {
+    for (let i = 0; i < count; i++) {
+      this.entities.push({
+        id: 0x0200 + i,
+        name: null,
+        chip: 1,
+        device: 'switch',
+        attrs: [attr(0x01, 'on_off', 'bool', ['r', 'w', 'rep'], false)],
+      });
+    }
   }
 
   // ---- commands ---------------------------------------------------------------

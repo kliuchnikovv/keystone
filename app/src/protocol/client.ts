@@ -217,8 +217,8 @@ export class HubClient {
         this.connectionError(m.code);
         return;
       case 'snapshot':
-        this.attempt = 0;
         this.set(reduce(this.state, m));
+        if (this.state.status === 'ready') this.attempt = 0; // handshake fully done
         return;
       default:
         this.set(reduce(this.state, m));

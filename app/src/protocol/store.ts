@@ -59,17 +59,19 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
   switch (m.type) {
     case 'welcome':
       return { ...s, hub: m.hub };
-    case 'snapshot':
-      return {
+    case 'snapshot': {
+      // Part 0 starts over; every part appends; the last one makes the state ready.
+      const base = (m.part ?? 0) === 0 ? initialState : s;
+      const next: HomeState = {
         ...s,
-        status: 'ready',
-        error: null,
-        entities: m.entities,
-        chips: m.chips,
-        rules: m.rules,
-        schedules: m.schedules,
-        timers: m.timers,
+        entities: [...base.entities, ...(m.entities ?? [])],
+        chips: [...base.chips, ...(m.chips ?? [])],
+        rules: [...base.rules, ...(m.rules ?? [])],
+        schedules: [...base.schedules, ...(m.schedules ?? [])],
+        timers: [...base.timers, ...(m.timers ?? [])],
       };
+      return (m.last ?? true) ? { ...next, status: 'ready', error: null } : next;
+    }
     case 'state': {
       let changed = false;
       const entities = s.entities.map((e) => {
