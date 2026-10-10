@@ -103,6 +103,8 @@ The brain core (Phases 3–4) is a set of composable, radio-free components that
 
 - **Brain Wi-Fi + SNTP, persisted timers and entity names** (commit `91de2c2`, earlier than the entries above; checked on the live brain: `time` → `synced: yes`, `name` lists `0x0100 -> plug1`): STA Wi-Fi with auto-reconnect (credentials in gitignored `main/wifi_secrets.h`), SNTP → `time`/`tz` console commands; `core::TimerTable` (v2 stores the remaining delay) and `core::EntityNames` persist to NVS (`ent_names`); every console command takes `<id_or_name>`; `name` sets/clears names.
 
+- **Recurring time-of-day schedules (hardware-verified)**: `core::ScheduleTable` (portable, host-tested: firing/once-per-day/late window/weekday mask/save-load/corruption) + brain console `at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]`, `schedules`, `unschedule <n>`; persisted in NVS `schedules`; local time via `tz`, paused until SNTP sync. A schedule fires once per local day within 10 min after its time; the last-fired day is persisted. Verified: `at 19:06 on plug1` fired at 19:06 (plug off → on), a brain reboot inside the window did not fire it again, bad time/days/entity are rejected. 163/163 host tests. Timers and schedules share `run_action()` (toggle resolves against live state).
+
 ### ESP-IDF component layout
 
 Firmware apps pick up shared code via `EXTRA_COMPONENT_DIRS=../components`. The wrappers in `firmware/components/{hubproto,core}` reference the same sources as the host build (no duplication); `firmware/components/esp_uart_link` holds the only ESP-IDF-specific transport code. App `main` is C++ (`app_main` is `extern "C"`).

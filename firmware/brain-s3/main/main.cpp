@@ -14,6 +14,7 @@
 //   on|off|toggle <id>      switch command (-> CMD_ACK)
 //   in <sec> <on|off> <id>  run a switch action after a delay (a timer)
 //   timers | cancel <n>     list / cancel pending timers
+//   at <HH:MM> <on|off|toggle> <id> [days]   recurring local-time action (schedules, unschedule)
 // Console handlers only enqueue requests; the main loop executes them, so all
 // core access stays single-threaded (the UART RX task is the only other writer).
 //
@@ -60,6 +61,7 @@
 #include "core/ota_verifier.hpp"
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
+#include "core/schedule_table.hpp"
 #include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
@@ -401,6 +403,7 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
 
 // ---- Console <-> main-loop request channel --------------------------------
 enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCEL,
+               REQ_AT, REQ_SCHEDULES, REQ_UNSCHEDULE,
                REQ_CHIPS, REQ_LOG,
                REQ_PAIR, REQ_UNPAIR, REQ_IDENTIFY,
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
@@ -576,6 +579,38 @@ void restore_timers(core::TimerTable<8>& timers, std::uint32_t now_ms, std::uint
         ESP_LOGI(kTag, "restored %u timer(s) from NVS",
                  static_cast<unsigned>(timers.active_count()));
       }
+    }
+  }
+  nvs_close(h);
+}
+
+using Schedules = core::ScheduleTable<8>;
+
+void persist_schedules(const Schedules& sched) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  std::uint8_t buf[Schedules::kHeaderSize + 8 * Schedules::kEntryWireSize];
+  const std::size_t written = sched.save(buf, sizeof(buf));
+  if (sched.active_count() > 0 && written > 0) {
+    nvs_set_blob(h, "schedules", buf, written);
+  } else {
+    nvs_erase_key(h, "schedules");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_schedules(Schedules& sched) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::uint8_t buf[Schedules::kHeaderSize + 8 * Schedules::kEntryWireSize];
+  std::size_t sz = sizeof(buf);
+  if (nvs_get_blob(h, "schedules", buf, &sz) == ESP_OK) {
+    if (sched.load(buf, sz)) {
+      ESP_LOGI(kTag, "restored %u schedule(s) from NVS",
+               static_cast<unsigned>(sched.active_count()));
+    } else {
+      ESP_LOGW(kTag, "stored schedules are corrupt — ignored");
     }
   }
   nvs_close(h);
@@ -920,6 +955,123 @@ bool is_toggle(const hubproto::Value& v) {
 }
 const char* timer_action_text(const hubproto::Value& v) {
   return is_toggle(v) ? "toggle" : (v.as_bool() ? "on" : "off");
+}
+
+// Send a stored action (timer or schedule). A "toggle" is resolved against the live
+// state; an unknown state means there is nothing to flip, so it is skipped.
+void run_action(Dispatcher& disp, Registry& reg, std::uint32_t now, const char* kind,
+                std::size_t slot, std::uint16_t entity_id, std::uint8_t attr_id,
+                const hubproto::Value& val) {
+  hubproto::Value v = val;
+  if (is_toggle(val)) {
+    hubproto::Value cur{};
+    if (!reg.get_value(entity_id, attr_id, cur) || cur.type != hubproto::ValueType::Bool) {
+      ESP_LOGW(kTag, "%s #%u: toggle skipped, state of 0x%04x unknown", kind,
+               static_cast<unsigned>(slot), static_cast<unsigned>(entity_id));
+      return;
+    }
+    v = hubproto::Value::make_bool(!cur.as_bool());
+  }
+  std::uint16_t seq = 0;
+  disp.send(entity_id, attr_id, v, now, seq);
+  ESP_LOGI(kTag, "%s #%u fired: entity 0x%04x attr 0x%02x (seq=%u)", kind,
+           static_cast<unsigned>(slot), static_cast<unsigned>(entity_id),
+           static_cast<unsigned>(attr_id), static_cast<unsigned>(seq));
+}
+
+// "daily" | "weekdays" | "weekends" | comma list of sun,mon,tue,wed,thu,fri,sat.
+bool parse_days(const char* s, std::uint8_t& mask) {
+  if (std::strcmp(s, "daily") == 0) { mask = core::kEveryDay; return true; }
+  if (std::strcmp(s, "weekdays") == 0) { mask = core::kWeekdays; return true; }
+  if (std::strcmp(s, "weekends") == 0) { mask = core::kWeekend; return true; }
+  static const char* const kDay[7] = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"};
+  std::uint8_t m = 0;
+  while (*s != '\0') {
+    int found = -1;
+    for (int d = 0; d < 7; ++d) {
+      if (strncasecmp(s, kDay[d], 3) == 0) { found = d; break; }
+    }
+    if (found < 0) return false;
+    m = static_cast<std::uint8_t>(m | (1u << found));
+    s += 3;
+    if (*s == ',') ++s;
+    else if (*s != '\0') return false;
+  }
+  if (m == 0) return false;
+  mask = m;
+  return true;
+}
+
+const char* days_text(std::uint8_t mask, char* buf, std::size_t cap) {
+  if (mask == core::kEveryDay) return "daily";
+  if (mask == core::kWeekdays) return "weekdays";
+  if (mask == core::kWeekend) return "weekends";
+  static const char* const kDay[7] = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"};
+  std::size_t off = 0;
+  for (int d = 0; d < 7 && off + 5 < cap; ++d) {
+    if ((mask & (1u << d)) == 0) continue;
+    off += static_cast<std::size_t>(
+        std::snprintf(buf + off, cap - off, "%s%s", off ? "," : "", kDay[d]));
+  }
+  return buf;
+}
+
+// at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,...]
+int cmd_at(int argc, char** argv) {
+  static const char* kUsage =
+      "usage: at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n";
+  if (argc < 4 || argc > 5) { printf("%s", kUsage); return 1; }
+  int hh = 0, mm = 0;
+  char tail = 0;
+  if (std::sscanf(argv[1], "%d:%d%c", &hh, &mm, &tail) != 2 || hh < 0 || hh > 23 ||
+      mm < 0 || mm > 59) {
+    printf("bad time '%s' (use HH:MM, 24 h, local time — see `tz`)\n", argv[1]);
+    return 1;
+  }
+  const bool toggle = std::strcmp(argv[2], "toggle") == 0;
+  if (!toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
+    printf("%s", kUsage);
+    return 1;
+  }
+  std::uint8_t days = core::kEveryDay;
+  if (argc == 5 && !parse_days(argv[4], days)) {
+    printf("bad days '%s'\n%s", argv[4], kUsage);
+    return 1;
+  }
+  char buf[160];
+  Req r{};
+  r.kind = REQ_AT;
+  r.target = argv[3];
+  r.val = std::strcmp(argv[2], "on") == 0;
+  r.idx = toggle ? 1 : 0;
+  r.delay_ms = static_cast<std::uint32_t>(hh * 60 + mm);  // minute of day
+  r.id = days;                                           // weekday mask
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_schedules(int /*argc*/, char** /*argv*/) {
+  char buf[640];
+  Req r{};
+  r.kind = REQ_SCHEDULES;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+int cmd_unschedule(int argc, char** argv) {
+  if (argc < 2) { printf("usage: unschedule <n>\n"); return 1; }
+  char buf[64];
+  Req r{};
+  r.kind = REQ_UNSCHEDULE;
+  r.idx = static_cast<int>(std::strtol(argv[1], nullptr, 10));
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
 }
 
 int cmd_in(int argc, char** argv) {
@@ -1267,6 +1419,9 @@ void start_console() {
   reg_cmd("in", "in <sec> <on|off> <id> - run a switch action after a delay", &cmd_in);
   reg_cmd("timers", "list pending timers", &cmd_timers);
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
+  reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
+  reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
+  reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
   reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
   reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);
   reg_cmd("pair", "pair [sec] - open Zigbee network for joining (default 180s)", &cmd_pair);
@@ -1362,6 +1517,11 @@ extern "C" void app_main(void) {
   time_t boot_now = 0;
   if (s_time_synced) time(&boot_now);
   restore_timers(timer_table, now_ms(nullptr), static_cast<std::uint64_t>(boot_now));
+
+  // Recurring time-of-day actions (`at HH:MM …`); they only run once the clock is
+  // synced, in local time (see `tz`).
+  static Schedules schedule_table;
+  restore_schedules(schedule_table);
 
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
@@ -1463,26 +1623,29 @@ extern "C" void app_main(void) {
                         std::uint8_t attr_id, const hubproto::Value& val) {
                        auto* c = static_cast<TimerFireContext*>(ctx);
                        c->fired = true;
-                       std::uint16_t seq = 0;
-                       hubproto::Value v = val;
-                       if (is_toggle(val)) {
-                         // Resolve against the live state; unknown state -> nothing to flip.
-                         hubproto::Value cur{};
-                         if (!c->reg->get_value(entity_id, attr_id, cur) ||
-                             cur.type != hubproto::ValueType::Bool) {
-                           ESP_LOGW(kTag, "timer #%u: toggle skipped, state of 0x%04x unknown",
-                                    static_cast<unsigned>(slot), static_cast<unsigned>(entity_id));
-                           return;
-                         }
-                         v = hubproto::Value::make_bool(!cur.as_bool());
-                       }
-                       c->disp->send(entity_id, attr_id, v, c->now_ms, seq);
-                       ESP_LOGI(kTag, "timer #%u fired: entity 0x%04x attr 0x%02x (seq=%u)",
-                                static_cast<unsigned>(slot), static_cast<unsigned>(entity_id),
-                                static_cast<unsigned>(attr_id), static_cast<unsigned>(seq));
+                       run_action(*c->disp, *c->reg, c->now_ms, "timer", slot, entity_id,
+                                  attr_id, val);
                      }, &fc);
     if (fc.fired) {
       persist_timers(timer_table, t);
+    }
+
+    // Fire due time-of-day schedules (local time; paused until the clock is synced).
+    if (s_time_synced) {
+      const time_t wall = time(nullptr);
+      struct tm lt{};
+      localtime_r(&wall, &lt);
+      const core::LocalTime local{lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday,
+                                  lt.tm_hour, lt.tm_min, lt.tm_wday};
+      const std::size_t n = schedule_table.poll(
+          local,
+          [](void* ctx, std::size_t slot, const Schedules::Schedule& s) {
+            auto* c = static_cast<TimerFireContext*>(ctx);
+            run_action(*c->disp, *c->reg, c->now_ms, "schedule", slot, s.entity_id,
+                       s.attr_id, s.value);
+          },
+          &fc);
+      if (n > 0) persist_schedules(schedule_table);  // keeps last_fired_day across reboots
     }
 
     // Drain console requests (single-threaded core access here).
@@ -1646,6 +1809,65 @@ extern "C" void app_main(void) {
             std::snprintf(r->out, r->out_cap, "cancelled timer #%d\n", r->idx);
           } else {
             std::snprintf(r->out, r->out_cap, "no timer #%d\n", r->idx);
+          }
+          break;
+        }
+        case REQ_AT: {
+          std::uint16_t id = 0;
+          if (!reg.resolve(r->target, id) || reg.find(id) == nullptr) {
+            std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
+            break;
+          }
+          const hubproto::Value action =
+              r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
+          const int minute = static_cast<int>(r->delay_ms);
+          const int slot = schedule_table.add(id, kOnOffAttr, action, minute / 60, minute % 60,
+                                              static_cast<std::uint8_t>(r->id));
+          if (slot < 0) {
+            std::snprintf(r->out, r->out_cap, "no free schedule slot\n");
+            break;
+          }
+          persist_schedules(schedule_table);
+          char dbuf[40];
+          std::snprintf(r->out, r->out_cap, "schedule #%d: %02d:%02d %s 0x%04x -> %s%s\n", slot,
+                        minute / 60, minute % 60,
+                        days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)),
+                        static_cast<unsigned>(id), timer_action_text(action),
+                        s_time_synced ? "" : " (clock not synced yet — paused until it is)");
+          break;
+        }
+        case REQ_SCHEDULES: {
+          std::size_t off = 0;
+          bool any = false;
+          for (std::size_t i = 0; i < 8 && off < r->out_cap; ++i) {
+            const auto* s = schedule_table.get(i);
+            if (s == nullptr) continue;
+            any = true;
+            char dbuf[40];
+            const char* name = reg.name_of(s->entity_id);
+            off += static_cast<std::size_t>(std::snprintf(
+                r->out + off, r->out_cap - off, "#%u: %02u:%02u %s  0x%04x%s%s%s -> %s\n",
+                static_cast<unsigned>(i), static_cast<unsigned>(s->minute_of_day / 60),
+                static_cast<unsigned>(s->minute_of_day % 60),
+                days_text(s->weekdays, dbuf, sizeof(dbuf)),
+                static_cast<unsigned>(s->entity_id), name != nullptr ? " (" : "",
+                name != nullptr ? name : "", name != nullptr ? ")" : "",
+                timer_action_text(s->value)));
+          }
+          if (!any) {
+            std::snprintf(r->out, r->out_cap, "no schedules\n");
+          } else if (!s_time_synced && off < r->out_cap) {
+            std::snprintf(r->out + off, r->out_cap - off,
+                          "(clock not synced — schedules are paused)\n");
+          }
+          break;
+        }
+        case REQ_UNSCHEDULE: {
+          if (r->idx >= 0 && schedule_table.remove(static_cast<std::size_t>(r->idx))) {
+            persist_schedules(schedule_table);
+            std::snprintf(r->out, r->out_cap, "deleted schedule #%d\n", r->idx);
+          } else {
+            std::snprintf(r->out, r->out_cap, "no schedule #%d\n", r->idx);
           }
           break;
         }

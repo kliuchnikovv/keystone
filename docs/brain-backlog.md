@@ -25,8 +25,12 @@ one predicate, one action). To make rules richer:
   <entity> <attr> <op> <value> then <entity> <attr> <value>`, `rule del <n>`).
 - **Multi-condition / multi-action** — today one trigger, one predicate,
   one action. Real homes want AND/OR, time windows, cool-downs.
-- **Time-of-day / sun** — `after sunset && motion → light`, `at 22:00 → all
-  off`. Wall-clock time now exists (§2); the rule engine does not use it yet.
+- ~~**Recurring time-of-day actions**~~ ✅ done (`core::ScheduleTable`, NVS key
+  `schedules`): `at 22:00 off plug1 [daily|weekdays|weekends|mon,tue,..]`,
+  `schedules`, `unschedule <n>`; local time (see `tz`), once per day, caught up
+  within 10 min of its time, last-fired day persisted. Open: conditions that
+  combine a time window with a state (`after sunset && motion → light`), sunrise /
+  sunset (needs a location), one-shot absolute times.
 - **Scenes** — a named group of desired attribute values applied at once
   (`scene evening`). Doubly useful with Groups & Scenes on the Zigbee side.
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
@@ -37,7 +41,7 @@ one predicate, one action). To make rules richer:
 Done (`91de2c2`): SNTP over WiFi (`pool.ntp.org`), console `time` (shows time,
 `synced: yes/no`, tz, uptime) and `tz`; checked on the live brain (`synced: yes`,
 tz UTC). Timers fall back to a monotonic tick before the first sync. Open: use
-the wall clock in rules (§1), sunrise/sunset (needs a location).
+the wall clock inside rule conditions (§1), sunrise/sunset (needs a location).
 
 ## 3. WiFi
 
@@ -138,11 +142,11 @@ reconciler, chip monitor, OTA and persistent rules). What's missing:
 
 ## Order-of-work suggestion
 
-Done: Wi-Fi + SNTP, persistent timers, entity names, desired-state + reconciler,
+Done: Wi-Fi + SNTP, persistent timers, recurring schedules, entity names, desired-state + reconciler,
 persistent rules + `rule` console command, chip health watchdog, `self` entities.
 
-1. **Time-of-day rules** (`at 22:00 …`) — SNTP and timers are in, the rule
-   engine doesn't use the clock yet.
+1. **Rule conditions on time/state** (time window AND state, cool-downs,
+   multi-condition) — the clock and recurring schedules are in.
 2. **Structured event stream** — precondition for the recorder (Phase 7).
 3. **Web UI** (WiFi is already up) — external surface.
 
