@@ -175,9 +175,11 @@ class JsonWriter {
 
 // ---- reader ----------------------------------------------------------------
 
-class JsonReader {
+template <int MaxTokens = 96>
+class BasicJsonReader {
  public:
-  static constexpr int kMaxTokens = 96;
+  static_assert(MaxTokens > 0 && MaxTokens < 65535, "token indices are 16-bit");
+  static constexpr int kMaxTokens = MaxTokens;
   static constexpr int kMaxDepth = 8;
   static constexpr std::size_t kMaxInput = 8192;
 
@@ -523,7 +525,11 @@ class JsonReader {
   std::size_t pos_ = 0;
   int n_ = 0;
   bool valid_ = false;
-  Token tok_[kMaxTokens] = {};
+  Token tok_[static_cast<std::size_t>(MaxTokens)] = {};
 };
+
+// The size used on the brain for client messages (small). Tests that read the hub's
+// own, larger frames use BasicJsonReader<N> with a bigger budget.
+using JsonReader = BasicJsonReader<96>;
 
 }  // namespace core
