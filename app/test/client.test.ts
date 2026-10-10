@@ -419,6 +419,17 @@ describe('reconnecting', () => {
     await expect(c.cmd(0x0100, 0x01, true)).rejects.toBeInstanceOf(HubError);
   });
 
+  it('connect() after close() starts a closed client again (effects re-run in React)', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    c.close();
+    expect(c.getSnapshot().status).toBe('closed');
+    c.connect();
+    await ready(c);
+    expect(c.getSnapshot().entities).toHaveLength(3);
+  });
+
   it('reconnect: false leaves it disconnected after a drop', async () => {
     const c = client({ reconnect: false });
     c.connect();

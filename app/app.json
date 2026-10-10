@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Keystone",
+    "slug": "keystone",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "keystone",
+    "web": { "bundler": "metro", "output": "single" },
+    "ios": { "supportsTablet": true, "bundleIdentifier": "dev.keystone.app" },
+    "android": { "package": "dev.keystone.app" }
+  }
+}

@@ -126,6 +126,8 @@ export class MockHub {
   private wss: WebSocketServer;
   private seq = 1;
   readonly opts: Required<MockHubOptions>;
+  /** When set, every command is answered with this ACK status (and changes nothing unless 'ok'). */
+  forceAck: AckStatus | null = null;
 
   private constructor(wss: WebSocketServer, opts: Required<MockHubOptions>) {
     this.wss = wss;
@@ -336,7 +338,7 @@ export class MockHub {
 
     this.sendTo(c.ws, { type: 'accepted', id, seq: this.seq++ });
     const chip = this.chips.find((x) => x.id === entity.chip);
-    const status: AckStatus = chip && chip.status === 'ready' ? 'ok' : 'unreachable';
+    const status: AckStatus = this.forceAck ?? (chip && chip.status === 'ready' ? 'ok' : 'unreachable');
     setTimeout(() => {
       if (status === 'ok') this.setValue(entity.id, a.id, msg.value as Value);
       this.sendTo(c.ws, { type: 'ack', id, status });

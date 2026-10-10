@@ -101,7 +101,8 @@ export class HubClient {
   // ---- lifecycle --------------------------------------------------------------
 
   connect(): void {
-    if (this.socket || this.stopped) return;
+    this.stopped = false; // an explicit connect() after close() starts over
+    if (this.socket) return;
     this.clearRetry();
     this.set(withStatus(this.state, this.attempt === 0 ? 'connecting' : 'reconnecting', this.state.error));
     let sock: SocketLike;

@@ -241,8 +241,12 @@ network.
    24 queued frames is dropped). JSON layer and message layer host-tested (40
    tests); `app/tools/hub-check.ts` runs 20 conformance checks against a live hub
    (mock or real) and all pass on the brain; heap measured (§9).
-4. **App screens:** entity list + toggles, chips/health, then rules, schedules,
-   timers, names.
+4. **App screens** — *devices and hub done* (Expo, `app/`): connect screen, device
+   cards with switches / brightness / live values, offline marking when a chip is
+   silent, failure messages, chip health, auto-reconnect with the stale picture
+   cleared; 35 UI/model/settings tests, and verified in a real browser against the
+   real brain (a click toggles the plug in 280–490 ms). *Still to do:* rules,
+   schedules, timers and names, which need the hub's `req` operations first.
 5. **TLS:** certificate script, `wss://`, fingerprint pinning in the app, heap
    re-measured with TLS sessions.
 6. **mDNS discovery** and polish.
