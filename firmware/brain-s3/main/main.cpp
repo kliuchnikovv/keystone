@@ -62,6 +62,7 @@
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
 #include "core/schedule_table.hpp"
+#include "esp_heap_caps.h"
 #include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
@@ -1132,6 +1133,19 @@ int cmd_at(int argc, char** argv) {
   return 0;
 }
 
+// Free internal heap right now, the lowest it has been since boot, and the largest
+// contiguous block (what a single big allocation can still get). Safe to call from
+// the console task: the heap API is thread-safe.
+int cmd_heap(int /*argc*/, char** /*argv*/) {
+  printf("heap: free %u B, lowest since boot %u B, largest block %u B\n",
+         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+         static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+  printf("psram: %u B free (0 = not enabled)\n",
+         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+  return 0;
+}
+
 int cmd_schedules(int /*argc*/, char** /*argv*/) {
   char buf[640];
   Req r{};
@@ -1501,6 +1515,7 @@ void start_console() {
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
   reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
+  reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
   reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
   reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);

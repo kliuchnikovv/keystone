@@ -10,6 +10,9 @@ heartbeats from both C6s make the hub come up on its own. Brain cross-forwards
 DECLARE+STATE+COMMAND between chips (Zigbee↔Matter), persists rules and desired
 state in NVS, and can OTA both C6s ([ota.md](ota.md)). Host test count: run
 `ctest --test-dir build`.
+Resources on the live brain (`heap` console command, Wi-Fi up, both chips ready):
+~230 KB free internal heap (lowest since boot 226 KB, largest block 184 KB); app
+1.1 MB of a 1.9 MB OTA slot; 2 MB PSRAM present but not enabled.
 
 That's a working single-user, single-radio-family dev hub. To be a real home
 hub, the brain needs the following, ordered roughly by how much home wiring
