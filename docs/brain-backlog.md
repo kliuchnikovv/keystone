@@ -122,8 +122,10 @@ history to SD. Brain-side hooks that make that easy:
 
 Once the internals are honest, the outer surface:
 
-- **Small web UI** on the brain (WiFi + `esp_http_server`) — list entities,
-  toggle, edit rules, view recent events. Read-only first.
+- ~~**Small web UI** on the brain~~ replaced by a separate client: the hub serves
+  no UI/static files, only the WebSocket+JSON protocol in
+  [app-protocol.md](app-protocol.md); the app (Expo, iOS/Android/web) lives in
+  `app/`.
 - **Notifications** — Telegram / MQTT / Home Assistant webhook on
   interesting events ("front door opened at 03:12").
 - **A tiny status LED** driven by the on-board WS2812 (GPIO21) — green
@@ -152,7 +154,7 @@ Done: Wi-Fi + SNTP, persistent timers, recurring schedules, rule constraints, en
 persistent rules + `rule` console command, chip health watchdog, `self` entities.
 
 1. **Structured event stream** — precondition for the recorder (Phase 7).
-2. **Web UI** (WiFi is already up) — external surface.
+2. **App protocol + client** ([app-protocol.md](app-protocol.md)) — external surface.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).
 Cross-cutting design questions: [../backlog.md](backlog.md).

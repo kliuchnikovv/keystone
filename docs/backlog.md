@@ -7,6 +7,7 @@ before they become urgent.
 Topic-specific backlogs live next to this one:
 - [zigbee-backlog.md](zigbee-backlog.md) — what a full Zigbee coordinator needs (device types, metering, network mgmt, OTA).
 - [matter-backlog.md](matter-backlog.md) — what a full Matter bridge needs (OpenThread, esp-matter, commissioning, brain↔Matter bridge).
+- [app-protocol.md](app-protocol.md) — the WebSocket+JSON protocol between the hub and the phone/web app (draft).
 - [brain-backlog.md](brain-backlog.md) — what the brain still needs to become a real hub (persistent rules, wall time, WiFi, chip health, human-facing surface).
 
 Cross-cutting design questions are collected here.
