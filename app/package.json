@@ -7,7 +7,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "mock-hub": "tsx tools/mock-hub/main.ts"
+    "mock-hub": "tsx tools/mock-hub/main.ts",
+    "probe": "tsx tools/probe.ts",
+    "hub-check": "tsx tools/hub-check.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

@@ -22,6 +22,10 @@ npm install
 npm test            # vitest: reducer + client against the mock hub over real sockets
 npm run typecheck
 npm run mock-hub -- --port 8080 --token dev-token   # live fake home for UI work
+
+# against a real hub (set a token on its console first: `webtoken <token>`)
+npm run probe -- --url ws://<hub-ip>:8080/ws --token <token> [--cmd 256,1,false] [--seconds 30]
+npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 20 conformance checks
 ```
 
 Node >= 22 (uses the built-in `WebSocket` in one test and for ad-hoc scripts).

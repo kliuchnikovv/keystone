@@ -1,0 +1,503 @@
+#include "app_server.hpp"
+
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+#include "esp_err.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "lwip/sockets.h"
+
+#include "core/json.hpp"
+
+namespace appsrv {
+namespace {
+
+const char* kTag = "appsrv";
+constexpr int kPort = 8080;
+constexpr std::uint32_t kHelloTimeoutMs = 5000;
+constexpr int kMaxOutstanding = 24;  // queued frames per client before we drop it
+constexpr int kAuthFailLimit = 5;
+constexpr std::uint32_t kLockoutMs = 60000;
+constexpr std::size_t kSlots = kMaxClients + 1;  // + one connection that is still handshaking
+
+struct Client {
+  int fd = -1;
+  bool authed = false;
+  std::uint32_t gen = 0;          // bumped on every accept: stale queued frames are dropped
+  std::uint32_t deadline_ms = 0;  // handshake deadline
+  std::uint32_t ip = 0;
+  std::atomic<int> inflight{0};
+};
+
+struct Lock {
+  std::uint32_t ip = 0;
+  int fails = 0;
+  std::uint32_t until_ms = 0;
+};
+
+httpd_handle_t g_server = nullptr;
+SemaphoreHandle_t g_mu = nullptr;
+QueueHandle_t g_in_q = nullptr;
+HubInfoFn g_info = nullptr;
+char g_token[core::app::kMaxToken + 1] = {};
+Client g_clients[kSlots];
+Lock g_locks[4];
+std::uint32_t g_gen = 0;
+
+std::uint32_t now_ms() { return static_cast<std::uint32_t>(esp_timer_get_time() / 1000); }
+
+struct Guard {
+  Guard() { xSemaphoreTake(g_mu, portMAX_DELAY); }
+  ~Guard() { xSemaphoreGive(g_mu); }
+};
+
+// Compares in time that depends only on the longer length, not on where they differ.
+bool ct_equal(const char* a, const char* b) {
+  const std::size_t la = std::strlen(a), lb = std::strlen(b);
+  const std::size_t n = la > lb ? la : lb;
+  unsigned diff = static_cast<unsigned>(la ^ lb);
+  for (std::size_t i = 0; i < n; ++i) {
+    diff |= static_cast<unsigned>((i < la ? a[i] : 0) ^ (i < lb ? b[i] : 0));
+  }
+  return diff == 0;
+}
+
+Client* find_locked(int fd) {
+  for (auto& c : g_clients) if (c.fd == fd) return &c;
+  return nullptr;
+}
+
+std::uint32_t peer_ip(int fd) {
+  sockaddr_storage ss{};
+  socklen_t len = sizeof(ss);
+  if (getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &len) != 0) return 0;
+  if (ss.ss_family == AF_INET) return reinterpret_cast<sockaddr_in*>(&ss)->sin_addr.s_addr;
+  if (ss.ss_family == AF_INET6) {
+    const auto* a = reinterpret_cast<sockaddr_in6*>(&ss)->sin6_addr.un.u32_addr;
+    return a[0] ^ a[1] ^ a[2] ^ a[3];
+  }
+  return 0;
+}
+
+bool locked_out(std::uint32_t ip) {
+  Guard g;
+  for (auto& l : g_locks) {
+    if (l.ip == ip && l.fails >= kAuthFailLimit && now_ms() < l.until_ms) return true;
+  }
+  return false;
+}
+void note_failure(std::uint32_t ip) {
+  Guard g;
+  Lock* slot = nullptr;
+  for (auto& l : g_locks) {
+    if (l.ip == ip) { slot = &l; break; }
+    if (slot == nullptr && l.fails == 0) slot = &l;
+  }
+  if (slot == nullptr) slot = &g_locks[0];  // table full: evict the first
+  if (slot->ip != ip) *slot = Lock{ip, 0, 0};
+  ++slot->fails;
+  slot->until_ms = now_ms() + kLockoutMs;
+}
+void clear_failures(std::uint32_t ip) {
+  Guard g;
+  for (auto& l : g_locks) if (l.ip == ip) l = Lock{};
+}
+
+std::size_t authed_count_locked() {
+  std::size_t n = 0;
+  for (auto& c : g_clients) if (c.fd >= 0 && c.authed) ++n;
+  return n;
+}
+
+// ---- esp_http_server session hooks ----------------------------------------------
+
+esp_err_t on_open(httpd_handle_t, int fd) {
+  Guard g;
+  for (auto& c : g_clients) {
+    if (c.fd >= 0) continue;
+    c.fd = fd;
+    c.authed = false;
+    c.gen = ++g_gen;
+    c.deadline_ms = now_ms() + kHelloTimeoutMs;
+    c.ip = peer_ip(fd);
+    c.inflight = 0;
+    return ESP_OK;
+  }
+  ESP_LOGW(kTag, "refusing connection fd=%d: all slots busy", fd);
+  return ESP_FAIL;
+}
+
+void on_close(httpd_handle_t, int fd) {
+  {
+    Guard g;
+    if (Client* c = find_locked(fd)) {
+      ESP_LOGI(kTag, "client fd=%d gone (%u authenticated left), heap free %u", fd,
+               static_cast<unsigned>(authed_count_locked() - (c->authed ? 1 : 0)),
+               static_cast<unsigned>(esp_get_free_heap_size()));
+      c->fd = -1;
+      c->authed = false;
+    }
+  }
+  close(fd);
+}
+
+// ---- frames out ------------------------------------------------------------------
+
+struct Work {
+  httpd_handle_t h;
+  int fd;
+  std::uint32_t gen;
+  bool close_only;
+  std::size_t len;
+  char data[1];
+};
+
+void work_fn(void* arg) {  // runs in the httpd task
+  auto* w = static_cast<Work*>(arg);
+  bool current = false;
+  {
+    Guard g;
+    Client* c = find_locked(w->fd);
+    current = c != nullptr && c->gen == w->gen;
+    if (c != nullptr && c->gen == w->gen && !w->close_only) c->inflight.fetch_sub(1);
+  }
+  if (current) {
+    if (w->close_only) {
+      httpd_sess_trigger_close(w->h, w->fd);
+    } else if (httpd_ws_get_fd_info(w->h, w->fd) == HTTPD_WS_CLIENT_WEBSOCKET) {
+      httpd_ws_frame_t f{};
+      f.type = HTTPD_WS_TYPE_TEXT;
+      f.payload = reinterpret_cast<std::uint8_t*>(w->data);
+      f.len = w->len;
+      if (httpd_ws_send_frame_async(w->h, w->fd, &f) != ESP_OK) {
+        ESP_LOGW(kTag, "send to fd=%d failed, dropping the client", w->fd);
+        httpd_sess_trigger_close(w->h, w->fd);
+      }
+    }
+  }
+  std::free(w);
+}
+
+bool queue(int fd, std::uint32_t gen, bool close_only, const char* data, std::size_t len) {
+  auto* w = static_cast<Work*>(std::malloc(sizeof(Work) + len));
+  if (w == nullptr) return false;
+  w->h = g_server;
+  w->fd = fd;
+  w->gen = gen;
+  w->close_only = close_only;
+  w->len = len;
+  if (len > 0) std::memcpy(w->data, data, len);
+  if (httpd_queue_work(g_server, work_fn, w) != ESP_OK) {
+    std::free(w);
+    return false;
+  }
+  return true;
+}
+
+// A frame to the client's socket from inside its own handler (synchronous).
+esp_err_t reply(httpd_req_t* req, const core::JsonWriter& w) {
+  httpd_ws_frame_t f{};
+  f.type = HTTPD_WS_TYPE_TEXT;
+  f.payload = reinterpret_cast<std::uint8_t*>(const_cast<char*>(w.c_str()));
+  f.len = w.size();
+  return httpd_ws_send_frame(req, &f);
+}
+
+// ---- the /ws handler ----------------------------------------------------------------
+
+esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
+  using namespace core::app;
+  char out[512];
+  core::JsonWriter w(out, sizeof(out));
+  core::JsonReader reader;
+  const ClientMsg m = decode_client(reader, text, len);
+
+  bool authed = false;
+  std::uint32_t ip = 0;
+  {
+    Guard g;
+    if (Client* c = find_locked(fd)) {
+      authed = c->authed;
+      ip = c->ip;
+    }
+  }
+
+  if (m.kind == ClientMsg::Kind::Invalid) {
+    encode_error(w, -1, Err::BadJson);
+    reply(req, w);
+    return authed ? ESP_OK : ESP_FAIL;
+  }
+
+  if (!authed) {
+    if (m.kind != ClientMsg::Kind::Hello) {
+      encode_error(w, -1, Err::Unauthorized);
+      reply(req, w);
+      return ESP_FAIL;
+    }
+    if (m.v != kProtocolVersion) {
+      encode_error(w, -1, Err::Version);
+      reply(req, w);
+      return ESP_FAIL;
+    }
+    if (locked_out(ip)) {
+      encode_error(w, -1, Err::Unauthorized, "locked out");
+      reply(req, w);
+      return ESP_FAIL;
+    }
+    bool good = false;
+    if (m.token_ok) {
+      Guard g;
+      good = g_token[0] != '\0' && ct_equal(m.token, g_token);
+    }
+    if (!good) {
+      note_failure(ip);
+      ESP_LOGW(kTag, "fd=%d: bad token", fd);
+      encode_error(w, -1, Err::Unauthorized);
+      reply(req, w);
+      return ESP_FAIL;
+    }
+    clear_failures(ip);
+    {
+      Guard g;
+      if (authed_count_locked() >= kMaxClients) {
+        encode_error(w, -1, Err::Busy);
+        reply(req, w);
+        return ESP_FAIL;
+      }
+      if (Client* c = find_locked(fd)) c->authed = true;
+    }
+    HubInfo info{"home", "?", 0, "UTC", false};
+    if (g_info != nullptr) g_info(info);
+    encode_welcome(w, info);
+    reply(req, w);
+    Inbound in{};
+    in.kind = Inbound::Kind::Connected;
+    in.fd = fd;
+    xQueueSend(g_in_q, &in, 0);
+    ESP_LOGI(kTag, "client fd=%d authenticated (%u/%u), heap free %u", fd,
+             static_cast<unsigned>(client_count()), static_cast<unsigned>(kMaxClients),
+             static_cast<unsigned>(esp_get_free_heap_size()));
+    return ESP_OK;
+  }
+
+  switch (m.kind) {
+    case ClientMsg::Kind::Cmd: {
+      if (!m.has_id) {
+        encode_error(w, -1, Err::BadArgs, "missing id");
+        reply(req, w);
+        return ESP_OK;
+      }
+      if (!m.has_entity || !m.has_attr || m.entity < 0 || m.entity > 0xFFFF || m.attr < 0 || m.attr > 0xFF) {
+        encode_error(w, m.id, Err::BadArgs, "entity/attr");
+        reply(req, w);
+        return ESP_OK;
+      }
+      Inbound in{};
+      in.kind = Inbound::Kind::Cmd;
+      in.fd = fd;
+      in.id = m.id;
+      in.entity = m.entity;
+      in.attr = m.attr;
+      in.value = m.value;
+      if (xQueueSend(g_in_q, &in, 0) != pdTRUE) {
+        encode_error(w, m.id, Err::Internal, "busy, retry");
+        reply(req, w);
+      }
+      return ESP_OK;
+    }
+    case ClientMsg::Kind::Req:
+      // Management operations arrive in the next stage.
+      if (m.has_id) encode_res_error(w, m.id, Err::Unsupported, "not implemented yet");
+      else encode_error(w, -1, Err::BadArgs, "missing id");
+      reply(req, w);
+      return ESP_OK;
+    case ClientMsg::Kind::Hello:  // already authenticated: harmless, ignore
+      return ESP_OK;
+    default:
+      encode_error(w, m.has_id ? m.id : -1, Err::Unsupported);
+      reply(req, w);
+      return ESP_OK;
+  }
+}
+
+esp_err_t ws_handler(httpd_req_t* req) {
+  if (req->method == HTTP_GET) return ESP_OK;  // the upgrade itself; the socket is tracked since on_open
+
+  const int fd = httpd_req_to_sockfd(req);
+  httpd_ws_frame_t pkt{};
+  pkt.type = HTTPD_WS_TYPE_TEXT;
+  if (httpd_ws_recv_frame(req, &pkt, 0) != ESP_OK) return ESP_FAIL;
+
+  char out[96];
+  core::JsonWriter w(out, sizeof(out));
+  if (pkt.len > core::app::kMaxFrame) {
+    core::app::encode_error(w, -1, core::app::Err::TooLarge);
+    reply(req, w);
+    return ESP_FAIL;
+  }
+  if (pkt.type != HTTPD_WS_TYPE_TEXT || !pkt.final || pkt.fragmented) {
+    core::app::encode_error(w, -1, core::app::Err::BadJson, "text frames only");
+    reply(req, w);
+    return ESP_FAIL;
+  }
+  char* buf = static_cast<char*>(std::malloc(pkt.len + 1));
+  if (buf == nullptr) return ESP_ERR_NO_MEM;
+  pkt.payload = reinterpret_cast<std::uint8_t*>(buf);
+  esp_err_t err = pkt.len > 0 ? httpd_ws_recv_frame(req, &pkt, pkt.len) : ESP_OK;
+  if (err == ESP_OK) {
+    buf[pkt.len] = '\0';
+    err = on_message(req, fd, buf, pkt.len);
+  }
+  std::free(buf);
+  return err;
+}
+
+}  // namespace
+
+// ---- public API ------------------------------------------------------------------------
+
+bool start(const char* token, HubInfoFn info) {
+  if (token == nullptr) return false;
+  const std::size_t n = std::strlen(token);
+  if (n < 8 || n > core::app::kMaxToken) return false;
+  if (g_mu == nullptr) g_mu = xSemaphoreCreateMutex();
+  if (g_in_q == nullptr) g_in_q = xQueueCreate(8, sizeof(Inbound));
+  if (g_mu == nullptr || g_in_q == nullptr) return false;
+  {
+    Guard g;
+    std::memcpy(g_token, token, n + 1);
+  }
+  g_info = info;
+  if (g_server != nullptr) {
+    // Token changed on a running server: connections authenticated with the old
+    // one are cut, so a rotated token really locks old clients out.
+    stop();
+  }
+
+  httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+  cfg.server_port = static_cast<std::uint16_t>(kPort);
+  cfg.max_open_sockets = static_cast<std::uint16_t>(kSlots);
+  cfg.lru_purge_enable = false;
+  cfg.stack_size = 6144;
+  cfg.recv_wait_timeout = 10;
+  cfg.send_wait_timeout = 3;
+  cfg.max_uri_handlers = 1;
+  cfg.open_fn = &on_open;
+  cfg.close_fn = &on_close;
+  if (httpd_start(&g_server, &cfg) != ESP_OK) {
+    g_server = nullptr;
+    ESP_LOGE(kTag, "httpd_start failed");
+    return false;
+  }
+  httpd_uri_t ws{};
+  ws.uri = "/ws";
+  ws.method = HTTP_GET;
+  ws.handler = &ws_handler;
+  ws.user_ctx = nullptr;
+  ws.is_websocket = true;
+  ws.handle_ws_control_frames = false;
+  ws.supported_subprotocol = nullptr;
+  if (httpd_register_uri_handler(g_server, &ws) != ESP_OK) {
+    httpd_stop(g_server);
+    g_server = nullptr;
+    return false;
+  }
+  ESP_LOGW(kTag, "listening on ws://<hub>:%d/ws (PLAIN, development only; TLS is a later stage), heap free %u",
+           kPort, static_cast<unsigned>(esp_get_free_heap_size()));
+  return true;
+}
+
+void stop() {
+  if (g_server == nullptr) return;
+  httpd_stop(g_server);  // closes every session through on_close
+  g_server = nullptr;
+}
+
+bool running() { return g_server != nullptr; }
+int port() { return kPort; }
+
+bool next(Inbound& out) {
+  return g_in_q != nullptr && xQueueReceive(g_in_q, &out, 0) == pdTRUE;
+}
+
+void send(int fd, const char* data, std::size_t len) {
+  if (g_server == nullptr || g_mu == nullptr || len == 0) return;
+  std::uint32_t gen = 0;
+  bool too_many = false;
+  {
+    Guard g;
+    Client* c = find_locked(fd);
+    if (c == nullptr || !c->authed) return;
+    gen = c->gen;
+    too_many = c->inflight.load() >= kMaxOutstanding;
+    if (!too_many) c->inflight.fetch_add(1);
+  }
+  if (too_many) {
+    ESP_LOGW(kTag, "fd=%d is not keeping up (%d frames queued): dropping it", fd, kMaxOutstanding);
+    queue(fd, gen, true, nullptr, 0);
+    return;
+  }
+  if (!queue(fd, gen, false, data, len)) {
+    Guard g;
+    if (Client* c = find_locked(fd)) c->inflight.fetch_sub(1);
+    ESP_LOGW(kTag, "could not queue a frame for fd=%d", fd);
+  }
+}
+
+void broadcast(const char* data, std::size_t len) {
+  if (g_mu == nullptr) return;
+  int fds[kSlots];
+  std::size_t n = 0;
+  {
+    Guard g;
+    for (auto& c : g_clients) if (c.fd >= 0 && c.authed) fds[n++] = c.fd;
+  }
+  for (std::size_t i = 0; i < n; ++i) send(fds[i], data, len);
+}
+
+void close_client(int fd) {
+  if (g_server == nullptr || g_mu == nullptr) return;
+  std::uint32_t gen = 0;
+  {
+    Guard g;
+    Client* c = find_locked(fd);
+    if (c == nullptr) return;
+    gen = c->gen;
+  }
+  queue(fd, gen, true, nullptr, 0);
+}
+
+void tick(std::uint32_t now) {
+  if (g_server == nullptr || g_mu == nullptr) return;
+  int stale[kSlots];
+  std::uint32_t gens[kSlots];
+  std::size_t n = 0;
+  {
+    Guard g;
+    for (auto& c : g_clients) {
+      if (c.fd >= 0 && !c.authed && static_cast<std::int32_t>(now - c.deadline_ms) > 0) {
+        stale[n] = c.fd;
+        gens[n++] = c.gen;
+      }
+    }
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    ESP_LOGW(kTag, "fd=%d: no hello within %u ms, closing", stale[i], static_cast<unsigned>(kHelloTimeoutMs));
+    queue(stale[i], gens[i], true, nullptr, 0);
+  }
+}
+
+std::size_t client_count() {
+  if (g_mu == nullptr) return 0;
+  Guard g;
+  return authed_count_locked();
+}
+
+}  // namespace appsrv

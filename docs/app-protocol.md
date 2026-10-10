@@ -1,7 +1,9 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **draft v1.** Client library and a mock hub are implemented and tested in
-[`app/`](../app/) (stage 2); the hub side is not implemented yet. The hub serves no UI
+Status: **v1, stages 1–3 done.** The client library, a mock hub (stage 2) and the
+hub side over plain `ws://` with a token (stage 3: handshake, snapshot, live
+`state`/`chip` events, `cmd`/`ack`) are implemented and verified on hardware. Still
+to come: management requests (`req`), TLS, screens, mDNS discovery. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
 (Expo) app that also builds for the web, in [`app/`](../app/).
 
@@ -95,6 +97,15 @@ Incremental events (no `id`, pushed as they happen):
 | `rules` / `schedules` / `timers` | the new full list, after any change (also by another client or the console) |
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
 
+**What the real hub does today.** Live attribute changes are pushed as `state`
+events and chip health as `chip` events (on change, and every 10 s for telemetry).
+Any *structural* change — an entity appearing or disappearing, a rename, a rule,
+schedule or timer added/removed/fired — is delivered by **re-sending the snapshot**
+(part 0 again) instead of the finer-grained `entity`/`rules`/`schedules`/`timers`
+events above, because a list can exceed one frame. Clients must therefore handle
+the snapshot at any time (the reducer does); the fine-grained events remain valid
+protocol for a hub that wants to use them. Checked at most once a second.
+
 A client that falls behind (its send queue is full) is dropped rather than
 buffered without bound; it reconnects and gets a fresh snapshot, so there is no
 "missed event" recovery protocol.
@@ -181,12 +192,21 @@ client (§4).
 
 ## 9. Resource budget (measured 2026-10-10, `heap` console command)
 
-Live brain, Wi-Fi up, both chips ready: ~230 KB free internal heap (lowest since
-boot 226 KB, largest block 184 KB); app 1.1 MB of a 1.9 MB slot; PSRAM (2 MB)
-present, not enabled. Estimated cost: plain server ~40–60 KB; each TLS session
-~50 KB while it exists. Therefore **max 3 clients**, and the rule of thumb for
-every stage: after the change, free heap with 3 connected clients must stay
-above ~100 KB; if not, stop and reconsider.
+Live brain, Wi-Fi up, both chips ready, before the server: ~230 KB free internal
+heap; app 1.1 MB of a 1.9 MB slot; PSRAM (2 MB) present, not enabled.
+
+Measured with stage 3 (plain `ws://`), free / lowest since boot / largest block:
+
+| state | free | lowest | largest block |
+|---|---|---|---|
+| server running, no clients | 211 KB | 199 KB | 168 KB |
+| 3 authenticated clients | 210 KB | 195 KB | 160 KB |
+| after they disconnect | 211 KB | 195 KB | 168 KB |
+
+The server itself costs ~15–20 KB; three clients add ~1 KB (lwIP's pools are
+preallocated) and nothing leaks. Each TLS session is estimated at ~50 KB while it
+exists, so stage 5 must be re-measured. **Max 3 clients**, and the rule for every
+stage: with 3 connected clients free heap must stay above ~100 KB.
 
 ## 10. TLS and trust (the hard part)
 
@@ -213,8 +233,14 @@ network.
    protocol with fake entities, and the TypeScript client (connection, auth,
    snapshot/event store, request/ack correlation) with unit tests. The app can be
    built and tested on a dev machine with no hardware.
-3. **Hub, `ws://` + token:** `webtoken`, handshake, snapshot, `state`/`chip`
-   events, `cmd`/`ack`; JSON layer host-tested; heap measured with 3 clients.
+3. ✅ **Hub, `ws://` + token:** console `webtoken <token>|clear` (stored in NVS,
+   never printed; the server runs only while a token is set), handshake with
+   constant-time compare, 5 s hello timeout, lockout after 5 failures (60 s), max
+   3 clients, snapshot in parts, `state`/`chip` events, `cmd`/`accepted`/`ack`
+   (a silent chip completes at once as `unreachable`), backpressure (a client with
+   24 queued frames is dropped). JSON layer and message layer host-tested (40
+   tests); `app/tools/hub-check.ts` runs 20 conformance checks against a live hub
+   (mock or real) and all pass on the brain; heap measured (§9).
 4. **App screens:** entity list + toggles, chips/health, then rules, schedules,
    timers, names.
 5. **TLS:** certificate script, `wss://`, fingerprint pinning in the app, heap

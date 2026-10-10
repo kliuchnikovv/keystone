@@ -28,6 +28,7 @@
 // this file glues them behind a single Bus so all core components (registry,
 // coordinator, state machine, dispatcher, rules) still see just one bus and
 // don't care where a message came from. Outbound is routed by header.chip_id.
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +64,9 @@
 #include "core/timer_table.hpp"
 #include "core/schedule_table.hpp"
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
+#include "app_server.hpp"
+#include "core/app_protocol.hpp"
 #include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
@@ -180,6 +184,8 @@ constexpr std::uint8_t kThreadChipId = 0x02;
 constexpr std::uint8_t  kOnOffAttr = 0x01;
 
 using Registry = core::EntityRegistry<>;
+void app_on_state(void* ctx, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& v);
+void app_on_cmd_result(std::uint16_t seq, hubproto::CmdAckStatus status);
 using Dispatcher = core::CommandDispatcher<Registry>;
 using Rules = core::RuleEngine<Dispatcher>;
 using Reconciler = core::Reconciler<Dispatcher>;
@@ -253,6 +259,7 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // (a chip declared, a chip lost) stay at INFO so they aren't drowned out.
 void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_id,
                      const hubproto::Value& v) {
+  app_on_state(nullptr, entity_id, attr_id, v);
   ESP_LOGD(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
            static_cast<unsigned>(entity_id), static_cast<unsigned>(attr_id),
            static_cast<unsigned>(v.raw[0]));
@@ -313,6 +320,7 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
   ESP_LOGI(kTag, "COMMAND result seq=%u entity=0x%04x attr=0x%02x status=%d",
            static_cast<unsigned>(seq), static_cast<unsigned>(entity_id),
            static_cast<unsigned>(attr_id), static_cast<int>(status));
+  app_on_cmd_result(seq, status);
 }
 
 // Desired state (docs/backlog.md § Recovery). Reconciler is touched from the main
@@ -1487,6 +1495,8 @@ int cmd_ota(int argc, char** argv) {
   return 0;
 }
 
+int cmd_webtoken(int argc, char** argv);  // defined with the app glue, below
+
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
   c.command = name;
@@ -1516,6 +1526,7 @@ void start_console() {
   reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
+  reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
   reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
   reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);
@@ -1533,6 +1544,366 @@ void start_console() {
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
+}
+
+}  // namespace
+
+namespace {
+
+// ---- App protocol glue (docs/app-protocol.md) ---------------------------------------
+// Everything here that touches core objects runs in the main loop. The two hooks that
+// fire elsewhere (a STATE in the UART RX task, a CMD_ACK in either) only enqueue or
+// look up a small table.
+
+struct AppEvent {
+  std::uint16_t entity;
+  std::uint8_t attr;
+  hubproto::Value value;
+};
+QueueHandle_t g_app_ev_q = nullptr;
+std::atomic<bool> g_app_resync{false};  // events were dropped: re-send the snapshot
+
+void app_on_state(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& v) {
+  if (g_app_ev_q == nullptr) return;
+  const AppEvent e{entity, attr, v};
+  if (xQueueSend(g_app_ev_q, &e, 0) != pdTRUE) g_app_resync = true;  // clients resync, no gap recovery needed
+}
+
+// Commands in flight on behalf of a client: CMD_ACK (any task) -> `ack` frame.
+struct AppPending {
+  bool used = false;
+  std::uint16_t seq = 0;
+  int fd = -1;
+  std::int32_t id = 0;
+  std::uint32_t t_ms = 0;
+};
+AppPending g_app_pending[16];
+SemaphoreHandle_t g_app_pending_mu = nullptr;
+
+// While the main loop is inside Dispatcher::send, a fail-fast result (silent chip)
+// is delivered synchronously, before send() returns the seq: catch it here so that
+// `accepted` still goes out before `ack`.
+struct AppSendCtx {
+  TaskHandle_t task = nullptr;
+  bool delivered = false;
+  hubproto::CmdAckStatus status = hubproto::CmdAckStatus::Ok;
+};
+AppSendCtx g_app_send;
+
+void app_send_ack(int fd, std::int32_t id, hubproto::CmdAckStatus status) {
+  char b[96];
+  core::JsonWriter w(b, sizeof(b));
+  core::app::encode_ack(w, id, status);
+  if (w.ok()) appsrv::send(fd, b, w.size());
+}
+
+void app_on_cmd_result(std::uint16_t seq, hubproto::CmdAckStatus status) {
+  if (g_app_send.task != nullptr && g_app_send.task == xTaskGetCurrentTaskHandle()) {
+    g_app_send.delivered = true;
+    g_app_send.status = status;
+    return;
+  }
+  if (g_app_pending_mu == nullptr) return;
+  int fd = -1;
+  std::int32_t id = 0;
+  xSemaphoreTake(g_app_pending_mu, portMAX_DELAY);
+  for (auto& p : g_app_pending) {
+    if (p.used && p.seq == seq) {
+      fd = p.fd;
+      id = p.id;
+      p.used = false;
+      break;
+    }
+  }
+  xSemaphoreGive(g_app_pending_mu);
+  if (fd >= 0) app_send_ack(fd, id, status);
+}
+
+bool app_add_pending(std::uint16_t seq, int fd, std::int32_t id, std::uint32_t now) {
+  xSemaphoreTake(g_app_pending_mu, portMAX_DELAY);
+  bool ok = false;
+  for (auto& p : g_app_pending) {
+    if (!p.used) {
+      p = AppPending{true, seq, fd, id, now};
+      ok = true;
+      break;
+    }
+  }
+  xSemaphoreGive(g_app_pending_mu);
+  return ok;
+}
+
+void app_expire_pending(std::uint32_t now) {  // the dispatcher always reports a result; belt and braces
+  xSemaphoreTake(g_app_pending_mu, portMAX_DELAY);
+  for (auto& p : g_app_pending) {
+    if (p.used && now - p.t_ms > 60000) p.used = false;
+  }
+  xSemaphoreGive(g_app_pending_mu);
+}
+
+const char* app_chip_status(std::uint8_t id, const core::ChipMonitor::Info* ci,
+                            const core::RadioCoordinator<Registry>& coord) {
+  if (ci != nullptr && ci->silent) return "silent";
+  if (coord.chip_ready(id)) return "ready";
+  return coord.chip_known(id) ? "seen" : "silent";
+}
+
+core::app::ChipView app_chip_view(std::uint8_t id, const Registry& reg,
+                                  const core::RadioCoordinator<Registry>& coord) {
+  const auto* ci = g_monitor->info(id);
+  core::app::ChipView v{id, chip_label(id), app_chip_status(id, ci, coord),
+                        static_cast<std::uint8_t>(ci != nullptr ? ci->boot_id : 0),
+                        ci != nullptr ? ci->reboots : 0};
+  hubproto::Value x{};
+  if (reg.get_value(id, hubproto::chip_attr::kHeapFree, x)) { v.has_heap = true; v.heap = x.as_u32(); }
+  if (reg.get_value(id, hubproto::chip_attr::kUptimeS, x)) { v.has_uptime = true; v.uptime_s = x.as_u32(); }
+  if (reg.get_value(id, hubproto::chip_attr::kTxFrames, x)) { v.has_tx = true; v.tx_frames = x.as_u32(); }
+  if (reg.get_value(id, hubproto::chip_attr::kCrcErrors, x)) { v.has_crc = true; v.crc_errors = x.as_u16(); }
+  return v;
+}
+
+std::uint32_t app_timer_left_s(const core::TimerTable<8>::Timer& tm, std::uint32_t now) {
+  if (tm.has_wall_deadline && s_time_synced) {
+    const time_t cur = time(nullptr);
+    return static_cast<std::uint64_t>(cur) < tm.deadline_epoch_s
+               ? static_cast<std::uint32_t>(tm.deadline_epoch_s - static_cast<std::uint64_t>(cur))
+               : 0;
+  }
+  const std::int32_t rem = static_cast<std::int32_t>(tm.when_monotonic_ms - now);
+  return rem > 0 ? static_cast<std::uint32_t>(rem / 1000) : 0;
+}
+
+// The snapshot's view of the home, adapted to core::app::encode_snapshot_part.
+struct AppSource {
+  const Registry& reg;
+  const Rules& rules;
+  const Schedules& sched;
+  const core::TimerTable<8>& timers;
+  const core::RadioCoordinator<Registry>& coord;
+  std::uint32_t now;
+  const Registry::Entity* ents[64] = {};
+  std::size_t n_ents = 0;
+  std::uint8_t chips[15] = {};
+  std::size_t n_chips = 0;
+  std::uint8_t sched_slots[8] = {};
+  std::size_t n_sched = 0;
+  std::uint8_t timer_slots[8] = {};
+  std::size_t n_timers = 0;
+
+  AppSource(const Registry& r, const Rules& ru, const Schedules& sc, const core::TimerTable<8>& tm,
+            const core::RadioCoordinator<Registry>& co, std::uint32_t t)
+      : reg(r), rules(ru), sched(sc), timers(tm), coord(co), now(t) {
+    for (std::size_t i = 0; i < reg.size() && n_ents < 64; ++i) {
+      const auto* e = reg.entity_at(i);
+      // A chip's own entity is reported under `chips`, not as a device.
+      if (e != nullptr && e->device_type != hubproto::DeviceType::Chip) ents[n_ents++] = e;
+    }
+    for (std::uint8_t id = 1; id <= 15; ++id) {
+      if (g_monitor->info(id) != nullptr || coord.chip_known(id)) chips[n_chips++] = id;
+    }
+    for (std::uint8_t i = 0; i < 8; ++i) if (sched.get(i) != nullptr) sched_slots[n_sched++] = i;
+    for (std::uint8_t i = 0; i < 8; ++i) if (timers.get(i) != nullptr) timer_slots[n_timers++] = i;
+  }
+
+  std::size_t count(core::app::Section s) const {
+    switch (s) {
+      case core::app::Section::Entities: return n_ents;
+      case core::app::Section::Chips: return n_chips;
+      case core::app::Section::Rules: return rules.rule_count();
+      case core::app::Section::Schedules: return n_sched;
+      case core::app::Section::Timers: return n_timers;
+    }
+    return 0;
+  }
+  void write(core::app::Section s, std::size_t i, core::JsonWriter& w) const {
+    switch (s) {
+      case core::app::Section::Entities:
+        core::app::write_entity(w, *ents[i], reg.name_of(ents[i]->entity_id));
+        break;
+      case core::app::Section::Chips:
+        core::app::write_chip(w, app_chip_view(chips[i], reg, coord));
+        break;
+      case core::app::Section::Rules:
+        core::app::write_rule(w, i, *rules.rule_at(i));
+        break;
+      case core::app::Section::Schedules:
+        core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]));
+        break;
+      case core::app::Section::Timers: {
+        const auto* tm = timers.get(timer_slots[i]);
+        core::app::write_timer(w, core::app::TimerView{timer_slots[i], tm->entity_id, tm->attr_id,
+                                                       tm->value, app_timer_left_s(*tm, now)});
+        break;
+      }
+    }
+  }
+
+  // A fingerprint of everything a client shows structurally (not live values): when it
+  // changes the clients are sent a fresh snapshot instead of many small events.
+  std::uint32_t fingerprint() const {
+    std::uint32_t h = 2166136261u;
+    auto mix = [&h](const void* p, std::size_t n) {
+      const auto* b = static_cast<const std::uint8_t*>(p);
+      for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 16777619u;
+    };
+    for (std::size_t i = 0; i < n_ents; ++i) {
+      const auto& e = *ents[i];
+      mix(&e.entity_id, sizeof(e.entity_id));
+      mix(&e.chip_id, sizeof(e.chip_id));
+      const auto dt = static_cast<std::uint8_t>(e.device_type);
+      mix(&dt, 1);
+      for (std::uint8_t a = 0; a < e.attr_count; ++a) {
+        mix(&e.attrs[a].attr_id, 1);
+        const auto vt = static_cast<std::uint8_t>(e.attrs[a].value_type);
+        mix(&vt, 1);
+        mix(&e.attrs[a].flags, 1);
+      }
+      const char* name = reg.name_of(e.entity_id);
+      if (name != nullptr) mix(name, std::strlen(name) + 1);
+    }
+    char tmp[512];
+    for (std::size_t i = 0; i < rules.rule_count(); ++i) {
+      core::JsonWriter w(tmp, sizeof(tmp));
+      core::app::write_rule(w, i, *rules.rule_at(i));
+      mix(tmp, w.size());
+    }
+    for (std::size_t i = 0; i < n_sched; ++i) {
+      core::JsonWriter w(tmp, sizeof(tmp));
+      core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]));
+      mix(tmp, w.size());
+    }
+    for (std::size_t i = 0; i < n_timers; ++i) {  // no left_s: it changes every second
+      const auto* tm = timers.get(timer_slots[i]);
+      mix(&tm->entity_id, sizeof(tm->entity_id));
+      mix(&tm->attr_id, 1);
+      mix(tm->value.raw, 4);
+    }
+    return h;
+  }
+};
+
+// Send the snapshot (in parts) to one client, or to all (fd < 0). Main loop only: the
+// buffer is shared.
+void app_send_snapshot(int fd, const AppSource& src) {
+  static char buf[core::app::kMaxFrame];
+  core::app::SnapshotCursor cur;
+  while (!cur.done()) {
+    core::JsonWriter w(buf, sizeof(buf));
+    // Items are at most ~1 KB (an entity with 8 attributes); 3000 leaves room for one.
+    if (!core::app::encode_snapshot_part(cur, const_cast<AppSource&>(src), w, 3000)) {
+      ESP_LOGE(kTag, "app: snapshot part %u did not fit a frame", static_cast<unsigned>(cur.part));
+      return;
+    }
+    if (fd < 0) appsrv::broadcast(buf, w.size());
+    else appsrv::send(fd, buf, w.size());
+  }
+}
+
+void app_handle_cmd(const appsrv::Inbound& in, const Registry& reg, Dispatcher& disp, std::uint32_t now) {
+  using namespace core::app;
+  char b[160];
+  core::JsonWriter w(b, sizeof(b));
+  auto fail = [&](Err e, const char* msg = nullptr) {
+    encode_error(w, in.id, e, msg);
+    appsrv::send(in.fd, b, w.size());
+  };
+  const auto entity = static_cast<std::uint16_t>(in.entity);
+  const auto attr = static_cast<std::uint8_t>(in.attr);
+  const Registry::Entity* e = reg.find(entity);
+  if (e == nullptr || e->device_type == hubproto::DeviceType::Chip) return fail(Err::NotFound, "entity");
+  const core::AttrState* a = nullptr;
+  for (std::uint8_t i = 0; i < e->attr_count; ++i) if (e->attrs[i].attr_id == attr) a = &e->attrs[i];
+  if (a == nullptr) return fail(Err::NotFound, "attr");
+  if ((a->flags & hubproto::kFlagWritable) == 0) return fail(Err::ReadOnly);
+  hubproto::Value v{};
+  if (!to_value(in.value, a->value_type, v)) {
+    char msg[40];
+    std::snprintf(msg, sizeof(msg), "value does not fit %s", vt_name(a->value_type));
+    return fail(Err::BadArgs, msg);
+  }
+
+  g_app_send = AppSendCtx{xTaskGetCurrentTaskHandle(), false, hubproto::CmdAckStatus::Ok};
+  std::uint16_t seq = 0;
+  const bool sent = disp.send(entity, attr, v, now, seq);
+  const AppSendCtx done = g_app_send;
+  g_app_send = AppSendCtx{};
+  if (!sent && !done.delivered) return fail(Err::Internal, "command queue full");
+
+  encode_accepted(w, in.id, seq);
+  appsrv::send(in.fd, b, w.size());
+  ESP_LOGI(kTag, "app: cmd id=%d entity=0x%04x attr=0x%02x seq=%u", static_cast<int>(in.id),
+           static_cast<unsigned>(entity), static_cast<unsigned>(attr), static_cast<unsigned>(seq));
+  if (done.delivered) {
+    app_send_ack(in.fd, in.id, done.status);
+  } else if (!app_add_pending(seq, in.fd, in.id, now)) {
+    app_send_ack(in.fd, in.id, hubproto::CmdAckStatus::Fail);  // no room to track it: say so
+  }
+}
+
+void app_hub_info(core::app::HubInfo& h) {
+  const char* tz = std::getenv("TZ");
+  h.name = "home";
+  h.fw = esp_app_get_description()->version;
+  h.time = s_time_synced ? static_cast<std::int64_t>(time(nullptr)) : 0;
+  h.tz = tz != nullptr ? tz : "UTC";
+  h.synced = s_time_synced;
+}
+
+constexpr const char* kWebTokenKey = "webtoken";
+
+void persist_webtoken(const char* token) {  // nullptr clears
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  if (token != nullptr) nvs_set_str(h, kWebTokenKey, token);
+  else nvs_erase_key(h, kWebTokenKey);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+bool restore_webtoken(char* out, std::size_t cap) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return false;
+  std::size_t sz = cap;
+  const bool ok = nvs_get_str(h, kWebTokenKey, out, &sz) == ESP_OK;
+  nvs_close(h);
+  return ok;
+}
+
+// webtoken [<token>|clear]: the shared secret of the app protocol. Never printed.
+int cmd_webtoken(int argc, char** argv) {
+  char cur[core::app::kMaxToken + 1] = {};
+  const bool have = restore_webtoken(cur, sizeof(cur));
+  if (argc == 1) {
+    printf("web token: %s; app server %s on port %d, %u client(s) connected\n",
+           have ? "set" : "NOT set", appsrv::running() ? "running" : "stopped", appsrv::port(),
+           static_cast<unsigned>(appsrv::client_count()));
+    return 0;
+  }
+  if (std::strcmp(argv[1], "clear") == 0) {
+    persist_webtoken(nullptr);
+    appsrv::stop();
+    printf("web token cleared; app server stopped\n");
+    return 0;
+  }
+  const std::size_t n = std::strlen(argv[1]);
+  if (n < 8 || n > core::app::kMaxToken) {
+    printf("token must be 8..%u characters\n", static_cast<unsigned>(core::app::kMaxToken));
+    return 1;
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    if (argv[1][i] < 0x21 || argv[1][i] > 0x7E) {
+      printf("token: printable ASCII without spaces only\n");
+      return 1;
+    }
+  }
+  persist_webtoken(argv[1]);
+  if (!appsrv::start(argv[1], &app_hub_info)) {
+    printf("token saved, but the app server did not start\n");
+    return 1;
+  }
+  printf("token set; app server (re)started on ws://<hub>:%d/ws — existing connections were closed\n",
+         appsrv::port());
+  return 0;
 }
 
 }  // namespace
@@ -1634,6 +2005,28 @@ extern "C" void app_main(void) {
   static Schedules schedule_table;
   restore_schedules(schedule_table);
 
+  // App protocol: live events from the UART RX task, CMD_ACK bookkeeping, and the
+  // server itself (only when a token has been set with `webtoken`).
+  g_app_ev_q = xQueueCreate(32, sizeof(AppEvent));
+  g_app_pending_mu = xSemaphoreCreateMutex();
+  {
+    char tok[core::app::kMaxToken + 1] = {};
+    if (restore_webtoken(tok, sizeof(tok))) {
+      if (!appsrv::start(tok, &app_hub_info)) ESP_LOGE(kTag, "app server failed to start");
+    } else {
+      ESP_LOGI(kTag, "app server off: no token (set one with `webtoken <token>`)");
+    }
+  }
+  std::uint32_t app_last_check_ms = 0;
+  std::uint32_t app_last_fp = 0;
+  struct ChipSent {
+    char status[8] = {};
+    std::uint8_t boot_id = 0;
+    std::uint32_t reboots = 0;
+    std::uint32_t t_ms = 0;
+    bool any = false;
+  } app_chip_sent[16];
+
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
@@ -1670,6 +2063,13 @@ extern "C" void app_main(void) {
       time(&now);
       timer_table.on_clock_synced(static_cast<std::uint64_t>(now), t);
       persist_timers(timer_table, t);
+      {
+        char b[128];
+        core::JsonWriter w(b, sizeof(b));
+        const char* tz = std::getenv("TZ");
+        core::app::encode_time(w, static_cast<std::int64_t>(now), tz != nullptr ? tz : "UTC", true);
+        if (w.ok()) appsrv::broadcast(b, w.size());
+      }
     }
 
     if (!announced_zb && coord.chip_ready(kZigbeeChipId)) {
@@ -1757,6 +2157,62 @@ extern "C" void app_main(void) {
           },
           &fc);
       if (n > 0) persist_schedules(schedule_table);  // keeps last_fired_day across reboots
+    }
+
+    // ---- App protocol: live state, structural resync, chip health, inbound commands ----
+    {
+      AppEvent ev;
+      for (int n = 0; n < 16 && xQueueReceive(g_app_ev_q, &ev, 0) == pdTRUE; ++n) {
+        const auto* e = reg.find(ev.entity);
+        if (e == nullptr || e->device_type == hubproto::DeviceType::Chip) continue;
+        if (appsrv::client_count() == 0) continue;
+        char b[160];
+        core::JsonWriter w(b, sizeof(b));
+        core::app::encode_state(w, ev.entity, ev.attr, ev.value);
+        if (w.ok()) appsrv::broadcast(b, w.size());
+      }
+      if (appsrv::running()) {
+        appsrv::tick(t);
+        if (appsrv::client_count() > 0 && t - app_last_check_ms >= 1000) {
+          app_last_check_ms = t;
+          app_expire_pending(t);
+          AppSource src(reg, rules, schedule_table, timer_table, coord, t);
+          const std::uint32_t fp = src.fingerprint();
+          const bool overflow = g_app_resync.exchange(false);
+          if (overflow || fp != app_last_fp) {
+            app_last_fp = fp;
+            app_send_snapshot(-1, src);  // structure changed (or events were lost): start over
+          }
+          for (std::size_t i = 0; i < src.n_chips; ++i) {
+            const std::uint8_t id = src.chips[i];
+            const auto cv = app_chip_view(id, reg, coord);
+            ChipSent& cs = app_chip_sent[id & 15];
+            const bool changed = !cs.any || std::strcmp(cs.status, cv.status) != 0 ||
+                                 cs.boot_id != cv.boot_id || cs.reboots != cv.reboots;
+            if (changed || t - cs.t_ms >= 10000) {
+              char b[256];
+              core::JsonWriter w(b, sizeof(b));
+              core::app::encode_chip_event(w, cv);
+              if (w.ok()) appsrv::broadcast(b, w.size());
+              std::snprintf(cs.status, sizeof(cs.status), "%s", cv.status);
+              cs.boot_id = cv.boot_id;
+              cs.reboots = cv.reboots;
+              cs.t_ms = t;
+              cs.any = true;
+            }
+          }
+        }
+        appsrv::Inbound in;
+        while (appsrv::next(in)) {
+          if (in.kind == appsrv::Inbound::Kind::Connected) {
+            AppSource src(reg, rules, schedule_table, timer_table, coord, t);
+            app_last_fp = src.fingerprint();
+            app_send_snapshot(in.fd, src);
+          } else {
+            app_handle_cmd(in, reg, disp, t);
+          }
+        }
+      }
     }
 
     // Drain console requests (single-threaded core access here).

@@ -18,3 +18,6 @@ CONFIG_LWIP_IPV6=y
 # The console request handlers drain in the main task; NVS blobs (entity
 # names, timers) and formatting need more than the 3584-byte default.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# App protocol: WebSocket endpoint on esp_http_server (docs/app-protocol.md).
+CONFIG_HTTPD_WS_SUPPORT=y
