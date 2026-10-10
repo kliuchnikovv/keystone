@@ -164,6 +164,11 @@ esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep,
                                   void* /*priv*/) {
   if (matter_dt_id == ESP_MATTER_ON_OFF_LIGHT_DEVICE_TYPE_ID) {
     on_off_light::config_t conf;
+    // esp-matter defaults StartUpOnOff to Off, so every boot of this chip forced the
+    // bridged endpoint Off and our PRE_UPDATE hook forwarded that as COMMAND
+    // on_off=0, switching the real device off. The hub owns the state (Reconciler):
+    // null = "keep the previous value", i.e. no startup action.
+    conf.on_off_lighting.start_up_on_off = nullable<uint8_t>();
     esp_err_t err = on_off_light::add(ep, &conf);
     if (err != ESP_OK) return err;
     if (g_pending_has_metering) {
