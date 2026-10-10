@@ -1,11 +1,11 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **v1, stages 1–3 done, devices/hub screens done.** The client library, a
+Status: **v1, stages 1–4 done (screens for devices, hub, schedules, timers, rules, names).** The client library, a
 mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
 handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
 requests for names, rules, schedules and timers) are implemented and verified on
-hardware. Still to come: `pair`/`unpair`/`identify`, the rules/schedules/timers/names
-screens, TLS, mDNS discovery. The hub serves no UI
+hardware. Still to come: `pair`/`unpair`/`identify`, TLS, mDNS discovery, a build on
+a phone. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
 (Expo) app that also builds for the web, in [`app/`](../app/).
 
@@ -252,9 +252,12 @@ network.
 4. **App screens** — *devices and hub done* (Expo, `app/`): connect screen, device
    cards with switches / brightness / live values, offline marking when a chip is
    silent, failure messages, chip health, auto-reconnect with the stale picture
-   cleared; 35 UI/model/settings tests, and verified in a real browser against the
-   real brain (a click toggles the plug in 280–490 ms). *Still to do:* rules,
-   schedules, timers and names, which need the hub's `req` operations first.
+   cleared; **Automations** tab (schedules, timers with a live countdown, rules
+   with time window / extra condition / cooldown, each readable as a sentence,
+   delete with a second tap) and renaming a device. 111 tests; verified in a real
+   browser against the real brain: a click toggles the plug in 280–490 ms, and
+   schedules, timers, rules and names created in the browser show up on the hub's
+   console and delete cleanly.
 5. **TLS:** certificate script, `wss://`, fingerprint pinning in the app, heap
    re-measured with TLS sessions.
 6. **mDNS discovery** and polish.

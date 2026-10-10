@@ -10,11 +10,13 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
   `HubClient` (handshake + token, request/ack correlation, reconnect with back-off;
   works with `useSyncExternalStore`). No React, no Node-only APIs.
 - `src/model/` — plain functions that turn protocol data into what people see
-  (value formatting, device titles, chip health, error messages).
+  (value formatting, device titles, chip health, error messages) and what people
+  type into `req` arguments (units, ranges, wording of rules/schedules/timers).
 - `src/settings.ts`, `src/storage.ts` / `storage.web.ts` — remembering the hub
   address and token (OS keychain on a phone, `localStorage` in a browser).
 - `src/hooks/`, `src/ui/`, `App.tsx` — the screens: connect, Devices (switches,
-  brightness, live values), Hub (chip health).
+  brightness, live values, rename), Automations (schedules, timers, rules), Hub
+  (chip health).
 - `tools/mock-hub/` — a software hub speaking the protocol (3 clients max, hello
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.

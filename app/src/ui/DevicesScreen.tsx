@@ -19,6 +19,9 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
           reachable={isReachable(home, item)}
           isPending={(attr) => commands.isPending(item.id, attr)}
           onSet={(attr, value) => void commands.send(item.id, attr, value)}
+          onRename={async (name) =>
+            (await commands.request(name === null ? 'name.clear' : 'name.set', name === null ? { entity: item.id } : { entity: item.id, name })) !== null
+          }
         />
       )}
       ListEmptyComponent={

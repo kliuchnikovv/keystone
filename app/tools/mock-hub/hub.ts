@@ -173,6 +173,11 @@ export class MockHub {
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
   }
 
+  /** How many timers are pending (for tests). */
+  timersCount(): number {
+    return this.timers.length;
+  }
+
   /** Drop every connection without a goodbye (to test reconnects). */
   dropAll(): void {
     for (const c of this.clients) c.ws.terminate();

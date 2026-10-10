@@ -5,11 +5,12 @@ import { useHome, useHubClient } from '../hooks/useHub';
 import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
 import { Banner } from './Banner';
+import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
 import { HubScreen } from './HubScreen';
 import { useTheme } from './theme';
 
-type Tab = 'devices' | 'hub';
+type Tab = 'devices' | 'automations' | 'hub';
 
 export interface HomeProps {
   settings: Settings;
@@ -39,6 +40,8 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
       <View style={styles.body}>
         {tab === 'devices' ? (
           <DevicesScreen home={home} commands={commands} />
+        ) : tab === 'automations' ? (
+          <AutomationsScreen home={home} commands={commands} />
         ) : (
           <HubScreen home={home} url={settings.url} onChangeHub={onChangeHub} />
         )}
@@ -50,6 +53,7 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
       )}
       <View style={[styles.tabs, { backgroundColor: t.card, borderTopColor: t.border }]}>
         <TabButton label="Devices" active={tab === 'devices'} onPress={() => setTab('devices')} />
+        <TabButton label="Automations" active={tab === 'automations'} onPress={() => setTab('automations')} />
         <TabButton label="Hub" active={tab === 'hub'} onPress={() => setTab('hub')} />
       </View>
     </SafeAreaView>

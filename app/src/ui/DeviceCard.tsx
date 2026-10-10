@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { nameProblem } from '../model/automation';
+import { Button, ErrorText, Input } from './controls';
 import { attrLabel, brightnessPercent, formatValue } from '../model/format';
 import { deviceIcon, deviceLabel, deviceTitle, primarySwitch, stepped, stepperFor } from '../model/devices';
 import type { Attr, Entity, Value } from '../protocol/messages';
@@ -9,10 +12,13 @@ export interface DeviceCardProps {
   reachable: boolean;
   isPending(attr: number): boolean;
   onSet(attr: number, value: Value): void;
+  /** Give the device a name, or remove it (null). Resolves true when the hub accepted. */
+  onRename(name: string | null): Promise<boolean>;
 }
 
-export function DeviceCard({ entity, reachable, isPending, onSet }: DeviceCardProps) {
+export function DeviceCard({ entity, reachable, isPending, onSet, onRename }: DeviceCardProps) {
   const t = useTheme();
+  const [renaming, setRenaming] = useState(false);
   const sw = primarySwitch(entity);
   const title = deviceTitle(entity);
   const rows = entity.attrs.filter((a) => a !== sw);
@@ -32,6 +38,9 @@ export function DeviceCard({ entity, reachable, isPending, onSet }: DeviceCardPr
             {deviceLabel(entity.device)} · {reachable ? 'online' : 'offline'}
           </Text>
         </View>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Rename ${title}`} onPress={() => setRenaming((r) => !r)} style={styles.edit}>
+          <Text style={{ color: t.muted, fontSize: 16 }}>✎</Text>
+        </Pressable>
         {sw && (
           <View style={styles.switchBox}>
             {isPending(sw.id) && <ActivityIndicator size="small" color={t.accent} />}
@@ -48,6 +57,13 @@ export function DeviceCard({ entity, reachable, isPending, onSet }: DeviceCardPr
           </View>
         )}
       </View>
+      {renaming && (
+        <RenameBox
+          current={entity.name}
+          onDone={() => setRenaming(false)}
+          onSave={onRename}
+        />
+      )}
       {rows.length > 0 && (
         <View style={[styles.rows, { borderTopColor: t.border }]}>
           {rows.map((a) => (
@@ -55,6 +71,29 @@ export function DeviceCard({ entity, reachable, isPending, onSet }: DeviceCardPr
           ))}
         </View>
       )}
+    </View>
+  );
+}
+
+function RenameBox({ current, onSave, onDone }: { current: string | null; onSave(name: string | null): Promise<boolean>; onDone(): void }) {
+  const t = useTheme();
+  const [text, setText] = useState(current ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => {
+    const problem = nameProblem(text);
+    if (problem) return setError(problem);
+    setError(null);
+    if (await onSave(text)) onDone();
+  };
+  return (
+    <View style={[styles.rename, { borderTopColor: t.border }]}>
+      <Input label="Name" value={text} onChangeText={setText} placeholder="e.g. kitchen_lamp" onSubmitEditing={save} />
+      <ErrorText text={error} />
+      <View style={styles.renameButtons}>
+        {current !== null && <Button kind="danger" label="Remove name" onPress={async () => { if (await onSave(null)) onDone(); }} />}
+        <Button kind="plain" label="Cancel" onPress={onDone} />
+        <Button label="Save name" onPress={save} />
+      </View>
     </View>
   );
 }
@@ -112,6 +151,9 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 15, fontWeight: '500', textAlign: 'right' },
   stepValue: { fontSize: 15, fontWeight: '500', minWidth: 56, textAlign: 'center' },
   offline: { opacity: 0.6 },
+  edit: { paddingHorizontal: 10, paddingVertical: 6 },
+  rename: { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  renameButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   step: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });
