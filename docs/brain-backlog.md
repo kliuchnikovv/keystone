@@ -1,13 +1,15 @@
 # Brain backlog — what the brain still needs to become a real hub
 
-State today (`main`, commit `6ad8bd2`): the brain (S3) runs `EntityRegistry` +
-`RadioCoordinator` + `StateMachine` + `CommandDispatcher` + `RuleEngine` on
-top of a `ChipRouter` that binds UART1↔Zigbee C6 (chip 0x01) and
-UART2↔Thread C6 (chip 0x02). Interactive console over USB-Serial-JTAG:
-`home`, `get`, `on|off|toggle`, `in`, `timers`, `cancel`, `chips`, `log`.
-Self-heal QUERY + heartbeats from both C6s make the hub come up on its own.
-Brain cross-forwards DECLARE+STATE+COMMAND between chips (Zigbee↔Matter).
-76/76 host tests.
+State today (`main`): the brain (S3) runs `EntityRegistry` +
+`RadioCoordinator` + `StateMachine` + `CommandDispatcher` + `RuleEngine` +
+`ChipMonitor` + `Reconciler`/`DesiredState` on top of a `ChipRouter` that binds
+UART1↔Zigbee C6 (chip 0x01) and UART2↔Thread C6 (chip 0x02). Interactive
+console over USB-Serial-JTAG: `home`, `get`, `on|off|toggle`, `in`, `timers`,
+`cancel`, `chips`, `log`, `rule`, `desired`, `ota`. Self-heal QUERY +
+heartbeats from both C6s make the hub come up on its own. Brain cross-forwards
+DECLARE+STATE+COMMAND between chips (Zigbee↔Matter), persists rules and desired
+state in NVS, and can OTA both C6s ([ota.md](ota.md)). Host test count: run
+`ctest --test-dir build`.
 
 That's a working single-user, single-radio-family dev hub. To be a real home
 hub, the brain needs the following, ordered roughly by how much home wiring
@@ -15,8 +17,8 @@ they unlock.
 
 ## 1. Persistent, richer rule engine
 
-Today: hard-coded rules compiled into the firmware (`motion → light`, single
-if-then). To make rules a first-class thing users write and change:
+Today: user-editable rules stored in NVS, each a single if-then (one trigger,
+one predicate, one action). To make rules richer:
 
 - ~~**Rule storage**~~ ✅ done: rules are data (`CmpOp` + operand), stored in NVS
   (`rules` blob), edited via the `rule` console command (`rule`, `rule add
@@ -53,17 +55,17 @@ notifications:
 
 ## 4. Persistent state on the brain
 
-Today the brain reboots and forgets almost everything (registry is
-rebuilt from co-processor DECLAREs, that's fine; but timers, desired
-states, rule configuration, human-friendly entity names are all in RAM).
+The registry is rebuilt from co-processor DECLAREs on every boot, that's fine.
+Rules and desired state are already persisted in NVS; timers and entity names
+are still in RAM.
 
 - **Persistent timers** — `in 3600 off 0x100` survives a brain reboot with
   absolute wall-clock deadline (see [../backlog.md](backlog.md#recovery-after-a-crash-or-reboot--desired-vs-actual-reconciliation)).
-- **Desired-state per attribute** + reconciler loop that walks entities and
-  fixes drift (same doc).
+- ~~**Desired-state per attribute** + reconciler~~ ✅ done (`core::DesiredState`
+  + `core::Reconciler`, NVS key `desired`, console `desired`).
 - **Entity metadata**: user-set name (`livingroom_plug`), room tag, favorite
   flag, icon. Reference by name in the console: `on livingroom_plug`.
-- **Persistent rule table** (§1).
+- ~~**Persistent rule table**~~ ✅ done (§1).
 - One combined NVS namespace `brain_state`, versioned, migrated on schema
   bumps.
 
@@ -87,9 +89,10 @@ We started this with `chips`. To finish:
 - ~~**Heartbeat watchdog**~~ ✅ done (`core::ChipMonitor`): silent after 20 s, shown
   in `chips`, COMMANDs to a dead chip fail at once, silent chips are probed with
   QUERY, reboots and flapping (≥3 in 5 min) are logged.
-- **`self` entity per chip** — device_type=chip, attributes for uptime, free
-  heap, boot_id, TX/RX counters, CRC errors. Feeds `chips` and, later,
-  Matter diagnostic clusters. (Detail: [../backlog.md](backlog.md#chip-health-timeouts-and-recovery)).
+- ~~**`self` entity per chip**~~ ✅ done, hardware-verified (commit `30f9da2`):
+  device_type=chip (0x0A), entity_id = chip_id, attrs 0x70–0x75 (uptime, heap, boot_id, rx/tx frames, CRC errors); `chips` prints
+  the telemetry. Still open: Matter diagnostic clusters, radio quality
+  (RSSI/LQI). (Detail: [../backlog.md](backlog.md#chip-health-timeouts-and-recovery)).
 - **Hardware EN-reset lines** — plan the extra two wires (S3 GPIO → each C6
   EN via a MOSFET) before the soldered rev freezes, so the brain can
   hard-reset a wedged co-processor.
@@ -124,27 +127,25 @@ world, so scope this carefully.
 
 ## 10. Testing
 
-Currently 76/76 host tests, but they cover `core` in isolation. What's
-missing:
+Host tests cover `libhubproto` and `core` in isolation (including the
+reconciler, chip monitor, OTA and persistent rules). What's missing:
 
 - **Multi-bus tests** — `ChipRouter` in `core` (once it earns its move) with
   two `InMemoryLink` legs, routing/fan-out.
 - **Rules with a real clock injection**, sunset conditions.
-- **Reconciler / desired-state** tests.
 - **Console command tests** — a fake serial in/out that drives commands
   end-to-end.
 
 ## Order-of-work suggestion
 
+Done: desired-state + reconciler, persistent rules + `rule` console command,
+chip health watchdog; `self` entities written (await hardware check).
+
 1. **Persistent timers** (small, closes an obvious hole).
 2. **Named entities + storage** — `on livingroom_plug` is a huge UX win for
    a couple hundred lines.
-3. **Desired-state + reconciler** (`../backlog.md`) — architecturally central,
-   pays back in every future feature.
-4. **Wall time (SNTP)** — unlocks calendar rules and event timestamps.
-5. **Persistent rules + `rules` console commands.**
-6. **Chip health watchdog + `self` entities.**
-7. **Structured event stream** — precondition for the recorder (Phase 7).
+3. **Wall time (SNTP)** — unlocks calendar rules and event timestamps.
+4. **Structured event stream** — precondition for the recorder (Phase 7).
 8. **WiFi + web UI** — external surface.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).

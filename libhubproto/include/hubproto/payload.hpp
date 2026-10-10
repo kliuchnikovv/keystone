@@ -26,7 +26,7 @@ enum class DeviceType : std::uint8_t {
   Occupancy = 0x07,
   Contact   = 0x08,
   Button    = 0x09,
-  // The co-processor itself, as a first-class entity (entity_id 0x0000): its
+  // The co-processor itself, as a first-class entity (entity_id = its chip_id): its
   // telemetry (uptime, heap, link counters) reaches the brain as ordinary
   // STATE updates. Not a Matter accessory — the bridge skips it.
   Chip      = 0x0A,

@@ -32,17 +32,23 @@ Matter-over-WiFi.
 - `libhubproto/` — shared wire protocol (COBS+CRC16 framing, 8-byte header codec,
   payload codecs). Portable C++17, **zero radio/ESP-IDF deps**. Host-testable.
 - `core/` — brain logic: `Bus`/`ByteLink`, `UartTransport`, `EntityRegistry`,
-  `RadioCoordinator`, `StateMachine`, `CommandDispatcher`, `RuleEngine`. Portable
-  C++17, **zero radio deps**. Host-testable.
+  `RadioCoordinator`, `StateMachine`, `CommandDispatcher`, `RuleEngine`,
+  `ChipMonitor`, `DesiredState`/`Reconciler`, OTA (`OtaSender`/`OtaReceiver`/
+  `OtaVerifier`). Portable C++17, **zero radio deps**. Host-testable.
 - `firmware/brain-s3/` — ESP-IDF app: the brain (ESP32-S3-Zero).
 - `firmware/zigbee-c6/` — ESP-IDF app: the Zigbee coordinator (ESP32-C6).
+- `firmware/thread-c6/` — ESP-IDF app: Matter Bridge over on-chip Thread
+  (ESP32-C6, chip 0x02); built in the esp-matter Docker image
+  (`scripts/matter-build.sh thread-c6`).
 - `firmware/recorder-cam/` — ESP-IDF app: SD event recorder (ESP32-CAM), stub.
 - `firmware/components/` — shared ESP-IDF wrappers (`hubproto`, `core` reference
   the same sources as the host build; `esp_uart_link` is the only ESP-IDF-specific
   transport; `nvs_boot_id` persists the reboot counter). Apps pick them up via
   `EXTRA_COMPONENT_DIRS=../components`. App `main` is C++ (`app_main` is
   `extern "C"`).
-- `docs/` — per-phase notes (wiring, expected output).
+- `docs/` — per-phase notes (wiring, expected output), `ota.md`, and the
+  backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
+  `matter-backlog.md`).
 
 ## Build & test
 

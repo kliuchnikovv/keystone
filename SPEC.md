@@ -153,6 +153,9 @@ offset size field       meaning
 0x21 CMD_ACK      chip→brain   result of COMMAND seq=K (ok / fail / no-response)
 0x30 QUERY        brain→chip   "(re)declare all your entities"
 0x40 HEARTBEAT    both         liveness ping; absence over N intervals = chip down
+0x50..0x58 OTA_*  both         firmware update of a co-processor over the link
+                               (BEGIN/CHUNK/END + acks, ABORT, INFO_REQ/INFO);
+                               see docs/ota.md and libhubproto payload.hpp
 ```
 
 ### 4.4 Lifecycle
@@ -240,6 +243,13 @@ exposed as a Matter accessory with no second modeling pass.
 | occupancy   | 0x07  | Occupancy Sensor   | occupied(0x50) |
 | contact     | 0x08  | Contact Sensor     | contact(0x51) |
 | button      | 0x09  | Generic Switch     | event(0x60) |
+| chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16) |
+
+The `chip` device_type is the co-processor itself, declared as a self entity
+whose `entity_id` equals the chip's own `chip_id` (0x01, 0x02, … — the registry
+is global, so ids must be unique; header `entity_id 0x0000` stays "about the
+chip" for OTA/meta messages); its health reaches the brain as ordinary STATE (no extra
+message type). The Matter bridge skips it.
 
 > Keep this table in sync with Matter Device Types. When adding a device_type or
 > attr_id, check the Matter cluster it maps to first — this is the most tedious

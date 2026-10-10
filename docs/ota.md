@@ -1,7 +1,7 @@
 # OTA: updating the C6 co-processors from the brain
 
 The brain pushes a firmware image to a co-processor over the existing UART link
-(hubproto OTA messages 0x50–0x56). No extra wiring. Chosen over an EN/BOOT
+(hubproto OTA messages 0x50–0x58). No extra wiring. Chosen over an EN/BOOT
 flasher in [backlog.md § OTA](backlog.md#ota-updates-for-the-co-processor-c6s);
 that path is still the recovery route for a chip that no longer boots.
 
@@ -56,9 +56,10 @@ Code: `libhubproto` (codecs), `core/ota_sender.hpp` (brain),
   that aborts 3 s after boot is rolled back by the bootloader on its own and the
   chip comes back on the old slot; a wrong SHA-256 is refused with the running
   image untouched; non-image data is refused at the first chunk (header check).
-- The brain only knows the *transfer* succeeded. If the new image then rolls
-  back, the brain sees the chip's HELLO twice (two boot_id changes); it does not
-  yet report "updated but rolled back".
+- A successful *transfer* does not mean the new image stayed: if it rolls back,
+  the brain sees the chip's HELLO twice (two boot_id changes). `core::OtaVerifier`
+  asks the chip afterwards and reports VERIFIED / ROLLED BACK (see the last
+  section).
 - Not covered yet: image *signing*. Anyone who can start an OTA with a matching
   SHA-256 can flash the chip. Secure boot / signed images are a later step.
 

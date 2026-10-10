@@ -206,6 +206,12 @@ How to wire it (rough plan):
   with color/status; the future Matter bridge can also expose "hub health"
   as a diagnostic cluster.
 
+> **Status:** the heartbeat watchdog (`core::ChipMonitor`) is done and
+> hardware-verified; the `self` entity is done and hardware-verified
+> (device_type `chip` 0x0A, entity_id = chip_id, attrs 0x70–0x75, SPEC §6.1).
+> Still open: radio quality (RSSI/LQI), the EN/BOOT reset lines, replay of a
+> co-processor's outbound buffer after a link resume.
+
 Invariant: chip health belongs to the *brain*. A chip reporting "I'm fine"
 tells the brain nothing useful about the *link* — the brain must judge
 liveness from its own inbound stream.
