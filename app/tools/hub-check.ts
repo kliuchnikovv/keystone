@@ -2,7 +2,8 @@
 //   npm run hub-check -- --url ws://192.168.0.202:8080/ws --token <token> [--lockout] [--hold 20]
 // Raw-socket tests of the behaviours docs/app-protocol.md promises. `--lockout` also
 // exercises the failed-auth lockout (it locks THIS machine out of the hub for a
-// minute, so it is off by default). `--hold N` keeps 3 clients connected for N
+// minute, so it is off by default). `--mutate` also exercises the management requests
+// (names, rules, schedules, timers), putting back everything it creates. `--hold N` keeps 3 clients connected for N
 // seconds at the end, e.g. to read `heap` on the hub console.
 import { WebSocket } from 'ws';
 import { HubClient, type SocketLike } from '../src/protocol/client';
@@ -231,6 +232,117 @@ await check('the 4th simultaneous client is refused with busy; a slot frees up a
   extra.ws.close(); again.ws.close(); fourth.ws.close();
   return refused && w ? true : `4th got ${code(e)}, retry welcome=${!!w}`;
 });
+
+if (process.argv.includes('--mutate')) {
+  // Management requests change the hub, so they only run on request, and each test
+  // puts back what it touched. The rule uses a condition that cannot become true.
+  const c = new HubClient({ url, token, clientName: 'hub-check', socketFactory: (u) => new WebSocket(u) as unknown as SocketLike });
+  c.connect();
+  for (let i = 0; i < 50 && c.getSnapshot().status !== 'ready'; i++) await sleep(100);
+  const waitFor = async (fn: () => boolean, ms = 4000) => {
+    for (let t = 0; t < ms && !fn(); t += 50) await sleep(50);
+    return fn();
+  };
+  const target = c.getSnapshot().entities.find((e) => e.attrs.some((x) => x.id === 0x01 && x.flags.includes('w')) && e.attrs.some((x) => x.id === 0x13));
+  const before = { rules: c.getSnapshot().rules.length, schedules: c.getSnapshot().schedules.length, timers: c.getSnapshot().timers.length };
+  const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string }) => String(e.code));
+  if (!target) {
+    console.log('  (--mutate needs a device with a writable on/off and power_w; skipped)');
+  } else {
+    const orig = target.name;
+    const ent = target.id;
+    const nameOf = () => c.getSnapshot().entities.find((e) => e.id === ent)?.name ?? null;
+
+    await check('name.set renames a device and the hub pushes the new picture; the old name is restored', async () => {
+      try {
+        await c.req('name.set', { entity: ent, name: 'chk_tmp' });
+        return (await waitFor(() => nameOf() === 'chk_tmp')) ? true : 'rename not pushed';
+      } finally {
+        if (orig !== null) await c.req('name.set', { entity: ent, name: orig });
+        else await c.req('name.clear', { entity: ent });
+        await waitFor(() => nameOf() === orig);
+      }
+    });
+    await check('name.set rejects bad names, unknown entities and duplicates', async () => {
+      const got = [
+        await code(c.req('name.set', { entity: ent, name: 'Bad Name' })),
+        await code(c.req('name.set', { entity: ent, name: '0x10' })),
+        await code(c.req('name.set', { entity: ent, name: '' })),
+        await code(c.req('name.set', { entity: 65000, name: 'ghost' })),
+        await code(c.req('name.set', { name: 'x' })),
+      ];
+      return JSON.stringify(got) === JSON.stringify(['bad_args', 'bad_args', 'bad_args', 'not_found', 'bad_args']) ? true : got.join(',');
+    });
+    await check('schedule.add returns its index, shows up for everyone, schedule.del removes it', async () => {
+      const r = await c.req('schedule.add', { time: '03:33', days: 'weekdays', entity: ent, action: 'off' });
+      const idx = r.index as number;
+      try {
+        if (typeof idx !== 'number') return 'no index in the result';
+        const shown = await waitFor(() => c.getSnapshot().schedules.some((x) => x.index === idx && x.time === '03:33' && x.days === 'weekdays'));
+        return shown ? true : 'not listed';
+      } finally {
+        if (typeof idx === 'number') await c.req('schedule.del', { index: idx });
+        await waitFor(() => c.getSnapshot().schedules.length === before.schedules);
+      }
+    });
+    await check('timer.add / timer.cancel', async () => {
+      const r = await c.req('timer.add', { entity: ent, action: 'off', delay_s: 3000 });
+      const idx = r.index as number;
+      try {
+        const shown = await waitFor(() => c.getSnapshot().timers.length === before.timers + 1);
+        const t = c.getSnapshot().timers.find((x) => x.index === idx);
+        return shown && t && t.left_s > 2000 && t.left_s <= 3000 ? true : `listed=${shown} left=${t?.left_s}`;
+      } finally {
+        if (typeof idx === 'number') await c.req('timer.cancel', { index: idx });
+        await waitFor(() => c.getSnapshot().timers.length === before.timers);
+      }
+    });
+    await check('rule.add with every constraint is stored as given; rule.del removes it', async () => {
+      const rule = {
+        when: { entity: ent, attr: 0x13, op: '>', value: 65000 }, // a plug cannot draw 65 kW
+        then: { entity: ent, attr: 0x01, value: false },
+        between: { from: '18:00', to: '23:00' },
+        and: { entity: ent, attr: 0x13, op: '<', value: 65500 },
+        cooldown_s: 600,
+      };
+      const r = await c.req('rule.add', rule);
+      const idx = r.index as number;
+      try {
+        const shown = await waitFor(() => c.getSnapshot().rules.length === before.rules + 1);
+        const stored = c.getSnapshot().rules.find((x) => x.index === idx);
+        const same = stored && JSON.stringify({ ...stored, index: undefined }) === JSON.stringify(rule);
+        return shown && same ? true : `listed=${shown} stored=${JSON.stringify(stored)}`;
+      } finally {
+        if (typeof idx === 'number') await c.req('rule.del', { index: idx });
+        await waitFor(() => c.getSnapshot().rules.length === before.rules);
+      }
+    });
+    await check('bad arguments get specific codes', async () => {
+      const ok = { when: { entity: ent, attr: 0x13, op: '>', value: 65000 }, then: { entity: ent, attr: 0x01, value: false } };
+      const got = [
+        await code(c.req('rule.add', { ...ok, cooldown_s: 0 })),
+        await code(c.req('rule.add', { ...ok, between: { from: '10:00', to: '10:00' } })),
+        await code(c.req('rule.add', { ...ok, when: { ...ok.when, entity: 65000 } })),
+        await code(c.req('rule.add', { ...ok, then: { entity: ent, attr: 0x13, value: 1 } })),
+        await code(c.req('rule.del', { index: 99 })),
+        await code(c.req('schedule.add', { time: '25:00', days: 'daily', entity: ent, action: 'off' })),
+        await code(c.req('schedule.del', { index: 99 })),
+        await code(c.req('timer.add', { entity: ent, action: 'off', delay_s: 0 })),
+        await code(c.req('timer.cancel', { index: 99 })),
+      ];
+      const want = ['bad_args', 'bad_args', 'not_found', 'read_only', 'not_found', 'bad_args', 'not_found', 'bad_args', 'not_found'];
+      return JSON.stringify(got) === JSON.stringify(want) ? true : got.join(',');
+    });
+    await check('everything the tests created is gone again', async () => {
+      const ok = await waitFor(() => {
+        const s = c.getSnapshot();
+        return s.rules.length === before.rules && s.schedules.length === before.schedules && s.timers.length === before.timers && nameOf() === orig;
+      });
+      return ok ? true : 'leftovers';
+    });
+  }
+  c.close();
+}
 
 if (process.argv.includes('--lockout')) {
   await check('5 failed logins lock the address out, even for the right token', async () => {

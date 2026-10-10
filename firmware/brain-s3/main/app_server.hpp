@@ -22,6 +22,7 @@ struct Inbound {
   enum class Kind : std::uint8_t {
     Connected,  // a client finished the handshake: send it the snapshot
     Cmd,        // a (syntactically valid) command
+    Req,        // a management request: `text` is its raw JSON frame
   };
   Kind kind;
   int fd;
@@ -29,6 +30,9 @@ struct Inbound {
   std::int64_t entity;
   std::int64_t attr;
   core::app::Scalar value;
+  // Req only: a malloc'd copy of the frame (the main loop parses it, then free()s it).
+  char* text;
+  std::size_t len;
 };
 
 // Fills the `welcome` hub object; called in the server task. Strings must stay valid

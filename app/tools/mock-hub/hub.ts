@@ -357,15 +357,17 @@ export class MockHub {
 
     switch (msg.op) {
       case 'name.set': {
+        if (typeof args.entity !== 'number') return no('bad_args', 'entity');
         const e = this.entities.find((x) => x.id === args.entity);
         if (!e) return no('not_found', 'entity');
-        if (typeof args.name !== 'string' || !/^[a-z0-9_]{1,15}$/.test(args.name)) return no('bad_args', 'name');
+        if (typeof args.name !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(args.name)) return no('bad_args', 'name');
         if (this.entities.some((x) => x.name === args.name && x.id !== e.id)) return no('bad_args', 'name in use');
         e.name = args.name;
         this.broadcast({ type: 'entity', op: 'add', entity: e });
         return ok();
       }
       case 'name.clear': {
+        if (typeof args.entity !== 'number') return no('bad_args', 'entity');
         const e = this.entities.find((x) => x.id === args.entity);
         if (!e) return no('not_found', 'entity');
         e.name = null;
@@ -375,7 +377,7 @@ export class MockHub {
       case 'rule.add': {
         if (this.rules.length >= MAX_RULES) return no('table_full');
         const rule = this.parseRule(args);
-        if (typeof rule === 'string') return no('bad_args', rule);
+        if ('code' in rule) return no(rule.code, rule.message);
         this.rules.push({ ...rule, index: this.rules.length });
         this.broadcast({ type: 'rules', rules: this.rules });
         return ok({ index: this.rules.length - 1 });
@@ -391,7 +393,7 @@ export class MockHub {
       case 'schedule.add': {
         if (this.schedules.length >= MAX_SCHEDULES) return no('table_full');
         const s = this.parseSchedule(args);
-        if (typeof s === 'string') return no('bad_args', s);
+        if ('code' in s) return no(s.code, s.message);
         this.schedules.push({ ...s, index: this.schedules.length });
         this.broadcast({ type: 'schedules', schedules: this.schedules });
         return ok({ index: this.schedules.length - 1 });
@@ -456,52 +458,67 @@ export class MockHub {
     }));
   }
 
-  private parseRule(a: Record<string, unknown>): Omit<Rule, 'index'> | string {
+  /** Same checks, in the same order and with the same codes, as the hub's core::app::rule_add. */
+  private parseRule(a: Record<string, unknown>): Omit<Rule, 'index'> | { code: ErrorCode; message: string } {
+    const bad = (code: ErrorCode, message: string) => ({ code, message });
     const when = a.when as Record<string, unknown> | undefined;
     const then = a.then as Record<string, unknown> | undefined;
-    if (!when || !then) return 'when/then required';
+    if (!when || !then) return bad('bad_args', 'when/then required');
     const ops = ['any', '==', '!=', '<', '<=', '>', '>='];
-    if (!this.hasAttr(when.entity, when.attr)) return 'when: unknown entity/attr';
-    if (typeof when.op !== 'string' || !ops.includes(when.op)) return 'when.op';
-    if (when.op !== 'any' && when.value === undefined) return 'when.value';
-    if (!this.hasAttr(then.entity, then.attr)) return 'then: unknown entity/attr';
-    if (then.value === undefined || then.value === null) return 'then.value';
+    const whenAttr = this.lookupAttr(when);
+    if (typeof whenAttr === 'string') return bad(whenAttr === 'entity' ? 'not_found' : 'not_found', `when: no such ${whenAttr}`);
+    if (typeof when.op !== 'string' || !ops.includes(when.op)) return bad('bad_args', 'when.op');
+    if (when.op !== 'any' && !valueFits(whenAttr.vt, when.value)) return bad('bad_args', 'when.value does not fit the attribute');
+    const thenAttr = this.lookupAttr(then);
+    if (typeof thenAttr === 'string') return bad('not_found', `then: no such ${thenAttr}`);
+    if (!thenAttr.flags.includes('w')) return bad('read_only', 'then: attribute is read-only');
+    if (!valueFits(thenAttr.vt, then.value)) return bad('bad_args', 'then.value does not fit the attribute');
     const rule: Omit<Rule, 'index'> = {
       when: when as unknown as Rule['when'],
       then: then as unknown as Rule['then'],
     };
     if (a.between !== undefined) {
       const b = a.between as Record<string, unknown>;
-      if (!isHHMM(b.from) || !isHHMM(b.to) || b.from === b.to) return 'between';
+      if (!isHHMM(b.from) || !isHHMM(b.to) || b.from === b.to) return bad('bad_args', 'between');
       rule.between = { from: b.from as string, to: b.to as string };
     }
     if (a.and !== undefined) {
       const n = a.and as Record<string, unknown>;
-      if (!this.hasAttr(n.entity, n.attr)) return 'and: unknown entity/attr';
-      if (typeof n.op !== 'string' || n.op === 'any' || !ops.includes(n.op) || n.value === undefined) return 'and.op/value';
+      const andAttr = this.lookupAttr(n);
+      if (typeof andAttr === 'string') return bad('not_found', `and: no such ${andAttr}`);
+      if (typeof n.op !== 'string' || n.op === 'any' || !ops.includes(n.op)) return bad('bad_args', 'and.op');
+      if (!valueFits(andAttr.vt, n.value)) return bad('bad_args', 'and.value does not fit the attribute');
       rule.and = n as unknown as NonNullable<Rule['and']>;
     }
     if (a.cooldown_s !== undefined) {
       const s = a.cooldown_s;
-      if (typeof s !== 'number' || !Number.isInteger(s) || s < 1 || s > 65535) return 'cooldown_s';
+      if (typeof s !== 'number' || !Number.isInteger(s) || s < 1 || s > 65535) return bad('bad_args', 'cooldown_s');
       rule.cooldown_s = s;
     }
     return rule;
   }
 
-  private parseSchedule(a: Record<string, unknown>): Omit<Schedule, 'index'> | string {
-    if (!isHHMM(a.time)) return 'time';
+  /** The attribute named by {entity, attr}, or which part of it does not exist. */
+  private lookupAttr(o: Record<string, unknown>): Attr | 'entity' | 'attribute' {
+    const e = this.entities.find((x) => x.id === o.entity);
+    if (!e) return 'entity';
+    return e.attrs.find((x) => x.id === o.attr) ?? 'attribute';
+  }
+
+  private parseSchedule(a: Record<string, unknown>): Omit<Schedule, 'index'> | { code: ErrorCode; message: string } {
+    const bad = (code: ErrorCode, message: string) => ({ code, message });
+    if (!isHHMM(a.time)) return bad('bad_args', 'time');
     const days = a.days as Days | undefined;
     const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     const daysOk =
       days === 'daily' || days === 'weekdays' || days === 'weekends' ||
       (Array.isArray(days) && days.length > 0 && days.every((d) => names.includes(d)));
-    if (!daysOk) return 'days';
+    if (!daysOk) return bad('bad_args', 'days');
+    if (a.action !== 'on' && a.action !== 'off' && a.action !== 'toggle') return bad('bad_args', 'action');
     const e = this.entities.find((x) => x.id === a.entity);
-    if (!e) return 'entity';
-    const onoff = e.attrs.find((x) => x.name === 'on_off');
-    if (!onoff) return 'entity has no on_off';
-    if (a.action !== 'on' && a.action !== 'off' && a.action !== 'toggle') return 'action';
+    if (!e) return bad('not_found', 'no such entity');
+    const onoff = e.attrs.find((x) => x.name === 'on_off' && x.flags.includes('w'));
+    if (!onoff) return bad('bad_args', 'entity has no on/off switch');
     return { time: a.time as string, days: days as Days, entity: e.id, attr: onoff.id, action: a.action };
   }
 

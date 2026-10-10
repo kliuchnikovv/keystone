@@ -313,6 +313,12 @@ inline void encode_res_ok(JsonWriter& w, std::int64_t id) noexcept {
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", true).end_object();
 }
 
+// A successful request that created something: result.index is where it landed.
+inline void encode_res_ok_index(JsonWriter& w, std::int64_t id, std::int64_t index) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
+      .key("result").begin_object().kv("index", index).end_object().end_object();
+}
+
 inline void encode_res_error(JsonWriter& w, std::int64_t id, Err code, const char* message = nullptr) noexcept {
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", false).kv("code", err_name(code));
   if (message != nullptr) w.kv("message", message);

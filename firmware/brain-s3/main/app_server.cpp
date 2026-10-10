@@ -312,12 +312,31 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       }
       return ESP_OK;
     }
-    case ClientMsg::Kind::Req:
-      // Management operations arrive in the next stage.
-      if (m.has_id) encode_res_error(w, m.id, Err::Unsupported, "not implemented yet");
-      else encode_error(w, -1, Err::BadArgs, "missing id");
-      reply(req, w);
+    case ClientMsg::Kind::Req: {
+      if (!m.has_id) {
+        encode_error(w, -1, Err::BadArgs, "missing id");
+        reply(req, w);
+        return ESP_OK;
+      }
+      // The frame is parsed again in the main loop, which owns the registry and the
+      // rule/schedule/timer tables; hand it a copy.
+      Inbound in{};
+      in.kind = Inbound::Kind::Req;
+      in.fd = fd;
+      in.id = m.id;
+      in.text = static_cast<char*>(std::malloc(len + 1));
+      in.len = len;
+      if (in.text != nullptr) {
+        std::memcpy(in.text, text, len);
+        in.text[len] = '\0';
+      }
+      if (in.text == nullptr || xQueueSend(g_in_q, &in, 0) != pdTRUE) {
+        std::free(in.text);
+        encode_res_error(w, m.id, Err::Internal, "busy, retry");
+        reply(req, w);
+      }
       return ESP_OK;
+    }
     case ClientMsg::Kind::Hello:  // already authenticated: harmless, ignore
       return ESP_OK;
     default:

@@ -260,7 +260,13 @@ describe('management requests', () => {
     await a.req('name.set', { entity: 0x0102, name: 'hall_sensor' });
     await until(() => b.getSnapshot().entities.find((e) => e.id === 0x0102)?.name === 'hall_sensor', 'rename pushed');
     await expect(a.req('name.set', { entity: 0x0101, name: 'hall_sensor' })).rejects.toMatchObject({ code: 'bad_args' });
-    await expect(a.req('name.set', { entity: 0x0101, name: 'Bad Name' })).rejects.toMatchObject({ code: 'bad_args' });
+    // Names start with a letter and use a-z 0-9 _ (at most 23 characters), so they can
+    // never be mistaken for a numeric entity id.
+    for (const name of ['Bad Name', '1abc', '_abc', '0x10', '', 'a'.repeat(24)]) {
+      await expect(a.req('name.set', { entity: 0x0101, name })).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    await a.req('name.set', { entity: 0x0101, name: 'a'.repeat(23) }); // the longest allowed
+    await a.req('name.set', { entity: 0x0101, name: 'lamp' });
     await a.req('name.clear', { entity: 0x0102 });
     await until(() => b.getSnapshot().entities.find((e) => e.id === 0x0102)?.name === null, 'name cleared');
   });
@@ -285,12 +291,15 @@ describe('management requests', () => {
       { ...rule, between: { from: '10:00', to: '10:00' } },
       { ...rule, between: { from: '25:00', to: '10:00' } },
       { ...rule, cooldown_s: 0 },
-      { ...rule, and: { ...rule.and, entity: 0x9999 } },
       { ...rule, when: { ...rule.when, op: '=~' } },
       { when: rule.when },
     ]) {
       await expect(c.req('rule.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
     }
+    // Unknown targets and read-only actions have their own codes.
+    await expect(c.req('rule.add', { ...rule, and: { ...rule.and, entity: 0x9999 } })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(c.req('rule.add', { ...rule, then: { entity: 0x0100, attr: 0x13, value: 5 } })).rejects.toMatchObject({ code: 'read_only' });
+    await expect(c.req('rule.add', { ...rule, then: { entity: 0x0101, attr: 0x01, value: 'on' } })).rejects.toMatchObject({ code: 'bad_args' });
 
     await c.req('rule.del', { index: 0 });
     await until(() => c.getSnapshot().rules.length === 1, 'one rule left');
@@ -323,6 +332,7 @@ describe('management requests', () => {
     ]) {
       await expect(c.req('schedule.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
     }
+    await expect(c.req('schedule.add', { time: '22:00', days: 'daily', entity: 0x9999, action: 'off' })).rejects.toMatchObject({ code: 'not_found' });
     await c.req('schedule.del', { index: 0 });
     await until(() => c.getSnapshot().schedules.length === 1, 'one schedule left');
     expect(c.getSnapshot().schedules[0]).toMatchObject({ index: 0, time: '06:30' });

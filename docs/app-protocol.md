@@ -1,9 +1,11 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **v1, stages 1–3 done.** The client library, a mock hub (stage 2) and the
-hub side over plain `ws://` with a token (stage 3: handshake, snapshot, live
-`state`/`chip` events, `cmd`/`ack`) are implemented and verified on hardware. Still
-to come: management requests (`req`), TLS, screens, mDNS discovery. The hub serves no UI
+Status: **v1, stages 1–3 done, devices/hub screens done.** The client library, a
+mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
+handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
+requests for names, rules, schedules and timers) are implemented and verified on
+hardware. Still to come: `pair`/`unpair`/`identify`, the rules/schedules/timers/names
+screens, TLS, mDNS discovery. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
 (Expo) app that also builds for the web, in [`app/`](../app/).
 
@@ -138,15 +140,21 @@ so they also update the desired state (reconciler).
 
 | op | args | notes |
 |---|---|---|
-| `name.set` / `name.clear` | `entity`, `name` | names `[a-z0-9_]{1,15}`, unique |
-| `rule.add` | rule (§6) | `res.result.index` |
+| `name.set` / `name.clear` | `entity`, `name` | names `[a-z][a-z0-9_]{0,22}` (start with a letter, so never mistaken for a numeric id), unique; chips cannot be named |
+| `rule.add` | rule (§6) | `res.result.index`. `then` must be writable (`read_only` otherwise); `when` and `and` may be any attribute, a chip's telemetry included; values are checked against the attribute's type and range |
 | `rule.del` | `index` | later rules shift down |
-| `schedule.add` | `time` `"HH:MM"`, `days`, `entity`, `action` | `action`: `on`/`off`/`toggle` |
+| `schedule.add` | `time` `"HH:MM"`, `days` (default daily), `entity`, `action` | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
 | `schedule.del` | `index` | |
-| `timer.add` | `delay_s`, `entity`, `action` | |
+| `timer.add` | `delay_s` (1..604800), `entity`, `action` | `index` is the slot number |
 | `timer.cancel` | `index` | |
-| `pair` / `unpair` | `seconds` / `entity` | Zigbee join window |
-| `identify` | `entity` | |
+| `pair` / `unpair` | `seconds` / `entity` | Zigbee join window — **not implemented yet** (answered `unsupported`) |
+| `identify` | `entity` | **not implemented yet** |
+
+Error codes: a missing or ill-typed argument is `bad_args` (the `message` names it);
+an entity or attribute that does not exist, or an index with nothing behind it, is
+`not_found`; a `then` that targets a read-only attribute is `read_only`; a full
+table is `table_full`. Both the hub (`core::app`, `core/app_requests.hpp`) and the
+mock hub follow this.
 
 Every mutating op re-broadcasts the affected list (`rules`/`schedules`/…) to all
 clients. Anything that changes the hub's security posture (token, Wi-Fi

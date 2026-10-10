@@ -67,6 +67,7 @@
 #include "esp_app_desc.h"
 #include "app_server.hpp"
 #include "core/app_protocol.hpp"
+#include "core/app_requests.hpp"
 #include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
@@ -1840,6 +1841,61 @@ void app_handle_cmd(const appsrv::Inbound& in, const Registry& reg, Dispatcher& 
   }
 }
 
+std::atomic<bool> g_app_force_check{false};  // a mutation just happened: look for structural change at once
+
+// A management request (docs/app-protocol.md §5), run in the main loop. The same
+// containers the console edits, so both surfaces see each other's changes.
+void app_handle_req(const appsrv::Inbound& in, Registry& reg, Rules& rules, Schedules& sched,
+                    core::TimerTable<8>& timers, std::uint32_t now) {
+  using namespace core::app;
+  core::JsonReader reader;
+  const ClientMsg m = decode_client(reader, in.text, in.len);
+  char b[192];
+  core::JsonWriter w(b, sizeof(b));
+
+  Outcome o = Outcome::fail(Err::Unsupported, m.op);
+  const char* op = m.kind == ClientMsg::Kind::Req ? m.op : "";
+  if (m.kind != ClientMsg::Kind::Req) {
+    o = Outcome::fail(Err::BadArgs, "not a request");
+  } else if (!std::strcmp(op, "name.set")) {
+    o = name_set(reg, reader, m.args);
+    if (o.ok) persist_names(reg.names());
+  } else if (!std::strcmp(op, "name.clear")) {
+    o = name_clear(reg, reader, m.args);
+    if (o.ok) persist_names(reg.names());
+  } else if (!std::strcmp(op, "rule.add")) {
+    o = rule_add(reg, rules, reader, m.args);
+    if (o.ok) persist_rules(rules);
+  } else if (!std::strcmp(op, "rule.del")) {
+    o = rule_del(rules, reader, m.args);
+    if (o.ok) persist_rules(rules);
+  } else if (!std::strcmp(op, "schedule.add")) {
+    o = schedule_add(reg, sched, reader, m.args);
+    if (o.ok) persist_schedules(sched);
+  } else if (!std::strcmp(op, "schedule.del")) {
+    o = schedule_del(sched, reader, m.args);
+    if (o.ok) persist_schedules(sched);
+  } else if (!std::strcmp(op, "timer.add")) {
+    time_t epoch = 0;
+    if (s_time_synced) time(&epoch);
+    o = timer_add(reg, timers, reader, m.args, now, static_cast<std::uint64_t>(epoch));
+    if (o.ok) persist_timers(timers, now);
+  } else if (!std::strcmp(op, "timer.cancel")) {
+    o = timer_cancel(timers, reader, m.args);
+    if (o.ok) persist_timers(timers, now);
+  }
+
+  if (o.ok) {
+    if (o.has_index) encode_res_ok_index(w, in.id, o.index);
+    else encode_res_ok(w, in.id);
+    g_app_force_check = true;
+  } else {
+    encode_res_error(w, in.id, o.err, o.msg[0] != '\0' ? o.msg : nullptr);
+  }
+  appsrv::send(in.fd, b, w.size());
+  ESP_LOGI(kTag, "app: req %s -> %s%s%s", op, o.ok ? "ok" : err_name(o.err), o.msg[0] ? " " : "", o.msg);
+}
+
 void app_hub_info(core::app::HubInfo& h) {
   const char* tz = std::getenv("TZ");
   h.name = "home";
@@ -2173,7 +2229,7 @@ extern "C" void app_main(void) {
       }
       if (appsrv::running()) {
         appsrv::tick(t);
-        if (appsrv::client_count() > 0 && t - app_last_check_ms >= 1000) {
+        if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
           app_last_check_ms = t;
           app_expire_pending(t);
           AppSource src(reg, rules, schedule_table, timer_table, coord, t);
@@ -2208,6 +2264,9 @@ extern "C" void app_main(void) {
             AppSource src(reg, rules, schedule_table, timer_table, coord, t);
             app_last_fp = src.fingerprint();
             app_send_snapshot(in.fd, src);
+          } else if (in.kind == appsrv::Inbound::Kind::Req) {
+            app_handle_req(in, reg, rules, schedule_table, timer_table, t);
+            std::free(in.text);
           } else {
             app_handle_cmd(in, reg, disp, t);
           }

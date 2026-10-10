@@ -32,7 +32,9 @@ npm run export:web       # static web build into dist/
 
 # against a real hub (set a token on its console first: `webtoken <token>`)
 npm run probe -- --url ws://<hub-ip>:8080/ws --token <token> [--cmd 256,1,false] [--seconds 30]
-npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 20 conformance checks
+npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 19 conformance checks
+#   --mutate   also create and remove a name, schedule, timer and rule (7 more checks)
+#   --lockout  also test the failed-login lockout (locks this machine out for a minute)
 ```
 
 Node >= 22. On first start the app asks for the hub address (`192.168.0.202` is
