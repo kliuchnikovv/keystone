@@ -174,3 +174,61 @@ describe('Connect screen', () => {
     expect((screen.getByLabelText('Hub address') as HTMLInputElement).value).toBe('ws://h:8080/ws');
   });
 });
+
+describe('Certificate fingerprint', () => {
+  const colons = 'D7:C0:8E:E0:28:AA:C6:DE:7C:D8:F2:90:62:5F:08:A7:84:34:42:AD:D9:20:8F:A9:27:6A:71:9D:AC:96:B7:71';
+
+  it('the field appears only for wss:// and a bad value is refused', () => {
+    const onSave = vi.fn();
+    render(<ConnectScreen onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: '10.0.0.5' } });
+    expect(screen.queryByLabelText('Certificate fingerprint')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: 'wss://10.0.0.5:8443/ws' } });
+    fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'twelve-chars' } });
+    fireEvent.change(screen.getByLabelText('Certificate fingerprint'), { target: { value: 'abc' } });
+    fireEvent.click(screen.getByLabelText('Connect'));
+    expect(screen.getByText(/not a SHA-256 fingerprint/)).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('a valid fingerprint is saved in its canonical form', () => {
+    const onSave = vi.fn();
+    render(<ConnectScreen onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: 'wss://10.0.0.5:8443/ws' } });
+    fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'twelve-chars' } });
+    fireEvent.change(screen.getByLabelText('Certificate fingerprint'), { target: { value: colons.toLowerCase().replace(/:/g, '') } });
+    fireEvent.click(screen.getByLabelText('Connect'));
+    expect(onSave).toHaveBeenCalledWith({ url: 'wss://10.0.0.5:8443/ws', token: 'twelve-chars', fingerprint: colons });
+  });
+
+  it('an empty fingerprint field means "not pinned"', () => {
+    const onSave = vi.fn();
+    render(<ConnectScreen onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: 'wss://10.0.0.5:8443/ws' } });
+    fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'twelve-chars' } });
+    fireEvent.click(screen.getByLabelText('Connect'));
+    expect(onSave).toHaveBeenCalledWith({ url: 'wss://10.0.0.5:8443/ws', token: 'twelve-chars' });
+  });
+
+  it('a build that cannot pin says so instead of connecting unverified', async () => {
+    const onChangeHub = vi.fn();
+    // No socketFactory override: this is the platform WebSocket, which cannot check a pin.
+    render(<Home settings={{ url: hub.url, token: hub.token, fingerprint: colons }} onChangeHub={onChangeHub} />);
+    await screen.findByText(/can't verify the hub's certificate fingerprint/);
+    fireEvent.click(screen.getByLabelText('Edit connection'));
+    expect(onChangeHub).toHaveBeenCalled();
+    expect(screen.queryByText('plug1')).toBeNull();
+  });
+});
+
+describe('Banner hint for wss://', () => {
+  it('points at accepting the certificate while a secure hub is unreachable, but not for ws://', async () => {
+    const { secureHint } = await import('../src/ui/Banner');
+    const { initialState } = await import('../src/protocol/store');
+    const base = { ...initialState, status: 'reconnecting' as const };
+    expect(secureHint('wss://192.168.0.202:8443/ws', base)).toContain('https://192.168.0.202:8443/');
+    expect(secureHint('ws://192.168.0.202:8080/ws', base)).toBeNull();
+    expect(secureHint('wss://hub/ws', { ...base, status: 'ready' })).toBeNull();
+    expect(secureHint('wss://hub/ws', { ...base, status: 'unauthorized' })).toBeNull();
+  });
+});

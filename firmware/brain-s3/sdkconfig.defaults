@@ -21,3 +21,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # App protocol: WebSocket endpoint on esp_http_server (docs/app-protocol.md).
 CONFIG_HTTPD_WS_SUPPORT=y
+# TLS for the app protocol (wss://), see docs/app-protocol.md §10.
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+# Smaller TLS record buffers: app protocol frames are at most 4 KB (a whole WebSocket frame
+# fits one record), and every TLS session pays for both buffers. Costs ~10 KB less per client.
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=6144
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4608

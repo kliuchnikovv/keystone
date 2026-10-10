@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSettingsStore, isPlaintext, normalizeUrl, validateSettings, type KeyValueStore } from '../src/settings';
+import { createSettingsStore, isPlaintext, isSecure, normalizeUrl, validateSettings, type KeyValueStore } from '../src/settings';
 
 function memoryStore(initial: Record<string, string> = {}, failing = false): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -49,5 +49,26 @@ describe('connection form', () => {
   it('knows when the link is unencrypted', () => {
     expect(isPlaintext('ws://hub:8080/ws')).toBe(true);
     expect(isPlaintext('wss://hub/ws')).toBe(false);
+  });
+});
+
+describe('certificate fingerprint in settings', () => {
+  const colons = 'D7:C0:8E:E0:28:AA:C6:DE:7C:D8:F2:90:62:5F:08:A7:84:34:42:AD:D9:20:8F:A9:27:6A:71:9D:AC:96:B7:71';
+  it('is validated, stored canonically and survives a reload', async () => {
+    expect(validateSettings({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: colons })).toBeNull();
+    expect(validateSettings({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: colons.toLowerCase().replace(/:/g, ' ') })).toBeNull();
+    expect(validateSettings({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: 'abc' })).toBe('fingerprint');
+    expect(validateSettings({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: '' })).toBeNull(); // empty = not pinned
+    const st = createSettingsStore(memoryStore());
+    await st.save({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: colons.toLowerCase() });
+    expect(await st.load()).toEqual({ url: 'wss://hub:8443/ws', token: '12345678', fingerprint: colons });
+  });
+  it('an unusable stored fingerprint is dropped rather than trusted', async () => {
+    const kv = memoryStore({ 'keystone.hub': JSON.stringify({ url: 'wss://h/ws', token: '12345678', fingerprint: 'garbage' }) });
+    expect(await createSettingsStore(kv).load()).toEqual({ url: 'wss://h/ws', token: '12345678' });
+  });
+  it('knows which URLs are secure', () => {
+    expect(isSecure('wss://hub:8443/ws')).toBe(true);
+    expect(isSecure('ws://hub:8080/ws')).toBe(false);
   });
 });

@@ -23,7 +23,26 @@ export interface SocketLike {
   send(data: string): void;
   close(): void;
 }
-export type SocketFactory = (url: string) => SocketLike;
+/**
+ * Opens a socket to `url`. A factory that is given `opts.fingerprint` MUST either verify
+ * the server certificate's SHA-256 against it before the socket reports `open` (so the
+ * token is never sent to an unverified server), or throw PinUnsupportedError.
+ */
+export type SocketFactory = (url: string, opts: { fingerprint?: string }) => SocketLike;
+
+/** This platform's sockets cannot pin a certificate (browsers, stock React Native). */
+export class PinUnsupportedError extends Error {
+  constructor() {
+    super('this platform cannot verify a certificate fingerprint');
+    this.name = 'PinUnsupportedError';
+  }
+}
+
+/** Pass to onerror when the server's certificate is not the pinned one. */
+export interface PinMismatchEvent {
+  pinMismatch: true;
+  seen?: string;
+}
 
 export interface HubClientOptions {
   /** `wss://host:8443/ws` (or `ws://host:8080/ws` for development). */
@@ -32,6 +51,8 @@ export interface HubClientOptions {
   /** Sent in `hello`, for the hub's log. */
   clientName?: string;
   socketFactory?: SocketFactory;
+  /** SHA-256 fingerprint of the hub's certificate to trust (for self-signed hubs on wss://). */
+  pinnedFingerprint?: string;
   /** Reconnect after a drop (default true). */
   reconnect?: boolean;
   backoffMs?: { min: number; max: number };
@@ -80,6 +101,7 @@ export class HubClient {
       backoffMs: options.backoffMs ?? { min: 500, max: 10_000 },
       requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
       socketFactory: options.socketFactory ?? defaultSocketFactory,
+      pinnedFingerprint: options.pinnedFingerprint ?? '',
     };
   }
 
@@ -107,8 +129,12 @@ export class HubClient {
     this.set(withStatus(this.state, this.attempt === 0 ? 'connecting' : 'reconnecting', this.state.error));
     let sock: SocketLike;
     try {
-      sock = this.opts.socketFactory(this.opts.url);
-    } catch {
+      sock = this.opts.socketFactory(this.opts.url, this.opts.pinnedFingerprint ? { fingerprint: this.opts.pinnedFingerprint } : {});
+    } catch (e) {
+      if (e instanceof PinUnsupportedError) {
+        this.fatal('untrusted', 'pin_unsupported');
+        return;
+      }
       this.scheduleRetry();
       return;
     }
@@ -123,15 +149,23 @@ export class HubClient {
       const msg = parseServerMessage(ev.data);
       if (msg) this.handle(msg);
     };
-    sock.onerror = () => {
-      /* onclose follows; nothing to add */
+    sock.onerror = (ev) => {
+      // A certificate that is not the pinned one is final: retrying cannot make it right.
+      if (this.socket === sock && (ev as Partial<PinMismatchEvent> | null)?.pinMismatch === true) {
+        this.fatal('untrusted', 'certificate_mismatch');
+        try {
+          sock.close();
+        } catch {
+          /* already closed */
+        }
+      }
     };
     sock.onclose = () => {
       if (this.socket !== sock) return;
       this.socket = null;
       this.failPending(new HubError('disconnected'));
       const s = this.state.status;
-      if (this.stopped || s === 'unauthorized' || s === 'incompatible') return;
+      if (this.stopped || s === 'unauthorized' || s === 'incompatible' || s === 'untrusted') return;
       this.set(withStatus(cleared(this.state), 'reconnecting', this.state.error));
       this.scheduleRetry();
     };
@@ -226,6 +260,11 @@ export class HubClient {
     }
   }
 
+  private fatal(status: ConnectionStatus, error: string): void {
+    this.stopped = true;
+    this.set(withStatus(cleared(this.state), status, error));
+  }
+
   /** A hub-level error with no request id: handshake refusals and the like. */
   private connectionError(code: ErrorCode): void {
     let status: ConnectionStatus | null = null;
@@ -267,7 +306,10 @@ export class HubClient {
   }
 }
 
-function defaultSocketFactory(url: string): SocketLike {
+function defaultSocketFactory(url: string, opts: { fingerprint?: string }): SocketLike {
+  // The platform WebSocket (browser, React Native) exposes no TLS details, so a pin
+  // cannot be checked. Pretending otherwise would be false assurance: refuse instead.
+  if (opts.fingerprint) throw new PinUnsupportedError();
   const WS = (globalThis as { WebSocket?: new (url: string) => SocketLike }).WebSocket;
   if (!WS) throw new Error('no global WebSocket; pass socketFactory');
   return new WS(url);

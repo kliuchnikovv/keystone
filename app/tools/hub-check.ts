@@ -1,12 +1,16 @@
 // Protocol conformance check against a running hub (the mock or the real one):
 //   npm run hub-check -- --url ws://192.168.0.202:8080/ws --token <token> [--lockout] [--hold 20]
+//   npm run hub-check -- --url wss://192.168.0.202:8443/ws --token <token> --fingerprint <sha256>
+// For wss:// the certificate is pinned (--fingerprint is required) and extra TLS checks run.
 // Raw-socket tests of the behaviours docs/app-protocol.md promises. `--lockout` also
 // exercises the failed-auth lockout (it locks THIS machine out of the hub for a
 // minute, so it is off by default). `--mutate` also exercises the management requests
 // (names, rules, schedules, timers), putting back everything it creates. `--hold N` keeps 3 clients connected for N
 // seconds at the end, e.g. to read `heap` on the hub console.
 import { WebSocket } from 'ws';
-import { HubClient, type SocketLike } from '../src/protocol/client';
+import { HubClient } from '../src/protocol/client';
+import { sameFingerprint } from '../src/protocol/fingerprint';
+import { pinnedSocketFactory, tlsInfo } from './pinned-socket';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -14,6 +18,14 @@ function arg(name: string): string | undefined {
 }
 const url = arg('url') ?? 'ws://127.0.0.1:8080/ws';
 const token = arg('token') ?? 'dev-token';
+const fingerprint = arg('fingerprint');
+const secure = /^wss:/i.test(url);
+if (secure && !fingerprint) {
+  console.error('wss:// needs --fingerprint <sha256> (the hub console prints it with `webtoken`)');
+  process.exit(2);
+}
+const newClient = (name: string) =>
+  new HubClient({ url, token, clientName: name, socketFactory: pinnedSocketFactory, ...(fingerprint ? { pinnedFingerprint: fingerprint } : {}) });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Raw {
@@ -26,7 +38,9 @@ interface Raw {
 }
 
 async function raw(): Promise<Raw> {
-  const ws = new WebSocket(url);
+  // Raw protocol tests: for wss:// the chain error of a self-signed certificate is expected;
+  // the certificate itself is pinned by the TLS checks below, before anything else runs.
+  const ws = new WebSocket(url, secure ? { rejectUnauthorized: false } : {});
   const msgs: Record<string, unknown>[] = [];
   let closed = false;
   const closedP = new Promise<void>((r) => ws.on('close', () => { closed = true; r(); }));
@@ -69,6 +83,49 @@ async function check(name: string, fn: () => Promise<boolean | string>): Promise
 const code = (m: Record<string, unknown> | null) => (m ? String(m.code) : 'no reply');
 
 console.log(`hub-check ${url}`);
+
+if (secure) {
+  const u = new URL(url);
+  const host = u.hostname;
+  const port = Number(u.port || 443);
+  let info: Awaited<ReturnType<typeof tlsInfo>> | null = null;
+  await check('TLS: the hub presents the pinned certificate', async () => {
+    info = await tlsInfo(host, port);
+    return sameFingerprint(info.fingerprint, fingerprint!) ? true : `presented ${info.fingerprint}`;
+  });
+  if (!info || !sameFingerprint((info as { fingerprint: string }).fingerprint, fingerprint!)) {
+    console.log('\nThe certificate is not the pinned one: stopping before any token is sent.');
+    process.exit(1);
+  }
+  await check('TLS: protocol is 1.2 or newer with an AEAD cipher', async () => {
+    const i = info!;
+    const ok = (i.protocol === 'TLSv1.2' || i.protocol === 'TLSv1.3') && /GCM|CHACHA20|CCM/.test(i.cipher ?? '');
+    return ok ? true : `${i.protocol} ${i.cipher}`;
+  });
+  await check('TLS: the certificate is within its validity period', async () => {
+    const i = info!;
+    const now = Date.now();
+    return i.validFrom.getTime() <= now && now < i.validTo.getTime() ? true : `${i.validFrom.toISOString()} .. ${i.validTo.toISOString()}`;
+  });
+  await check('TLS: a wrong pin is refused and ends in "untrusted"', async () => {
+    const c = new HubClient({ url, token, socketFactory: pinnedSocketFactory, pinnedFingerprint: 'AA:'.repeat(31) + 'AA' });
+    c.connect();
+    for (let i = 0; i < 50 && c.getSnapshot().status !== 'untrusted'; i++) await sleep(100);
+    const st = c.getSnapshot().status;
+    c.close();
+    return st === 'untrusted' ? true : st;
+  });
+  await check('TLS: plain ws:// to the TLS port gets no WebSocket', async () => {
+    const r = await new Promise<string>((resolve) => {
+      const w = new WebSocket(`ws://${host}:${port}/ws`);
+      const t = setTimeout(() => { w.terminate(); resolve('closed'); }, 3000);
+      w.on('open', () => { clearTimeout(t); w.close(); resolve('OPEN'); });
+      w.on('error', () => { clearTimeout(t); resolve('refused'); });
+      w.on('close', () => { clearTimeout(t); resolve('closed'); });
+    });
+    return r === 'OPEN' ? 'the TLS port answered a plain WebSocket' : true;
+  });
+}
 
 if (process.argv.includes('--only-hold')) {
   const secs = Number(arg('hold') ?? '20');
@@ -136,7 +193,7 @@ await check('no hello within the timeout: the hub closes the connection (~5 s)',
 
 // ---- authenticated behaviour ----
 const a = await login();
-const snap = new HubClient({ url, token, clientName: 'hub-check', socketFactory: (u) => new WebSocket(u) as unknown as SocketLike });
+const snap = newClient('hub-check');
 snap.connect();
 for (let i = 0; i < 50 && snap.getSnapshot().status !== 'ready'; i++) await sleep(100);
 const ents = snap.getSnapshot().entities;
@@ -236,7 +293,7 @@ await check('the 4th simultaneous client is refused with busy; a slot frees up a
 if (process.argv.includes('--mutate')) {
   // Management requests change the hub, so they only run on request, and each test
   // puts back what it touched. The rule uses a condition that cannot become true.
-  const c = new HubClient({ url, token, clientName: 'hub-check', socketFactory: (u) => new WebSocket(u) as unknown as SocketLike });
+  const c = newClient('hub-check');
   c.connect();
   for (let i = 0; i < 50 && c.getSnapshot().status !== 'ready'; i++) await sleep(100);
   const waitFor = async (fn: () => boolean, ms = 4000) => {

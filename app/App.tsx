@@ -31,7 +31,7 @@ export default function App() {
       />
     ) : (
       <Home
-        key={`${settings.url}|${settings.token}`}
+        key={`${settings.url}|${settings.token}|${settings.fingerprint ?? ''}`}
         settings={settings}
         onChangeHub={() => {
           setNotice(null);

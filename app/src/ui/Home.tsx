@@ -27,11 +27,11 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
   const commands = useCommands(client);
   const [tab, setTab] = useState<Tab>('devices');
 
-  const fatal = home.status === 'unauthorized' || home.status === 'incompatible';
+  const fatal = home.status === 'unauthorized' || home.status === 'incompatible' || home.status === 'untrusted';
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: t.bg }]}>
-      <Banner state={home} />
+      <Banner state={home} url={settings.url} />
       {fatal && (
         <Pressable accessibilityRole="button" accessibilityLabel="Edit connection" onPress={onChangeHub} style={styles.fix}>
           <Text style={{ color: t.accent, fontWeight: '600' }}>Edit connection</Text>

@@ -19,6 +19,7 @@ export type ConnectionStatus =
   | 'reconnecting' // dropped, will retry
   | 'unauthorized' // wrong token: fatal, no retry
   | 'incompatible' // protocol version mismatch: fatal
+  | 'untrusted' // the hub's certificate is not the pinned one (or pinning is impossible here): fatal
   | 'closed'; // close() was called
 
 export interface HomeState {

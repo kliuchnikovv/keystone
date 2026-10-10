@@ -35,6 +35,9 @@ npm run export:web       # static web build into dist/
 # against a real hub (set a token on its console first: `webtoken <token>`)
 npm run probe -- --url ws://<hub-ip>:8080/ws --token <token> [--cmd 256,1,false] [--seconds 30]
 npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 19 conformance checks
+# over TLS: pin the certificate (the hub console prints it with `webtoken`); adds 5 TLS checks
+npm run hub-check -- --url wss://<hub-ip>:8443/ws --token <token> --fingerprint <sha256>
+# without --fingerprint, `probe` on a wss:// URL just shows what the hub presents, to compare
 #   --mutate   also create and remove a name, schedule, timer and rule (7 more checks)
 #   --lockout  also test the failed-login lockout (locks this machine out for a minute)
 ```
@@ -44,9 +47,13 @@ enough) and the token.
 
 ## Notes
 
-- The link is plain `ws://` until the TLS stage (see the protocol doc, §10). A phone
-  build may need cleartext traffic allowed for that (an iOS ATS exception for local
-  networking, Android `usesCleartextTraffic`); not yet tried on a device.
+- The hub speaks `wss://` (its own self-signed certificate, pinned by fingerprint; protocol
+  doc §10). In a **browser** open `https://<hub>:8443/` once and accept the certificate,
+  and leave the fingerprint field empty (a page cannot pin). On a **phone** the stock
+  WebSocket can neither pin nor accept a self-signed certificate, so a phone currently
+  needs `webplain on` on the hub (plain `ws://`, trusted network only) and may need
+  cleartext traffic allowed (iOS ATS exception for local networking, Android
+  `usesCleartextTraffic`). Native pinning is open work; none of this is tried on a device.
 - The web build keeps the token in `localStorage`: fine for development, prefer the
   native app for daily use.
 - `npm audit` reports vulnerabilities in the React Native / Expo build tooling; none

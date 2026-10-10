@@ -5,7 +5,9 @@
 // loop wants to say goes out through send()/broadcast(), which hand the frame to the
 // server task (all socket writes happen there, so they are serialized).
 //
-// Stage 3: plain ws:// on port 8080 (development; TLS is stage 5).
+// Two modes, one server at a time (heap): wss:// on port 8443 when the firmware carries a
+// TLS identity (scripts/gen-hub-cert.sh) and plain ws:// on 8080 otherwise or when plain
+// is forced for development.
 #pragma once
 
 #include <cstddef>
@@ -39,8 +41,17 @@ struct Inbound {
 // until the next call.
 using HubInfoFn = void (*)(core::app::HubInfo& out);
 
-// Start (or restart with a new token) the server. Token: 8..64 characters.
-bool start(const char* token, HubInfoFn info);
+enum class Mode : std::uint8_t { Stopped, Tls, Plain };
+
+// True if this firmware embeds a TLS identity.
+bool tls_available();
+// SHA-256 of the embedded certificate as "AA:BB:…" (what apps pin), or "" without TLS.
+const char* cert_fingerprint();
+
+// Start (or restart with a new token) the server. Token: 8..64 characters. TLS is used
+// when available unless `force_plain` asks for ws:// (development only).
+bool start(const char* token, HubInfoFn info, bool force_plain = false);
+Mode mode();
 void stop();
 bool running();
 

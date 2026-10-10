@@ -61,6 +61,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+**TLS identity for the brain (optional).** `scripts/gen-hub-cert.sh` creates the hub's own
+certificate and key (gitignored, per device) so the app protocol is served over `wss://`;
+without it the brain builds and serves plain `ws://` only. See docs/app-protocol.md §10.
+
 **Firmware.** Each app is its own ESP-IDF project. Two toolchains are in use:
 
 - `zigbee-c6` builds with **native ESP-IDF 5.5** (installed at `~/esp/esp-idf`),

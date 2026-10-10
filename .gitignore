@@ -30,3 +30,8 @@ firmware/*/main/wifi_secrets.h
 node_modules/
 dist/
 .expo/
+
+# The hub's TLS identity (scripts/gen-hub-cert.sh): never commit the private key.
+firmware/*/main/hub_key.pem
+firmware/*/main/hub_cert.pem
+firmware/*/main/hub_identity.cpp

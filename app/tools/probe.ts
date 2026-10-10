@@ -1,11 +1,14 @@
 // Connect to a real (or mock) hub with HubClient and print what happens. For checking
 // a hub by hand:  npm run probe -- --url ws://192.168.0.202:8080/ws --token <token>
+//   --fingerprint FP   the hub's certificate SHA-256 (required for wss://; the hub console
+//                      prints it with `webtoken`). Without it, wss:// only shows what the hub
+//                      presents so you can compare it, and exits.
 //   --seconds N        how long to listen (default 15)
 //   --cmd E,A,V        send one command after the snapshot, e.g. --cmd 256,1,false
 //   --cmd-delay N      wait N seconds before sending it
-import { WebSocket } from 'ws';
-import { HubClient, type SocketLike } from '../src/protocol/client';
+import { HubClient } from '../src/protocol/client';
 import type { Value } from '../src/protocol/messages';
+import { fetchFingerprint, pinnedSocketFactory } from './pinned-socket';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -17,11 +20,21 @@ const token = arg('token') ?? 'dev-token';
 const seconds = Number(arg('seconds') ?? '15');
 const cmd = arg('cmd');
 
+const fingerprint = arg('fingerprint');
+if (/^wss:/i.test(url) && !fingerprint) {
+  const u = new URL(url);
+  const seen = await fetchFingerprint(u.hostname, Number(u.port || 443));
+  console.log(`${u.host} presents certificate SHA-256 ${seen}`);
+  console.log('Compare it with the hub console (`webtoken`), then re-run with --fingerprint <that value>.');
+  process.exit(2);
+}
+
 const client = new HubClient({
   url,
   token,
   clientName: 'probe',
-  socketFactory: (u) => new WebSocket(u) as unknown as SocketLike,
+  socketFactory: pinnedSocketFactory,
+  ...(fingerprint ? { pinnedFingerprint: fingerprint } : {}),
 });
 
 let last = client.getSnapshot();

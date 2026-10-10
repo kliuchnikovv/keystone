@@ -1497,6 +1497,7 @@ int cmd_ota(int argc, char** argv) {
 }
 
 int cmd_webtoken(int argc, char** argv);  // defined with the app glue, below
+int cmd_webplain(int argc, char** argv);
 
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
@@ -1528,6 +1529,7 @@ void start_console() {
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
+  reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
   reg_cmd("chips", "list known co-processor chips + traffic", &cmd_chips);
   reg_cmd("log", "log on|off - enable/disable verbose event log", &cmd_log);
@@ -1925,14 +1927,68 @@ bool restore_webtoken(char* out, std::size_t cap) {
   return ok;
 }
 
+constexpr const char* kWebPlainKey = "webplain";
+
+bool restore_webplain() {  // development switch: serve plain ws:// even though TLS is available
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return false;
+  std::uint8_t v = 0;
+  const bool on = nvs_get_u8(h, kWebPlainKey, &v) == ESP_OK && v != 0;
+  nvs_close(h);
+  return on;
+}
+
+void persist_webplain(bool on) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  if (on) nvs_set_u8(h, kWebPlainKey, 1);
+  else nvs_erase_key(h, kWebPlainKey);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+const char* app_mode_text() {
+  switch (appsrv::mode()) {
+    case appsrv::Mode::Tls: return "wss (TLS)";
+    case appsrv::Mode::Plain: return "ws (PLAIN, development only)";
+    case appsrv::Mode::Stopped: break;
+  }
+  return "stopped";
+}
+
+// webplain [on|off]: development switch. With TLS available the app server speaks only
+// wss:// unless this is on; without a TLS identity in the firmware it is always plain.
+int cmd_webplain(int argc, char** argv) {
+  char tok[core::app::kMaxToken + 1] = {};
+  const bool have = restore_webtoken(tok, sizeof(tok));
+  if (argc >= 2) {
+    const bool on = std::strcmp(argv[1], "on") == 0;
+    if (!on && std::strcmp(argv[1], "off") != 0) {
+      printf("usage: webplain [on|off]\n");
+      return 1;
+    }
+    persist_webplain(on);
+    if (have) {
+      if (!appsrv::start(tok, &app_hub_info, on)) {
+        printf("saved, but the app server did not restart\n");
+        return 1;
+      }
+    }
+  }
+  printf("plain ws:// %s (TLS %s in this firmware); app server: %s on port %d\n",
+         restore_webplain() ? "ALLOWED" : "off", appsrv::tls_available() ? "available" : "NOT available",
+         app_mode_text(), appsrv::port());
+  return 0;
+}
+
 // webtoken [<token>|clear]: the shared secret of the app protocol. Never printed.
 int cmd_webtoken(int argc, char** argv) {
   char cur[core::app::kMaxToken + 1] = {};
   const bool have = restore_webtoken(cur, sizeof(cur));
   if (argc == 1) {
-    printf("web token: %s; app server %s on port %d, %u client(s) connected\n",
-           have ? "set" : "NOT set", appsrv::running() ? "running" : "stopped", appsrv::port(),
-           static_cast<unsigned>(appsrv::client_count()));
+    printf("web token: %s; app server: %s on port %d, %u client(s) connected\n",
+           have ? "set" : "NOT set", app_mode_text(), appsrv::port(), static_cast<unsigned>(appsrv::client_count()));
+    if (appsrv::tls_available()) printf("certificate SHA-256 (what apps pin): %s\n", appsrv::cert_fingerprint());
     return 0;
   }
   if (std::strcmp(argv[1], "clear") == 0) {
@@ -1953,12 +2009,13 @@ int cmd_webtoken(int argc, char** argv) {
     }
   }
   persist_webtoken(argv[1]);
-  if (!appsrv::start(argv[1], &app_hub_info)) {
+  if (!appsrv::start(argv[1], &app_hub_info, restore_webplain())) {
     printf("token saved, but the app server did not start\n");
     return 1;
   }
-  printf("token set; app server (re)started on ws://<hub>:%d/ws — existing connections were closed\n",
-         appsrv::port());
+  printf("token set; app server (re)started: %s on port %d — existing connections were closed\n",
+         app_mode_text(), appsrv::port());
+  if (appsrv::mode() == appsrv::Mode::Tls) printf("certificate SHA-256: %s\n", appsrv::cert_fingerprint());
   return 0;
 }
 
@@ -2068,7 +2125,7 @@ extern "C" void app_main(void) {
   {
     char tok[core::app::kMaxToken + 1] = {};
     if (restore_webtoken(tok, sizeof(tok))) {
-      if (!appsrv::start(tok, &app_hub_info)) ESP_LOGE(kTag, "app server failed to start");
+      if (!appsrv::start(tok, &app_hub_info, restore_webplain())) ESP_LOGE(kTag, "app server failed to start");
     } else {
       ESP_LOGI(kTag, "app server off: no token (set one with `webtoken <token>`)");
     }

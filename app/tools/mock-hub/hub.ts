@@ -2,6 +2,7 @@
 // library and the app can be developed and tested without hardware. It mirrors the
 // real hub's rules where the protocol states them (handshake timeout, 3 clients,
 // failed-auth lockout, validation, re-broadcast after mutations).
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { WebSocketServer, type WebSocket, type RawData } from 'ws';
 import {
   MAX_FRAME_BYTES,
@@ -37,6 +38,8 @@ export interface MockHubOptions {
   name?: string;
   /** Entities per snapshot frame (0 = everything in one frame), to exercise parts. */
   snapshotChunk?: number;
+  /** Serve wss:// with this identity (PEM strings) instead of plain ws://. */
+  tls?: { key: string; cert: string } | null;
 }
 
 interface TimerEntry {
@@ -124,7 +127,10 @@ export class MockHub {
   private clients = new Set<ClientInfo>();
   private failures = new Map<string, { count: number; until: number }>();
   private wss: WebSocketServer;
+  private https: HttpsServer | null = null;
   private seq = 1;
+  /** How many `hello` frames the hub has received (a pinned client must send none to a wrong server). */
+  helloCount = 0;
   readonly opts: Required<MockHubOptions>;
   /** When set, every command is answered with this ACK status (and changes nothing unless 'ok'). */
   forceAck: AckStatus | null = null;
@@ -145,19 +151,28 @@ export class MockHub {
       lockoutMs: 60_000,
       name: 'mock-home',
       snapshotChunk: 0,
+      tls: null,
       ...options,
     };
+    if (opts.tls) {
+      const https = createHttpsServer({ key: opts.tls.key, cert: opts.tls.cert });
+      const wss = new WebSocketServer({ server: https, maxPayload: MAX_FRAME_BYTES });
+      await new Promise<void>((resolve) => https.listen(opts.port, '127.0.0.1', () => resolve()));
+      const hub = new MockHub(wss, opts);
+      hub.https = https;
+      return hub;
+    }
     const wss = new WebSocketServer({ port: opts.port, host: '127.0.0.1', maxPayload: MAX_FRAME_BYTES });
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
     return new MockHub(wss, opts);
   }
 
   get port(): number {
-    const a = this.wss.address();
+    const a = (this.https ?? this.wss).address();
     return typeof a === 'object' && a ? a.port : 0;
   }
   get url(): string {
-    return `ws://127.0.0.1:${this.port}/ws`;
+    return `${this.https ? 'wss' : 'ws'}://127.0.0.1:${this.port}/ws`;
   }
   get clientCount(): number {
     return [...this.clients].filter((c) => c.authed).length;
@@ -171,6 +186,10 @@ export class MockHub {
       c.ws.terminate();
     }
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
+    if (this.https) {
+      this.https.closeAllConnections();
+      await new Promise<void>((resolve) => this.https!.close(() => resolve()));
+    }
   }
 
   /** How many timers are pending (for tests). */
@@ -247,6 +266,7 @@ export class MockHub {
 
     if (!c.authed) {
       if (msg.type !== 'hello') return this.fail(c, 'unauthorized');
+      this.helloCount += 1;
       return this.hello(c, msg);
     }
     const id = typeof msg.id === 'number' ? msg.id : undefined;
