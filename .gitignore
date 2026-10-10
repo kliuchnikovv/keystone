@@ -25,3 +25,6 @@ firmware/*/main/wifi_secrets.h
 
 # PlatformIO build output
 .pio/
+
+# Node (app/)
+node_modules/

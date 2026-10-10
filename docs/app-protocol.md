@@ -1,8 +1,9 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **draft v1 (design only, nothing implemented yet).** The hub serves no UI
+Status: **draft v1.** Client library and a mock hub are implemented and tested in
+[`app/`](../app/) (stage 2); the hub side is not implemented yet. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
-(Expo) app that also builds for the web, in [`app/`](../app/) (not created yet).
+(Expo) app that also builds for the web, in [`app/`](../app/).
 
 Decisions (maintainer, 2026-10-10): WebSocket + JSON; Expo (iOS, Android, web);
 shared token **and** TLS; code in `app/` of this repo.
@@ -83,7 +84,7 @@ Incremental events (no `id`, pushed as they happen):
 | type | payload |
 |---|---|
 | `state` | `entity`, `attr`, `value` — an attribute changed |
-| `entity` | `op: "add"\|"remove"`, plus the entity object on `add` (a chip re-declared or was cleared) |
+| `entity` | `op: "add"\|"remove"`; `add` carries the whole entity object and is an **upsert** (new entity, re-declared entity, or a rename); `remove` carries `id` |
 | `chip` | `id`, `status` (`ready`/`silent`/`seen`), `boot_id`, `reboots`, `telemetry` |
 | `rules` / `schedules` / `timers` | the new full list, after any change (also by another client or the console) |
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
@@ -102,9 +103,11 @@ buffered without bound; it reconnects and gets a fresh snapshot, so there is no
 // → on CMD_ACK:       { "type": "ack", "id": 7, "status": "ok" }
 ```
 
-`status`: `ok` · `fail` · `unreachable` · `unsupported` · `timeout`. A rejected
-command (unknown entity/attr, read-only attribute, wrong value type, chip
-silent) gets `{ "type": "error", "id": 7, "code": "…" }` instead of `accepted`.
+`status`: `ok` · `fail` · `unreachable` · `unsupported` · `timeout`. A command
+to a silent chip is accepted and completes at once with `unreachable` (the
+dispatcher fails it fast, no retries). A command that cannot be sent at all
+(unknown entity/attr, read-only attribute, wrong value type or range) gets
+`{ "type": "error", "id": 7, "code": "…" }` instead of `accepted`.
 Commands go through the same `CommandDispatcher` as the console, rules and timers,
 so they also update the desired state (reconciler).
 
@@ -150,11 +153,15 @@ Mirror the console grammar and `core::Rule`, with numeric ids:
 // days: "daily" | "weekdays" | "weekends" | ["mon","tue",…]
 ```
 
+```jsonc
+{ "index": 0, "entity": 256, "attr": 1, "action": "on", "left_s": 42 }   // a pending timer
+```
+
 ## 7. Errors
 
 `{ "type": "error", "id"?: n, "code": "…", "message"?: "…" }`. Codes:
 `unauthorized`, `version`, `busy`, `bad_json`, `too_large`, `unsupported`,
-`bad_args`, `not_found`, `read_only`, `unreachable`, `table_full`, `internal`.
+`bad_args`, `not_found`, `read_only`, `table_full`, `internal`.
 `message` is for humans/logs only; clients switch on `code`.
 
 ## 8. Threading on the hub (not part of the protocol, but a constraint)
@@ -196,7 +203,7 @@ network.
 ## 11. Stages
 
 1. **This document** — agree on the protocol.
-2. **Mock hub + client library** (`app/`): a Node mock hub that speaks this
+2. ✅ **Mock hub + client library** (`app/`, 41 tests): a Node mock hub that speaks this
    protocol with fake entities, and the TypeScript client (connection, auth,
    snapshot/event store, request/ack correlation) with unit tests. The app can be
    built and tested on a dev machine with no hardware.

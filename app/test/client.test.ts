@@ -1,0 +1,388 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { WebSocket as NodeWebSocket } from 'ws';
+import { HubClient, HubError, type HubClientOptions, type SocketLike } from '../src/protocol/client';
+import { attrValue, type HomeState } from '../src/protocol/store';
+import { MockHub, MAX_CLIENTS } from '../tools/mock-hub/hub';
+
+const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
+
+let hub: MockHub;
+const clients: HubClient[] = [];
+
+function client(over: Partial<HubClientOptions> = {}): HubClient {
+  const c = new HubClient({
+    url: hub.url,
+    token: hub.token,
+    socketFactory: wsFactory,
+    backoffMs: { min: 20, max: 60 },
+    requestTimeoutMs: 2000,
+    ...over,
+  });
+  clients.push(c);
+  return c;
+}
+
+async function until(fn: () => boolean, what: string, ms = 3000): Promise<void> {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error(`timed out waiting for: ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+const ready = (c: HubClient) => until(() => c.getSnapshot().status === 'ready', 'status ready');
+
+beforeEach(async () => {
+  hub = await MockHub.start({ helloTimeoutMs: 300, ackDelayMs: 10, lockoutMs: 500 });
+});
+afterEach(async () => {
+  for (const c of clients.splice(0)) c.close();
+  await hub.close();
+});
+
+describe('handshake', () => {
+  it('connects, authenticates and receives the snapshot', async () => {
+    const c = client();
+    const seen: string[] = [];
+    c.subscribe(() => seen.push(c.getSnapshot().status));
+    c.connect();
+    await ready(c);
+    const s = c.getSnapshot();
+    expect(s.hub).toMatchObject({ name: 'mock-home', synced: true });
+    expect(s.entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null]);
+    expect(seen).toContain('authenticating');
+  });
+
+  it('works with the platform global WebSocket (what React Native / browsers provide)', async () => {
+    const c = client({ socketFactory: undefined });
+    c.connect();
+    await ready(c);
+    expect(c.getSnapshot().entities).toHaveLength(3);
+  });
+
+  it('a wrong token is fatal: status unauthorized and no reconnect loop', async () => {
+    const c = client({ token: 'nope' });
+    c.connect();
+    await until(() => c.getSnapshot().status === 'unauthorized', 'unauthorized');
+    expect(c.getSnapshot().error).toBe('unauthorized');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(c.getSnapshot().status).toBe('unauthorized');
+    expect(hub.clientCount).toBe(0);
+  });
+
+  it('the hub locks an address out after repeated failures, then lets it back in', async () => {
+    for (let i = 0; i < 5; i++) {
+      const bad = client({ token: 'nope' });
+      bad.connect();
+      await until(() => bad.getSnapshot().status === 'unauthorized', `bad attempt ${i}`);
+    }
+    const locked = client(); // correct token, but the address is locked out
+    locked.connect();
+    await until(() => locked.getSnapshot().status === 'unauthorized', 'locked out');
+    await new Promise((r) => setTimeout(r, 600)); // lockoutMs = 500
+    const ok = client();
+    ok.connect();
+    await ready(ok);
+  });
+
+  it('a protocol version the hub does not speak is reported as incompatible', async () => {
+    const sock = new NodeWebSocket(hub.url);
+    const reply = await new Promise<string>((resolve) => {
+      sock.on('open', () => sock.send(JSON.stringify({ type: 'hello', v: 99, token: hub.token })));
+      sock.on('message', (d) => resolve(d.toString()));
+    });
+    expect(JSON.parse(reply)).toEqual({ type: 'error', code: 'version' });
+  });
+
+  it('the hub drops a connection that never says hello', async () => {
+    const sock = new NodeWebSocket(hub.url);
+    const msgs: string[] = [];
+    sock.on('message', (d) => msgs.push(d.toString()));
+    await new Promise<void>((resolve) => sock.on('close', () => resolve()));
+    expect(JSON.parse(msgs[0]!)).toMatchObject({ type: 'error', code: 'unauthorized' });
+  });
+
+  it('the 4th client gets "busy" and keeps retrying; it gets in once a slot frees', async () => {
+    const first = Array.from({ length: MAX_CLIENTS }, () => client());
+    first.forEach((c) => c.connect());
+    await Promise.all(first.map(ready));
+    const extra = client();
+    extra.connect();
+    await until(() => extra.getSnapshot().error === 'busy', 'busy error');
+    expect(extra.getSnapshot().status).not.toBe('ready');
+    first[0]!.close();
+    await ready(extra);
+    expect(extra.getSnapshot().error).toBeNull();
+  });
+});
+
+describe('events', () => {
+  it('a device-side change reaches every connected client', async () => {
+    const a = client();
+    const b = client();
+    a.connect();
+    b.connect();
+    await Promise.all([ready(a), ready(b)]);
+    hub.setValue(0x0100, 0x13, 25);
+    await until(() => attrValue(a.getSnapshot(), 0x0100, 0x13) === 25 && attrValue(b.getSnapshot(), 0x0100, 0x13) === 25, 'power update');
+  });
+
+  it('subscribers are notified once per change and can unsubscribe', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    let n = 0;
+    const off = c.subscribe(() => n++);
+    hub.setValue(0x0100, 0x13, 11);
+    await until(() => n === 1, 'one notification');
+    hub.setValue(0x0100, 0x13, 11); // same value: no event at all
+    off();
+    hub.setValue(0x0100, 0x13, 12);
+    await until(() => attrValue(c.getSnapshot(), 0x0100, 0x13) === 12, 'state after unsubscribe');
+    expect(n).toBe(1);
+  });
+
+  it('a chip going silent is pushed', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    hub.setChipStatus(1, 'silent');
+    await until(() => c.getSnapshot().chips.find((x) => x.id === 1)?.status === 'silent', 'chip silent');
+  });
+});
+
+describe('commands', () => {
+  it('cmd resolves with the chip ACK and the new value arrives as an event', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    expect(await c.cmd(0x0101, 0x01, true)).toBe('ok');
+    await until(() => attrValue(c.getSnapshot(), 0x0101, 0x01) === true, 'lamp on');
+  });
+
+  it('a command to a silent chip completes as unreachable and changes nothing', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    hub.setChipStatus(1, 'silent');
+    expect(await c.cmd(0x0101, 0x01, true)).toBe('unreachable');
+    expect(attrValue(c.getSnapshot(), 0x0101, 0x01)).toBe(false);
+  });
+
+  it.each([
+    ['unknown entity', 0x9999, 0x01, true, 'not_found'],
+    ['unknown attribute', 0x0100, 0x77, true, 'not_found'],
+    ['read-only attribute', 0x0100, 0x13, 5, 'read_only'],
+    ['wrong value type', 0x0100, 0x01, 'yes', 'bad_args'],
+    ['out of range', 0x0101, 0x02, 300, 'bad_args'],
+  ] as const)('rejects %s', async (_name, entity, attr, value, code) => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await expect(c.cmd(entity, attr, value as never)).rejects.toMatchObject({ code });
+  });
+
+  it('several commands in flight are matched to their own replies', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const [a, b, d] = await Promise.all([
+      c.cmd(0x0101, 0x01, true),
+      c.cmd(0x0101, 0x02, 10),
+      c.cmd(0x0100, 0x13, 1).catch((e: HubError) => e.code),
+    ]);
+    expect([a, b, d]).toEqual(['ok', 'ok', 'read_only']);
+  });
+
+  it('cmd while not connected fails fast', async () => {
+    const c = client();
+    await expect(c.cmd(0x0100, 0x01, true)).rejects.toMatchObject({ code: 'disconnected' });
+  });
+
+  it('a request times out when the hub never answers', async () => {
+    const c = client({ requestTimeoutMs: 80 });
+    c.connect();
+    await ready(c);
+    hub.opts.ackDelayMs = 10_000; // the ACK will not come in time
+    await expect(c.cmd(0x0101, 0x01, true)).rejects.toMatchObject({ code: 'timeout' });
+  });
+});
+
+describe('management requests', () => {
+  it('rename, then the renamed entity is pushed to other clients', async () => {
+    const a = client();
+    const b = client();
+    a.connect();
+    b.connect();
+    await Promise.all([ready(a), ready(b)]);
+    await a.req('name.set', { entity: 0x0102, name: 'hall_sensor' });
+    await until(() => b.getSnapshot().entities.find((e) => e.id === 0x0102)?.name === 'hall_sensor', 'rename pushed');
+    await expect(a.req('name.set', { entity: 0x0101, name: 'hall_sensor' })).rejects.toMatchObject({ code: 'bad_args' });
+    await expect(a.req('name.set', { entity: 0x0101, name: 'Bad Name' })).rejects.toMatchObject({ code: 'bad_args' });
+    await a.req('name.clear', { entity: 0x0102 });
+    await until(() => b.getSnapshot().entities.find((e) => e.id === 0x0102)?.name === null, 'name cleared');
+  });
+
+  it('rules: add with all constraints, validate, delete and re-index', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const rule = {
+      when: { entity: 0x0102, attr: 0x50, op: '==', value: true },
+      then: { entity: 0x0101, attr: 0x01, value: true },
+      between: { from: '18:00', to: '23:00' },
+      and: { entity: 0x0100, attr: 0x13, op: '>', value: 1 },
+      cooldown_s: 300,
+    };
+    expect(await c.req('rule.add', rule)).toEqual({ index: 0 });
+    expect(await c.req('rule.add', { ...rule, cooldown_s: undefined })).toEqual({ index: 1 });
+    await until(() => c.getSnapshot().rules.length === 2, 'two rules');
+    expect(c.getSnapshot().rules[0]).toMatchObject({ between: { from: '18:00', to: '23:00' }, cooldown_s: 300 });
+
+    for (const bad of [
+      { ...rule, between: { from: '10:00', to: '10:00' } },
+      { ...rule, between: { from: '25:00', to: '10:00' } },
+      { ...rule, cooldown_s: 0 },
+      { ...rule, and: { ...rule.and, entity: 0x9999 } },
+      { ...rule, when: { ...rule.when, op: '=~' } },
+      { when: rule.when },
+    ]) {
+      await expect(c.req('rule.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+
+    await c.req('rule.del', { index: 0 });
+    await until(() => c.getSnapshot().rules.length === 1, 'one rule left');
+    expect(c.getSnapshot().rules[0]!.index).toBe(0);
+    await expect(c.req('rule.del', { index: 5 })).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('rule table has a limit', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const rule = { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { entity: 0x0101, attr: 0x01, value: true } };
+    for (let i = 0; i < 16; i++) await c.req('rule.add', rule);
+    await expect(c.req('rule.add', rule)).rejects.toMatchObject({ code: 'table_full' });
+  });
+
+  it('schedules: add, validate, delete', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    expect(await c.req('schedule.add', { time: '22:00', days: 'weekdays', entity: 0x0100, action: 'off' })).toEqual({ index: 0 });
+    expect(await c.req('schedule.add', { time: '06:30', days: ['mon', 'fri'], entity: 0x0101, action: 'toggle' })).toEqual({ index: 1 });
+    await until(() => c.getSnapshot().schedules.length === 2, 'two schedules');
+    for (const bad of [
+      { time: '24:00', days: 'daily', entity: 0x0100, action: 'off' },
+      { time: '22:00', days: 'someday', entity: 0x0100, action: 'off' },
+      { time: '22:00', days: [], entity: 0x0100, action: 'off' },
+      { time: '22:00', days: 'daily', entity: 0x0102, action: 'off' }, // sensor: no on_off
+      { time: '22:00', days: 'daily', entity: 0x0100, action: 'dim' },
+    ]) {
+      await expect(c.req('schedule.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    await c.req('schedule.del', { index: 0 });
+    await until(() => c.getSnapshot().schedules.length === 1, 'one schedule left');
+    expect(c.getSnapshot().schedules[0]).toMatchObject({ index: 0, time: '06:30' });
+  });
+
+  it('timers: a timer fires, changes the device and disappears', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.req('timer.add', { entity: 0x0101, action: 'on', delay_s: 1 });
+    await until(() => c.getSnapshot().timers.length === 1, 'timer listed');
+    expect(c.getSnapshot().timers[0]!.left_s).toBeGreaterThan(0);
+    await until(() => attrValue(c.getSnapshot(), 0x0101, 0x01) === true, 'timer fired', 3000);
+    await until(() => c.getSnapshot().timers.length === 0, 'timer removed');
+  });
+
+  it('timers can be cancelled; bad arguments are rejected', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.req('timer.add', { entity: 0x0101, action: 'on', delay_s: 60 });
+    await c.req('timer.cancel', { index: 0 });
+    await until(() => c.getSnapshot().timers.length === 0, 'cancelled');
+    for (const bad of [
+      { entity: 0x0101, action: 'on', delay_s: 0 },
+      { entity: 0x0101, action: 'on', delay_s: 1.5 },
+      { entity: 0x0101, action: 'blink', delay_s: 5 },
+      { entity: 0x0102, action: 'on', delay_s: 5 },
+    ]) {
+      await expect(c.req('timer.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    await expect(c.req('timer.add', { entity: 0x9999, action: 'on', delay_s: 5 })).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('an unknown operation is reported as unsupported', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await expect(c.req('reboot')).rejects.toMatchObject({ code: 'unsupported' });
+  });
+});
+
+describe('reconnecting', () => {
+  it('after the connection drops the client reconnects and gets a fresh snapshot', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const states: HomeState['status'][] = [];
+    c.subscribe(() => states.push(c.getSnapshot().status));
+    hub.setValue(0x0100, 0x13, 99);
+    await until(() => attrValue(c.getSnapshot(), 0x0100, 0x13) === 99, 'before drop');
+    hub.dropAll();
+    await until(() => c.getSnapshot().status === 'reconnecting', 'reconnecting');
+    expect(c.getSnapshot().entities).toEqual([]); // stale data is not shown as current
+    await ready(c);
+    expect(attrValue(c.getSnapshot(), 0x0100, 0x13)).toBe(99); // the hub's current value
+    expect(states).toContain('reconnecting');
+  });
+
+  it('requests in flight when the connection drops are rejected, not left hanging', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    hub.opts.ackDelayMs = 10_000;
+    const p = c.cmd(0x0101, 0x01, true);
+    const rejected = expect(p).rejects.toMatchObject({ code: 'disconnected' });
+    await new Promise((r) => setTimeout(r, 50));
+    hub.dropAll();
+    await rejected;
+  });
+
+  it('keeps retrying while the hub is down and recovers when it is back', async () => {
+    const port = hub.port;
+    const c = client({ url: `ws://127.0.0.1:${port}/ws` });
+    c.connect();
+    await ready(c);
+    await hub.close();
+    await until(() => c.getSnapshot().status === 'reconnecting', 'reconnecting');
+    await new Promise((r) => setTimeout(r, 200)); // several failed attempts
+    hub = await MockHub.start({ port, helloTimeoutMs: 300, ackDelayMs: 10 });
+    await ready(c);
+  });
+
+  it('close() stops everything for good', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    c.close();
+    expect(c.getSnapshot().status).toBe('closed');
+    await until(() => hub.clientCount === 0, 'hub sees the disconnect');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(c.getSnapshot().status).toBe('closed');
+    expect(hub.clientCount).toBe(0);
+    await expect(c.cmd(0x0100, 0x01, true)).rejects.toBeInstanceOf(HubError);
+  });
+
+  it('reconnect: false leaves it disconnected after a drop', async () => {
+    const c = client({ reconnect: false });
+    c.connect();
+    await ready(c);
+    hub.dropAll();
+    await until(() => c.getSnapshot().status === 'reconnecting', 'dropped');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hub.clientCount).toBe(0);
+  });
+});

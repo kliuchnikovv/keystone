@@ -1,0 +1,20 @@
+{
+  "name": "keystone-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keystone hub client: protocol library, mock hub and (later) the Expo app. See ../docs/app-protocol.md",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "mock-hub": "tsx tools/mock-hub/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3",
+    "ws": "8.22.0"
+  }
+}
