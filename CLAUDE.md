@@ -101,6 +101,8 @@ The brain core (Phases 3–4) is a set of composable, radio-free components that
 
 - **Matter bridge no longer switches the plug off on a thread-c6 reboot (hardware-verified)**: esp-matter's `on_off_light` defaults `StartUpOnOff` to Off, so each boot forced the bridged endpoint Off (`Toggle ep2 on/off from state 1 to 0`) and the PRE_UPDATE hook forwarded it as `COMMAND on_off=0`. `create_bridged_clusters()` now sets `on_off_lighting.start_up_on_off` to null (keep previous value; the hub owns state). Repro/verify: `on 0x100`, reset thread-c6 over DTR/RTS, `home` — plug stays on.
 
+- **Brain Wi-Fi + SNTP, persisted timers and entity names** (commit `91de2c2`, earlier than the entries above; checked on the live brain: `time` → `synced: yes`, `name` lists `0x0100 -> plug1`): STA Wi-Fi with auto-reconnect (credentials in gitignored `main/wifi_secrets.h`), SNTP → `time`/`tz` console commands; `core::TimerTable` (v2 stores the remaining delay) and `core::EntityNames` persist to NVS (`ent_names`); every console command takes `<id_or_name>`; `name` sets/clears names.
+
 ### ESP-IDF component layout
 
 Firmware apps pick up shared code via `EXTRA_COMPONENT_DIRS=../components`. The wrappers in `firmware/components/{hubproto,core}` reference the same sources as the host build (no duplication); `firmware/components/esp_uart_link` holds the only ESP-IDF-specific transport code. App `main` is C++ (`app_main` is `extern "C"`).

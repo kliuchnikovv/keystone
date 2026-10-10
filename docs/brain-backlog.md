@@ -26,7 +26,7 @@ one predicate, one action). To make rules richer:
 - **Multi-condition / multi-action** — today one trigger, one predicate,
   one action. Real homes want AND/OR, time windows, cool-downs.
 - **Time-of-day / sun** — `after sunset && motion → light`, `at 22:00 → all
-  off`. Needs wall-clock time (see next item).
+  off`. Wall-clock time now exists (§2); the rule engine does not use it yet.
 - **Scenes** — a named group of desired attribute values applied at once
   (`scene evening`). Doubly useful with Groups & Scenes on the Zigbee side.
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
@@ -34,37 +34,37 @@ one predicate, one action). To make rules richer:
 
 ## 2. Time
 
-Everything above assumes the brain knows what time it is. Today it doesn't
-know anything past `esp_timer_get_time()` (uptime).
-
-- **SNTP** over WiFi (once WiFi is up for Matter/OTA).
-- Sync `esp_timer` wall clock, cache `time_t`.
-- Console: `time` shows current time; `set tz Europe/Prague` sets timezone.
-- Fall back to a monotonic tick if no NTP yet — rules that don't need
-  calendar time should still work.
+Done (`91de2c2`): SNTP over WiFi (`pool.ntp.org`), console `time` (shows time,
+`synced: yes/no`, tz, uptime) and `tz`; checked on the live brain (`synced: yes`,
+tz UTC). Timers fall back to a monotonic tick before the first sync. Open: use
+the wall clock in rules (§1), sunrise/sunset (needs a location).
 
 ## 3. WiFi
 
 Needed for SNTP, for Matter's mDNS discovery, later for any web UI or push
 notifications:
 
-- Provisioning (SoftAP + captive portal, or BLE, or a config file on SD).
-- Reconnect on drop, exponential backoff.
+Done (`91de2c2`): STA connect with automatic reconnect; credentials come from
+the gitignored `main/wifi_secrets.h` (compile-time). Open:
+- Provisioning (SoftAP + captive portal, or BLE, or a config file on SD) so
+  credentials are not baked into the image.
+- Exponential backoff on reconnect.
 - Chip status in `chips`: also show WiFi RSSI, IP.
-- Not needed for the Zigbee-only slice — deliberately kept out until now.
 
 ## 4. Persistent state on the brain
 
 The registry is rebuilt from co-processor DECLAREs on every boot, that's fine.
-Rules and desired state are already persisted in NVS; timers and entity names
-are still in RAM.
+Rules, desired state, timers and entity names are persisted in NVS.
 
-- **Persistent timers** — `in 3600 off 0x100` survives a brain reboot with
-  absolute wall-clock deadline (see [../backlog.md](backlog.md#recovery-after-a-crash-or-reboot--desired-vs-actual-reconciliation)).
+- ~~**Persistent timers**~~ ✅ done (`core::TimerTable` v2 stores the remaining
+  delay, wall-clock deadlines supported; overdue timers older than 10 min are
+  dropped on boot). Still open: a per-action `after_deadline` policy (see
+  [../backlog.md](backlog.md#recovery-after-a-crash-or-reboot--desired-vs-actual-reconciliation)).
 - ~~**Desired-state per attribute** + reconciler~~ ✅ done (`core::DesiredState`
   + `core::Reconciler`, NVS key `desired`, console `desired`).
-- **Entity metadata**: user-set name (`livingroom_plug`), room tag, favorite
-  flag, icon. Reference by name in the console: `on livingroom_plug`.
+- ~~**Entity names**~~ ✅ done (`core::EntityNames`, NVS key `ent_names`, console
+  `name`, every command accepts `<id_or_name>`). Still open: room tag, favorite
+  flag, icon.
 - ~~**Persistent rule table**~~ ✅ done (§1).
 - One combined NVS namespace `brain_state`, versioned, migrated on schema
   bumps.
@@ -73,7 +73,7 @@ are still in RAM.
 
 The current console is good enough for debug. For daily use it wants:
 
-- **Named entities**: `on livingroom_plug` in addition to `on 0x100`.
+- ~~**Named entities**~~ ✅ done (see §4).
 - **Tab completion** for entity names and rule ids.
 - **`watch` command** — subscribe to STATE changes for one entity and print
   them until Ctrl-C, without turning on the global log firehose.
@@ -138,15 +138,13 @@ reconciler, chip monitor, OTA and persistent rules). What's missing:
 
 ## Order-of-work suggestion
 
-Done: desired-state + reconciler, persistent rules + `rule` console command,
-chip health watchdog; `self` entities written (await hardware check).
+Done: Wi-Fi + SNTP, persistent timers, entity names, desired-state + reconciler,
+persistent rules + `rule` console command, chip health watchdog, `self` entities.
 
-1. **Persistent timers** (small, closes an obvious hole).
-2. **Named entities + storage** — `on livingroom_plug` is a huge UX win for
-   a couple hundred lines.
-3. **Wall time (SNTP)** — unlocks calendar rules and event timestamps.
-4. **Structured event stream** — precondition for the recorder (Phase 7).
-8. **WiFi + web UI** — external surface.
+1. **Time-of-day rules** (`at 22:00 …`) — SNTP and timers are in, the rule
+   engine doesn't use the clock yet.
+2. **Structured event stream** — precondition for the recorder (Phase 7).
+3. **Web UI** (WiFi is already up) — external surface.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).
 Cross-cutting design questions: [../backlog.md](backlog.md).
