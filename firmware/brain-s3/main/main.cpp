@@ -787,14 +787,32 @@ void fmt_target(char* buf, std::size_t cap, const Registry& reg, std::uint16_t i
   std::snprintf(buf, cap, "%s.%s", eb, an);
 }
 
+// "HH:MM-HH:MM" -> minutes of day; start must differ from end (end < start wraps midnight).
+bool parse_window(const char* s, std::uint16_t& start, std::uint16_t& end) {
+  int h1 = 0, m1 = 0, h2 = 0, m2 = 0;
+  char tail = 0;
+  if (std::sscanf(s, "%d:%d-%d:%d%c", &h1, &m1, &h2, &m2, &tail) != 4) return false;
+  if (h1 < 0 || h1 > 23 || m1 < 0 || m1 > 59 || h2 < 0 || h2 > 23 || m2 < 0 || m2 > 59) return false;
+  const int a = h1 * 60 + m1, b = h2 * 60 + m2;
+  if (a == b) return false;
+  start = static_cast<std::uint16_t>(a);
+  end = static_cast<std::uint16_t>(b);
+  return true;
+}
+
 const char* kRuleUsage =
     "usage:\n"
     "  rule                     - list rules\n"
     "  rule add <entity> <attr> <op> <value> then <entity> <attr> <value>\n"
     "  rule add <entity> <attr> any then <entity> <attr> <value>   (any change)\n"
     "  rule del <n>\n"
+    "  optional, after the action (any order):\n"
+    "    between HH:MM-HH:MM      local time window (may wrap midnight)\n"
+    "    and <entity> <attr> <op> <value>   extra condition on another entity's current value\n"
+    "    cooldown <sec>           at most once per <sec> seconds\n"
     "  <op>: == != < <= > >=   <attr>: on_off power_w energy_wh or a number\n"
-    "  e.g. rule add plug power_w > 1500 then plug on_off off\n";
+    "  e.g. rule add plug power_w > 1500 then plug on_off off\n"
+    "       rule add hall occupied == on then lamp on_off on between 18:00-23:00 cooldown 300\n";
 
 void handle_rule(Req* r, const Registry& reg, Rules& rules) {
   const int argc = r->argc;
@@ -819,8 +837,26 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
         fmt_value(ov, sizeof(ov), ru->operand.type, ru->operand);
       }
       off += static_cast<std::size_t>(std::snprintf(
-          out + off, cap - off, "  #%u  %s %s %s  ->  %s = %s\n",
+          out + off, cap - off, "  #%u  %s %s %s  ->  %s = %s",
           static_cast<unsigned>(i), t, op_str(ru->op), ov, a, av));
+      if (ru->window_start != core::kNoWindow && off < cap) {
+        off += static_cast<std::size_t>(std::snprintf(
+            out + off, cap - off, "  between %02u:%02u-%02u:%02u",
+            static_cast<unsigned>(ru->window_start / 60), static_cast<unsigned>(ru->window_start % 60),
+            static_cast<unsigned>(ru->window_end / 60), static_cast<unsigned>(ru->window_end % 60)));
+      }
+      if (ru->has_cond && off < cap) {
+        char ct[48], cv[24];
+        fmt_target(ct, sizeof(ct), reg, ru->cond_entity, ru->cond_attr);
+        fmt_value(cv, sizeof(cv), ru->cond_operand.type, ru->cond_operand);
+        off += static_cast<std::size_t>(std::snprintf(
+            out + off, cap - off, "  and %s %s %s", ct, op_str(ru->cond_op), cv));
+      }
+      if (ru->cooldown_s != 0 && off < cap) {
+        off += static_cast<std::size_t>(std::snprintf(
+            out + off, cap - off, "  cooldown %us", static_cast<unsigned>(ru->cooldown_s)));
+      }
+      if (off < cap) off += static_cast<std::size_t>(std::snprintf(out + off, cap - off, "\n"));
     }
     return;
   }
@@ -840,7 +876,7 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
   if (std::strcmp(argv[1], "add") == 0 && argc >= 9) {
     const bool any = std::strcmp(argv[4], "any") == 0;
     const int base = any ? 5 : 6;  // index of "then"
-    if (argc != base + 4 || std::strcmp(argv[base], "then") != 0) {
+    if (argc < base + 4 || std::strcmp(argv[base], "then") != 0) {
       std::snprintf(out, cap, "%s", kRuleUsage);
       return;
     }
@@ -880,6 +916,50 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
     if (!parse_value(argv[base + 3], avt, ru.action_value)) {
       std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[base + 3]);
       return;
+    }
+    // Optional constraints after the action, in any order.
+    for (int k = base + 4; k < argc;) {
+      if (std::strcmp(argv[k], "between") == 0 && k + 1 < argc) {
+        if (!parse_window(argv[k + 1], ru.window_start, ru.window_end)) {
+          std::snprintf(out, cap, "%s: bad window (use HH:MM-HH:MM, start != end)\n", argv[k + 1]);
+          return;
+        }
+        k += 2;
+      } else if (std::strcmp(argv[k], "cooldown") == 0 && k + 1 < argc) {
+        char* end = nullptr;
+        const long sec = std::strtol(argv[k + 1], &end, 10);
+        if (end == argv[k + 1] || *end != '\0' || sec < 1 || sec > 65535) {
+          std::snprintf(out, cap, "%s: bad cooldown (1..65535 s)\n", argv[k + 1]);
+          return;
+        }
+        ru.cooldown_s = static_cast<std::uint16_t>(sec);
+        k += 2;
+      } else if (std::strcmp(argv[k], "and") == 0 && k + 4 < argc) {
+        std::uint16_t cid = 0;
+        hubproto::ValueType cvt{};
+        if (!reg.resolve(argv[k + 1], cid) || reg.find(cid) == nullptr) {
+          std::snprintf(out, cap, "%s: condition entity not found\n", argv[k + 1]);
+          return;
+        }
+        if (!parse_attr(argv[k + 2], ru.cond_attr) || !reg.value_type_of(cid, ru.cond_attr, cvt)) {
+          std::snprintf(out, cap, "%s: condition attribute unknown for that entity\n", argv[k + 2]);
+          return;
+        }
+        if (!parse_op(argv[k + 3], ru.cond_op) || ru.cond_op == core::CmpOp::Always) {
+          std::snprintf(out, cap, "%s: bad operator\n", argv[k + 3]);
+          return;
+        }
+        if (!parse_value(argv[k + 4], cvt, ru.cond_operand)) {
+          std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[k + 4]);
+          return;
+        }
+        ru.has_cond = true;
+        ru.cond_entity = cid;
+        k += 5;
+      } else {
+        std::snprintf(out, cap, "%s", kRuleUsage);
+        return;
+      }
     }
     if (!rules.add_rule(ru)) {
       std::snprintf(out, cap, "rule table full\n");
@@ -1496,6 +1576,22 @@ extern "C" void app_main(void) {
   bus.subscribe(&on_bus_forward, &bus);     // Matter <-> Zigbee cross-chip mirror
 
   restore_rules(rules);  // user rules from NVS (`rule add ...`)
+  // Rule constraints: local minute of day (-1 until SNTP has synced) and the
+  // current value of the entity a rule's `and ...` condition looks at.
+  rules.set_clock(
+      [](void*) -> int {
+        if (!s_time_synced) return -1;
+        const time_t wall = time(nullptr);
+        struct tm lt{};
+        localtime_r(&wall, &lt);
+        return lt.tm_hour * 60 + lt.tm_min;
+      },
+      nullptr);
+  rules.set_state_reader(
+      [](void* ctx, std::uint16_t entity, std::uint8_t attr, hubproto::Value& out) {
+        return static_cast<Registry*>(ctx)->get_value(entity, attr, out);
+      },
+      &reg);
 
   g_rec_mu = xSemaphoreCreateRecursiveMutex();
   g_reg = &reg;

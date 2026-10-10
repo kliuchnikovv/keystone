@@ -23,8 +23,11 @@ one predicate, one action). To make rules richer:
 - ~~**Rule storage**~~ ✅ done: rules are data (`CmpOp` + operand), stored in NVS
   (`rules` blob), edited via the `rule` console command (`rule`, `rule add
   <entity> <attr> <op> <value> then <entity> <attr> <value>`, `rule del <n>`).
-- **Multi-condition / multi-action** — today one trigger, one predicate,
-  one action. Real homes want AND/OR, time windows, cool-downs.
+- ~~**Time window + extra condition + cool-down**~~ ✅ done (rules v2 in NVS, v1
+  still loads): `rule add … then … [between HH:MM-HH:MM] [and <entity> <attr> <op>
+  <value>] [cooldown <sec>]`. A constraint that needs the clock or a state that is
+  not known yet (clock not synced, never reported) keeps the rule quiet. Still
+  open: OR, more than one extra condition, several actions per rule.
 - ~~**Recurring time-of-day actions**~~ ✅ done (`core::ScheduleTable`, NVS key
   `schedules`): `at 22:00 off plug1 [daily|weekdays|weekends|mon,tue,..]`,
   `schedules`, `unschedule <n>`; local time (see `tz`), once per day, caught up
@@ -142,13 +145,11 @@ reconciler, chip monitor, OTA and persistent rules). What's missing:
 
 ## Order-of-work suggestion
 
-Done: Wi-Fi + SNTP, persistent timers, recurring schedules, entity names, desired-state + reconciler,
+Done: Wi-Fi + SNTP, persistent timers, recurring schedules, rule constraints, entity names, desired-state + reconciler,
 persistent rules + `rule` console command, chip health watchdog, `self` entities.
 
-1. **Rule conditions on time/state** (time window AND state, cool-downs,
-   multi-condition) — the clock and recurring schedules are in.
-2. **Structured event stream** — precondition for the recorder (Phase 7).
-3. **Web UI** (WiFi is already up) — external surface.
+1. **Structured event stream** — precondition for the recorder (Phase 7).
+2. **Web UI** (WiFi is already up) — external surface.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).
 Cross-cutting design questions: [../backlog.md](backlog.md).

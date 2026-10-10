@@ -11,6 +11,7 @@ add_executable(core_tests
   test_reconciler.cpp
   test_ota_verifier.cpp
   test_rule_engine.cpp
+  test_rule_conditions.cpp
   test_entity_names.cpp
   test_timer_table.cpp
   test_schedule_table.cpp

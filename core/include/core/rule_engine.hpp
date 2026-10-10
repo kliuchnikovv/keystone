@@ -7,6 +7,13 @@
 //
 // Wire the engine to StateMachine::on_change via on_state_change. Time for the
 // dispatched command comes from an injected NowFn (the core stays clock-free).
+//
+// Besides the trigger, a rule may carry optional constraints, all of which must
+// hold for it to fire: a local time-of-day window, one extra state condition on
+// another entity ("and plug.on_off == on"), and a cool-down. The clock and the
+// state reader are injected (set_clock / set_state_reader); when a constraint
+// needs one that is missing or unknown (clock not synced, state never reported)
+// the rule does NOT fire.
 // A later phase may swap this table for an embedded script (Berry/Lua).
 #pragma once
 
@@ -82,6 +89,8 @@ inline bool value_matches(const hubproto::Value& v, CmpOp op,
 
 // A rule matches when `match` (if set) accepts the value, otherwise when
 // `value <op> operand` holds. Only rules without a `match` function are stored.
+inline constexpr std::uint16_t kNoWindow = 0xFFFF;  // Rule::window_start: no time window
+
 struct Rule {
   std::uint16_t   trigger_entity;
   std::uint8_t    trigger_attr;
@@ -91,15 +100,45 @@ struct Rule {
   hubproto::Value action_value;
   CmpOp           op = CmpOp::Always;
   hubproto::Value operand{};
+
+  // Optional constraints (defaults = none). Persisted with the rule.
+  // Local time-of-day window [start, end) in minutes; start > end wraps midnight
+  // (22:00-06:00). start == kNoWindow disables it; start == end is invalid.
+  std::uint16_t   window_start = kNoWindow;
+  std::uint16_t   window_end = 0;
+  std::uint16_t   cooldown_s = 0;  // min seconds between firings (0 = none)
+  // One extra condition on the CURRENT value of another attribute.
+  bool            has_cond = false;
+  std::uint16_t   cond_entity = 0;
+  std::uint8_t    cond_attr = 0;
+  CmpOp           cond_op = CmpOp::Always;
+  hubproto::Value cond_operand{};
 };
 
 template <typename Dispatcher, std::size_t MaxRules = 16>
 class RuleEngine {
  public:
   using NowFn = std::uint32_t (*)(void* ctx);
+  // Local minute of day 0..1439, or -1 while the wall clock is unknown.
+  using MinuteFn = int (*)(void* ctx);
+  // Current value of an attribute; false if it was never reported.
+  using ReadFn = bool (*)(void* ctx, std::uint16_t entity, std::uint8_t attr,
+                          hubproto::Value& out);
 
   RuleEngine(Dispatcher& dispatcher, NowFn now_fn, void* now_ctx) noexcept
       : disp_(dispatcher), now_fn_(now_fn), now_ctx_(now_ctx) {}
+
+  void set_clock(MinuteFn fn, void* ctx) noexcept { clock_fn_ = fn; clock_ctx_ = ctx; }
+  void set_state_reader(ReadFn fn, void* ctx) noexcept { read_fn_ = fn; read_ctx_ = ctx; }
+
+  // Is `minute` inside the rule's time window? No window = always; window set but
+  // minute unknown (-1) = never.
+  static bool in_window(const Rule& r, int minute) noexcept {
+    if (r.window_start == kNoWindow) return true;
+    if (minute < 0) return false;
+    const int s = r.window_start, e = r.window_end;
+    return s < e ? (minute >= s && minute < e) : (minute >= s || minute < e);
+  }
 
   // Add a rule. Returns false if the table is full.
   bool add_rule(const Rule& rule) noexcept;
@@ -121,16 +160,23 @@ class RuleEngine {
   // Remove rule i (later rules shift down). Returns false if out of range.
   bool remove_rule(std::size_t i) noexcept {
     if (i >= static_cast<std::size_t>(count_)) return false;
-    for (int j = static_cast<int>(i); j + 1 < count_; ++j) rules_[j] = rules_[j + 1];
+    for (int j = static_cast<int>(i); j + 1 < count_; ++j) {
+      rules_[j] = rules_[j + 1];
+      fired_[j] = fired_[j + 1];
+      last_fire_ms_[j] = last_fire_ms_[j + 1];
+    }
     --count_;
     return true;
   }
 
   // ---- persistence (data rules only: those without a `match` function) -----
   static constexpr std::uint16_t kMagic = 0x5255;  // 'UR'
-  static constexpr std::uint8_t  kVersion = 1;
+  // v2 appends the optional constraints to every entry; v1 blobs (19-byte entries,
+  // no constraints) are still loaded.
+  static constexpr std::uint8_t  kVersion = 2;
   static constexpr std::size_t   kHeaderSize = 6;
-  static constexpr std::size_t   kEntryWireSize = 19;
+  static constexpr std::size_t   kEntryWireSizeV1 = 19;
+  static constexpr std::size_t   kEntryWireSize = 36;
 
   std::size_t stored_count() const noexcept {
     std::size_t n = 0;
@@ -161,6 +207,14 @@ class RuleEngine {
       detail::put_u16_le(p + off + 10, r.action_entity);
       p[off + 12] = r.action_attr;
       put_value(p + off + 13, r.action_value);
+      detail::put_u16_le(p + off + 19, r.window_start);
+      detail::put_u16_le(p + off + 21, r.window_end);
+      detail::put_u16_le(p + off + 23, r.cooldown_s);
+      p[off + 25] = r.has_cond ? 1 : 0;
+      detail::put_u16_le(p + off + 26, r.cond_entity);
+      p[off + 28] = r.cond_attr;
+      p[off + 29] = static_cast<std::uint8_t>(r.cond_op);
+      put_value(p + off + 30, r.cond_operand);
       off += kEntryWireSize;
     }
     return off;
@@ -172,16 +226,17 @@ class RuleEngine {
   bool load(const void* in, std::size_t len) noexcept {
     if (in == nullptr || len < kHeaderSize) return false;
     const auto* p = static_cast<const std::uint8_t*>(in);
-    if (detail::get_u16_le(p) != kMagic || p[2] != kVersion) return false;
+    if (detail::get_u16_le(p) != kMagic || (p[2] != kVersion && p[2] != 1)) return false;
+    const std::size_t esz = p[2] == 1 ? kEntryWireSizeV1 : kEntryWireSize;
     const std::size_t n = detail::get_u16_le(p + 4);
-    if (len < kHeaderSize + n * kEntryWireSize) return false;
+    if (len < kHeaderSize + n * esz) return false;
     std::size_t kept = 0;
     for (int i = 0; i < count_; ++i) if (rules_[i].match != nullptr) ++kept;
     if (kept + n > MaxRules) return false;
 
     Rule loaded[MaxRules];
     for (std::size_t i = 0; i < n; ++i) {
-      const std::uint8_t* e = p + kHeaderSize + i * kEntryWireSize;
+      const std::uint8_t* e = p + kHeaderSize + i * esz;
       Rule& r = loaded[i];
       r.trigger_entity = detail::get_u16_le(e);
       r.trigger_attr = e[2];
@@ -192,11 +247,28 @@ class RuleEngine {
       r.action_entity = detail::get_u16_le(e + 10);
       r.action_attr = e[12];
       if (!get_value(e + 13, r.action_value)) return false;
+      if (esz == kEntryWireSize) {
+        r.window_start = detail::get_u16_le(e + 19);
+        r.window_end = detail::get_u16_le(e + 21);
+        if (r.window_start != kNoWindow &&
+            (r.window_start >= 1440 || r.window_end >= 1440 || r.window_start == r.window_end)) {
+          return false;
+        }
+        r.cooldown_s = detail::get_u16_le(e + 23);
+        if (e[25] > 1) return false;
+        r.has_cond = e[25] == 1;
+        r.cond_entity = detail::get_u16_le(e + 26);
+        r.cond_attr = e[28];
+        if (e[29] > static_cast<std::uint8_t>(CmpOp::Ge)) return false;
+        r.cond_op = static_cast<CmpOp>(e[29]);
+        if (r.has_cond && !get_value(e + 30, r.cond_operand)) return false;
+      }
     }
     int w = 0;
     for (int i = 0; i < count_; ++i) if (rules_[i].match != nullptr) rules_[w++] = rules_[i];
     for (std::size_t i = 0; i < n; ++i) rules_[w++] = loaded[i];
     count_ = w;
+    for (int i = 0; i < count_; ++i) fired_[i] = false;  // cool-downs restart
     return true;
   }
 
@@ -222,7 +294,13 @@ class RuleEngine {
   Dispatcher& disp_;
   NowFn now_fn_;
   void* now_ctx_;
+  MinuteFn clock_fn_ = nullptr;
+  void* clock_ctx_ = nullptr;
+  ReadFn read_fn_ = nullptr;
+  void* read_ctx_ = nullptr;
   Rule rules_[MaxRules];
+  bool fired_[MaxRules] = {};                // cool-down bookkeeping, not persisted
+  std::uint32_t last_fire_ms_[MaxRules] = {};
   int count_ = 0;
 };
 
@@ -231,6 +309,7 @@ class RuleEngine {
 template <typename Dispatcher, std::size_t MaxRules>
 bool RuleEngine<Dispatcher, MaxRules>::add_rule(const Rule& rule) noexcept {
   if (count_ >= static_cast<int>(MaxRules)) return false;
+  fired_[count_] = false;
   rules_[count_++] = rule;
   return true;
 }
@@ -248,9 +327,29 @@ void RuleEngine<Dispatcher, MaxRules>::evaluate(
       continue;
     }
 
+    // Optional constraints. Unknown clock / state = the rule stays quiet.
+    if (r.window_start != kNoWindow) {
+      const int minute = (clock_fn_ != nullptr) ? clock_fn_(clock_ctx_) : -1;
+      if (!in_window(r, minute)) continue;
+    }
+    if (r.has_cond) {
+      hubproto::Value cur{};
+      if (read_fn_ == nullptr || !read_fn_(read_ctx_, r.cond_entity, r.cond_attr, cur) ||
+          !value_matches(cur, r.cond_op, r.cond_operand)) {
+        continue;
+      }
+    }
+
     const std::uint32_t now = (now_fn_ != nullptr) ? now_fn_(now_ctx_) : 0;
+    if (r.cooldown_s != 0 && now_fn_ != nullptr && fired_[i] &&
+        static_cast<std::uint32_t>(now - last_fire_ms_[i]) <
+            static_cast<std::uint32_t>(r.cooldown_s) * 1000u) {
+      continue;
+    }
     std::uint16_t seq = 0;
     disp_.send(r.action_entity, r.action_attr, r.action_value, now, seq);
+    fired_[i] = true;
+    last_fire_ms_[i] = now;
   }
 }
 
