@@ -31,6 +31,7 @@
     "@expo/metro-runtime": "57.0.16",
     "expo": "57.0.27",
     "expo-dev-client": "~57.0.19",
+    "expo-location": "~57.0.20",
     "expo-secure-store": "57.0.4",
     "expo-status-bar": "57.0.1",
     "react": "19.2.3",

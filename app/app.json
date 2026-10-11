@@ -38,6 +38,14 @@
       },
       "versionCode": 1
     },
-    "icon": "./assets/icon.png"
+    "icon": "./assets/icon.png",
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Keystone uses your approximate position only to tell the hub where it is, so that sunrise and sunset are right."
+        }
+      ]
+    ]
   }
 }

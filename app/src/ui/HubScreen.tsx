@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import { describeLocation, locationRequest } from '../model/automation';
 import { chipSummary } from '../model/health';
+import { locatePhone } from '../native/position';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
 import { WifiCard } from './WifiCard';
@@ -15,6 +16,7 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
   const [lat, setLat] = useState('');
   const [lon, setLon] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
   const loc = home.hub?.location ?? null;
 
   const open = () => {
@@ -28,6 +30,19 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
     if (!r.ok) return setError(r.error);
     setError(null);
     if ((await commands.request('location.set', r.value)) !== null) setEditing(false);
+  };
+
+  // The phone is normally in the same house as the hub: take its rough position instead of typing it.
+  const usePhone = async () => {
+    setError(null);
+    setLocating(true);
+    const p = await locatePhone();
+    if (!p.ok) {
+      setLocating(false);
+      return setError(p.error);
+    }
+    await commands.request('location.set', { lat: p.lat, lon: p.lon });
+    setLocating(false);
   };
 
   return (
@@ -45,10 +60,14 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
           </View>
         </View>
       ) : (
-        <View style={styles.row}>
-          {loc && <Button kind="danger" label="Clear location" onPress={() => void commands.request('location.clear')} />}
-          <Button kind="plain" label={loc ? 'Change location' : 'Set location'} onPress={open} />
-        </View>
+        <>
+          <ErrorText text={error} />
+          <View style={styles.row}>
+            {loc && <Button kind="danger" label="Clear location" onPress={() => void commands.request('location.clear')} />}
+            <Button kind="plain" label={loc ? 'Change location' : 'Set location'} onPress={open} />
+            <Button label={locating ? 'Locating…' : 'Use this phone\u2019s location'} a11y="Use phone location" disabled={locating} onPress={() => void usePhone()} />
+          </View>
+        </>
       )}
     </View>
   );
@@ -105,7 +124,7 @@ const styles = StyleSheet.create({
   h2: { fontSize: 17, fontWeight: '600' },
   line: { fontSize: 14, marginTop: 4 },
   section: { fontSize: 12, fontWeight: '700', letterSpacing: 1, marginTop: 10 },
-  row: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
+  row: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
   chipHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   change: { marginTop: 14, borderWidth: 1, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
 });

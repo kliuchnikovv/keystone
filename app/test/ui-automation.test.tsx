@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import './setup-dom';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
+import { locatePhone } from '../src/native/position';
 import { Home } from '../src/ui/Home';
 import { MockHub } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
+vi.mock('../src/native/position', () => ({ locatePhone: vi.fn() }));
 let hub: MockHub;
 
 beforeEach(async () => {
@@ -394,6 +396,24 @@ describe('The sun', () => {
     expect(hub.location).toEqual({ lat: 50.08, lon: 14.43 });
     click('Clear location');
     await screen.findByText(/Not set/);
+    expect(hub.location).toBeNull();
+  });
+
+  it('the phone can give the location in one tap', async () => {
+    vi.mocked(locatePhone).mockResolvedValue({ ok: true, lat: 50.09, lon: 14.42 });
+    await openApp();
+    click('Hub');
+    click('Use phone location');
+    await screen.findByText(/50\.0900, 14\.4200/);
+    expect(hub.location).toEqual({ lat: 50.09, lon: 14.42 });
+  });
+
+  it('a refused phone location says so and leaves the hub alone', async () => {
+    vi.mocked(locatePhone).mockResolvedValue({ ok: false, error: 'Location access was not allowed. Type the coordinates instead.' });
+    await openApp();
+    click('Hub');
+    click('Use phone location');
+    expect(await screen.findByText(/not allowed/)).toBeTruthy();
     expect(hub.location).toBeNull();
   });
 
