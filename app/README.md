@@ -66,7 +66,7 @@ enough) and the token.
   Until that is checked, a phone can fall back to `webplain on` on the hub (plain `ws://`,
   trusted network only), which may need cleartext traffic allowed (iOS ATS exception for
   local networking, Android `usesCleartextTraffic`).
-- **Phones** need a development build, because the pinning module is native code (Expo Go
+- **Phones** need a development build (step by step for iOS: [../docs/ios-build.md](../docs/ios-build.md)), because the pinning module is native code (Expo Go
   cannot load it): `npx expo run:android` / `npx expo run:ios` (needs the Android SDK / Xcode)
   or an EAS build. The module has not been compiled or run by the author: expect to fix
   build errors, and test the three cases below before trusting it — (1) the right

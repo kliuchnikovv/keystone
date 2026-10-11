@@ -6,19 +6,38 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "keystone",
-    "web": { "bundler": "metro", "output": "single" },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "dev.keystone.app",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Keystone talks to your hub on your home network.",
-        "NSBonjourServices": ["_keystone._tcp"],
-        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+        "NSBonjourServices": [
+          "_keystone._tcp"
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      },
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "dev.keystone.app",
-      "permissions": ["android.permission.CHANGE_WIFI_MULTICAST_STATE"]
-    }
+      "permissions": [
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#185cd6"
+      },
+      "versionCode": 1
+    },
+    "icon": "./assets/icon.png"
   }
 }
