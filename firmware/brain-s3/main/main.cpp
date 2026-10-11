@@ -42,6 +42,7 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
+#include "mdns.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -116,6 +117,10 @@ static void sntp_init(void) {
   }
 }
 
+// Name the hub answers to on the LAN: keystone.local, and the service _keystone._tcp that
+// the app browses for (docs/app-protocol.md §1).
+static constexpr const char* kHubHostname = "keystone";
+
 // Обработчик событий WiFi
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data) {
@@ -149,7 +154,8 @@ static void wifi_init(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Создание default Wi-Fi station
-    esp_netif_create_default_wifi_sta();
+    esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
+    esp_netif_set_hostname(sta_netif, kHubHostname);
 
     // Конфигурация Wi-Fi
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -1907,6 +1913,55 @@ void app_hub_info(core::app::HubInfo& h) {
   h.synced = s_time_synced;
 }
 
+// mDNS: advertise `_keystone._tcp` on the port the app server actually listens on. Called
+// every main-loop pass; it only does work when the server's mode/port changed, so the
+// console commands and the token restore need no hooks. TXT carries no secret and nothing
+// the client should trust (an attacker on the LAN can answer mDNS too): trust is the
+// pinned fingerprint, mDNS only says where to look.
+void mdns_sync() {
+  static bool inited = false;
+  static bool failed = false;
+  static int advertised_port = 0;
+  static appsrv::Mode advertised_mode = appsrv::Mode::Stopped;
+  if (failed) return;
+  if (!inited) {
+    if (mdns_init() != ESP_OK) {
+      ESP_LOGW(kTag, "mdns_init failed");
+      failed = true;
+      return;
+    }
+    mdns_hostname_set(kHubHostname);
+    mdns_instance_name_set("Keystone hub");
+    inited = true;
+  }
+  const appsrv::Mode mode = appsrv::running() ? appsrv::mode() : appsrv::Mode::Stopped;
+  const int port = mode == appsrv::Mode::Stopped ? 0 : appsrv::port();
+  if (mode == advertised_mode && port == advertised_port) return;
+  if (advertised_mode != appsrv::Mode::Stopped) mdns_service_remove("_keystone", "_tcp");
+  advertised_mode = appsrv::Mode::Stopped;
+  advertised_port = 0;
+  if (mode == appsrv::Mode::Stopped) {
+    ESP_LOGI(kTag, "mdns: service withdrawn");
+    return;
+  }
+  core::app::HubInfo info;
+  app_hub_info(info);
+  mdns_txt_item_t txt[] = {
+      {"v", "1"},
+      {"name", info.name},
+      {"tls", mode == appsrv::Mode::Tls ? "1" : "0"},
+  };
+  if (mdns_service_add(nullptr, "_keystone", "_tcp", static_cast<std::uint16_t>(port), txt,
+                       sizeof(txt) / sizeof(txt[0])) != ESP_OK) {
+    ESP_LOGW(kTag, "mdns_service_add failed");  // retried on the next pass
+    return;
+  }
+  ESP_LOGI(kTag, "mdns: %s.local _keystone._tcp port %d (%s)", kHubHostname, port,
+           mode == appsrv::Mode::Tls ? "wss" : "ws");
+  advertised_mode = mode;
+  advertised_port = port;
+}
+
 constexpr const char* kWebTokenKey = "webtoken";
 
 void persist_webtoken(const char* token) {  // nullptr clears
@@ -2284,6 +2339,7 @@ extern "C" void app_main(void) {
         core::app::encode_state(w, ev.entity, ev.attr, ev.value);
         if (w.ok()) appsrv::broadcast(b, w.size());
       }
+      mdns_sync();
       if (appsrv::running()) {
         appsrv::tick(t);
         if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {

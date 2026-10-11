@@ -20,6 +20,7 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `tools/mock-hub/` — a software hub speaking the protocol (3 clients max, hello
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.
+- `src/protocol/mdns.ts`, `tools/discover.ts` — find hubs on the LAN (mDNS `_keystone._tcp`).
 
 ## Commands
 
@@ -33,6 +34,7 @@ npm start                # Expo dev server (QR code for a phone with Expo Go / a
 npm run export:web       # static web build into dist/
 
 # against a real hub (set a token on its console first: `webtoken <token>`)
+npm run discover         # lists hubs on the LAN with their URL (the hub advertises keystone.local)
 npm run probe -- --url ws://<hub-ip>:8080/ws --token <token> [--cmd 256,1,false] [--seconds 30]
 npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 19 conformance checks
 # over TLS: pin the certificate (the hub console prints it with `webtoken`); adds 5 TLS checks
@@ -54,6 +56,10 @@ enough) and the token.
   needs `webplain on` on the hub (plain `ws://`, trusted network only) and may need
   cleartext traffic allowed (iOS ATS exception for local networking, Android
   `usesCleartextTraffic`). Native pinning is open work; none of this is tried on a device.
+- Discovery is mDNS (`_keystone._tcp`, host `keystone.local`). It only says where the hub is;
+  the fingerprint, not mDNS, is what you trust. The app does not browse yet (a browser cannot
+  do mDNS; a phone needs a native module) — type the address, or the `keystone.local` name
+  if your OS resolves it.
 - The web build keeps the token in `localStorage`: fine for development, prefer the
   native app for daily use.
 - `npm audit` reports vulnerabilities in the React Native / Expo build tooling; none

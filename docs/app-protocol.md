@@ -1,10 +1,10 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for devices, hub, schedules, timers, rules, names; TLS with certificate pinning). Not yet done: TLS on a phone (native pinning), mDNS.** The client library, a
+Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for devices, hub, schedules, timers, rules, names; TLS with certificate pinning). mDNS advertising and a Node discovery tool (stage 6). Not yet done: TLS on a phone (native pinning), discovery inside the app.** The client library, a
 mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
 handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
 requests for names, rules, schedules and timers) are implemented and verified on
-hardware. Still to come: `pair`/`unpair`/`identify`, TLS, mDNS discovery, a build on
+hardware. Still to come: `pair`/`unpair`/`identify`, a build on
 a phone. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
 (Expo) app that also builds for the web, in [`app/`](../app/).
@@ -25,8 +25,15 @@ between the chips) and does not change it; the hub translates.
 - WebSocket ping/pong keeps it alive (hub pings every 20 s; no pong in 10 s = drop).
 - At most **3 simultaneous clients** (heap, see "Resource budget"). A 4th gets
   `error: busy` and is closed.
-- Discovery: mDNS service `_keystone._tcp`, TXT `v=1`, `name=<hub name>`. A client
-  can always connect to a typed-in address instead.
+- Discovery: the hub answers mDNS as `keystone.local` and advertises the service
+  `Keystone hub._keystone._tcp.local` on the port it really listens on (8443 for wss,
+  8080 when `webplain on`), TXT `v=1`, `name=<hub name>`, `tls=1|0`. The record follows the
+  server: no token (server off) means no advertisement, and a mode change re-registers it.
+  mDNS is unauthenticated — anyone on the LAN can answer — so it says only *where* to
+  look; the trust is the pinned fingerprint (§10), which is deliberately not in the TXT.
+  A client can always connect to a typed-in address instead. `npm run discover` (Node) finds
+  hubs; a browser cannot do mDNS at all, and on a phone it needs a native module (dev build,
+  not tried), so there the address is typed.
 
 ## 2. Envelope
 
@@ -303,7 +310,14 @@ re-pinning everywhere.
    where pinning is impossible), heap re-measured (§9). 12 pinning tests against a TLS
    mock hub; `hub-check` runs 5 extra TLS checks (31 in all with `--mutate`) and passes on
    the brain. *Open:* pinning on iOS/Android (§10).
-6. **mDNS discovery** and polish.
+6. ✅ **mDNS** (hub + Node tool): `espressif/mdns` (IDF 6 managed component) advertises
+   `_keystone._tcp` and `keystone.local`; checked on the brain with an independent raw
+   mDNS query (PTR → SRV 8443 → TXT `tls=1,name=home,v=1` → A), with the record switching to
+   8080/`tls=0` on `webplain on` and back, and withdrawn on `webtoken clear`. `app/src/protocol/mdns.ts`
+   is a small pure codec (compression pointers, bounded against loops/truncation, goodbye
+   packets, unknown versions ignored; 8 tests), `npm run discover` prints the hub URL.
+   Costs 7 KB of heap (idle 201 KB, 3 TLS clients 153 KB, lowest 129 KB, no leak).
+   *Open:* discovery inside the phone app (needs a native module), polish.
 
 Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

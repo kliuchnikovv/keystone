@@ -10,7 +10,7 @@ endif()
 
 idf_component_register(SRCS ${KS_SRCS}
                        INCLUDE_DIRS "."
-                       REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_server esp_https_server esp-tls)
+                       REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_server esp_https_server esp-tls mdns)
 
 if(KS_TLS_DEFS)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE ${KS_TLS_DEFS})

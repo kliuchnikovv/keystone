@@ -10,6 +10,7 @@
     "mock-hub": "tsx tools/mock-hub/main.ts",
     "probe": "tsx tools/probe.ts",
     "hub-check": "tsx tools/hub-check.ts",
+    "discover": "tsx tools/discover.ts",
     "start": "expo start",
     "web": "expo start --web",
     "export:web": "expo export --platform web"

@@ -66,7 +66,9 @@ async function raw(): Promise<Raw> {
 async function login(): Promise<Raw> {
   const r = await raw();
   r.send({ type: 'hello', v: 1, token });
-  if (!(await r.next((m) => m.type === 'welcome'))) throw new Error('no welcome');
+  // Parallel TLS handshakes queue up in the hub's single server task (~0.75 s each), so a
+  // hello can wait a couple of seconds for its turn.
+  if (!(await r.next((m) => m.type === 'welcome', 8000))) throw new Error('no welcome');
   // Wait for the end of the snapshot.
   if (!(await r.next((m) => m.type === 'snapshot' && (m.last ?? true) === true, 5000))) throw new Error('no snapshot end');
   return r;
@@ -419,6 +421,8 @@ if (process.argv.includes('--lockout')) {
 
 const hold = Number(arg('hold') ?? '0');
 if (hold > 0 && !process.argv.includes('--lockout')) {
+  a.ws.close();  // `a` still holds a slot from the checks above; the hold wants all three
+  await sleep(700);
   const clients = await Promise.all([login(), login(), login()]);
   console.log(`  holding ${clients.length} authenticated clients for ${hold} s (read heap on the hub now)`);
   await sleep(hold * 1000);

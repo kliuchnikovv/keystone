@@ -1,0 +1,4 @@
+## IDF Component Manager manifest for the brain. mDNS is a managed component since IDF 6.
+dependencies:
+  espressif/mdns:
+    version: ">=1.9.0"
