@@ -391,3 +391,35 @@ export function describeLocation(hub: { location?: { lat: number; lon: number } 
   if (hub.sun) return `${where} · sunrise ${hub.sun.rise}, sunset ${hub.sun.set}`;
   return hub.synced === false ? `${where} · waiting for the clock` : `${where} · the sun does not rise and set today`;
 }
+
+// ---- Wi-Fi ----------------------------------------------------------------------------------------
+
+const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
+const hasControl = (s: string) => /[\u0000-\u001f\u007f]/.test(s);
+
+/** The same rules the hub applies (core::wifi_credentials_valid), so a typo is caught before the hub drops off the network. */
+export function wifiRequest(ssid: string, password: string): Built {
+  const n = utf8Bytes(ssid);
+  if (n < 1 || n > 32) return { ok: false, error: 'The network name is 1 to 32 characters' };
+  if (hasControl(ssid)) return { ok: false, error: 'The network name has a character that is not allowed' };
+  if (password !== '') {
+    const hex64 = password.length === 64 && /^[0-9a-fA-F]+$/.test(password);
+    if (!hex64 && (password.length < 8 || password.length > 63)) {
+      return { ok: false, error: 'The password is 8 to 63 characters (leave it empty for an open network)' };
+    }
+    if (password.length === 64 && !hex64) return { ok: false, error: 'A 64-character password must be hex digits' };
+    if (hasControl(password)) return { ok: false, error: 'The password has a character that is not allowed' };
+  }
+  return { ok: true, value: { ssid, password } };
+}
+
+/** "gigacube · −61 dBm · 192.168.0.202" */
+export function describeWifi(hub: { wifi?: { ssid: string; rssi: number; ip: string } | null } | null): string {
+  if (!hub?.wifi) return 'Not connected';
+  return `${hub.wifi.ssid} · ${hub.wifi.rssi} dBm · ${hub.wifi.ip}`;
+}
+
+/** Signal strength in words, for the network list. */
+export function signalText(rssi: number): string {
+  return rssi >= -55 ? 'strong' : rssi >= -70 ? 'good' : rssi >= -82 ? 'weak' : 'very weak';
+}

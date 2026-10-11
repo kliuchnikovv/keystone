@@ -47,6 +47,8 @@ npm run hub-check -- --url wss://<hub-ip>:8443/ws --token <token> --fingerprint 
 # without --fingerprint, `probe` on a wss:// URL just shows what the hub presents, to compare
 #   --mutate   also create and remove a name, schedule, timer, rule and scene, and try pair/identify
 #              (12 more checks: 31 in all, 36 over TLS). Puts everything back; never unpairs a device
+#   --wifi     also move the hub to a network that does not exist and check it comes back on its own
+#              (~45 s; the hub is unreachable for ~35 s of it — do not run it when you need the hub)
 #   --hold N   keep 3 clients connected for N seconds (read `heap` on the hub meanwhile)
 #   --lockout  also test the failed-login lockout (locks this machine out for a minute)
 ```

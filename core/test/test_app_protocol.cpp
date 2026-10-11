@@ -167,7 +167,7 @@ TEST_CASE("single-frame encoders produce the documented JSON") {
   {
     JsonWriter w(buf, sizeof(buf));
     encode_welcome(w, HubInfo{"home", "7843023", 1781000000, "UTC", true});
-    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":null,"sun":null}})");
+    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":null,"wifi":null,"sun":null}})");
   }
   {
     HubInfo h{"home", "7843023", 1781000000, "UTC", true};
@@ -179,7 +179,14 @@ TEST_CASE("single-frame encoders produce the documented JSON") {
     h.sun_set = 20 * 60 + 1;
     JsonWriter w(buf, sizeof(buf));
     encode_welcome(w, h);
-    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":{"lat":50.08,"lon":-14.43},"sun":{"rise":"06:12","set":"20:01"}}})");
+    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":{"lat":50.08,"lon":-14.43},"wifi":null,"sun":{"rise":"06:12","set":"20:01"}}})");
+    h.has_wifi = true;
+    std::strcpy(h.wifi_ssid, "Home \"5G\"");
+    h.wifi_rssi = -61;
+    std::strcpy(h.wifi_ip, "192.168.0.202");
+    JsonWriter ww(buf, sizeof(buf));
+    encode_welcome(ww, h);
+    CHECK(std::string(ww.c_str()).find(R"("wifi":{"ssid":"Home \"5G\"","rssi":-61,"ip":"192.168.0.202"})") != std::string::npos);
     JsonWriter e(buf, sizeof(buf));
     encode_hub(e, h);
     CHECK(std::string(e.c_str()).rfind(R"({"type":"hub","hub":{"name":"home")", 0) == 0);
@@ -473,4 +480,16 @@ TEST_CASE("a source that shrinks between parts does not loop or crash") {
     CHECK(r.parse(w.c_str(), w.size()));
   }
   CHECK(c.done());
+}
+
+TEST_CASE("a Wi-Fi scan result is encoded as a list of networks") {
+  struct Net { char ssid[33]; int rssi; bool secure; };
+  const Net nets[] = {{"home", -52, true}, {"guest \"open\"", -70, false}};
+  char buf[256];
+  JsonWriter w(buf, sizeof(buf));
+  encode_res_networks(w, 7, nets, 2);
+  CHECK(std::string(w.c_str()) == R"({"type":"res","id":7,"ok":true,"result":{"networks":[{"ssid":"home","rssi":-52,"secure":true},{"ssid":"guest \"open\"","rssi":-70,"secure":false}]}})");
+  JsonWriter e(buf, sizeof(buf));
+  encode_res_networks(e, 8, nets, 0);
+  CHECK(std::string(e.c_str()) == R"({"type":"res","id":8,"ok":true,"result":{"networks":[]}})");
 }

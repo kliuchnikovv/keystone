@@ -12,6 +12,7 @@
 #include "core/rule_engine.hpp"
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
+#include "core/wifi_policy.hpp"
 #include "core/schedule_table.hpp"
 #include "hubproto/payload.hpp"
 
@@ -292,12 +293,20 @@ struct HubInfo {
   bool has_sun = false;
   int sun_rise = 0;  // local minutes of the day
   int sun_set = 0;
+  // The network the hub is on (never the password).
+  bool has_wifi = false;
+  char wifi_ssid[kMaxSsidLen + 1] = {};
+  int wifi_rssi = 0;
+  char wifi_ip[16] = {};
 };
 
 inline void write_hub_info(JsonWriter& w, const HubInfo& h) noexcept {
   w.begin_object().kv("name", h.name).kv("fw", h.fw).kv("time", h.time).kv("tz", h.tz).kv("synced", h.synced);
   w.key("location");
   if (h.has_location) w.begin_object().key("lat").f64(h.lat).key("lon").f64(h.lon).end_object();
+  else w.null();
+  w.key("wifi");
+  if (h.has_wifi) w.begin_object().kv("ssid", h.wifi_ssid).kv("rssi", static_cast<std::int64_t>(h.wifi_rssi)).kv("ip", h.wifi_ip).end_object();
   else w.null();
   w.key("sun");
   if (h.has_sun) {
@@ -351,6 +360,16 @@ inline void encode_res_ok(JsonWriter& w, std::int64_t id) noexcept {
 inline void encode_res_ok_index(JsonWriter& w, std::int64_t id, std::int64_t index) noexcept {
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
       .key("result").begin_object().kv("index", index).end_object().end_object();
+}
+
+// A Wi-Fi scan: {"networks":[{"ssid":"home","rssi":-52,"secure":true},…]}. `N` is WifiNetwork-like.
+template <typename Net>
+void encode_res_networks(JsonWriter& w, std::int64_t id, const Net* nets, std::size_t count) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true).key("result").begin_object().key("networks").begin_array();
+  for (std::size_t i = 0; i < count; ++i) {
+    w.begin_object().kv("ssid", nets[i].ssid).kv("rssi", static_cast<std::int64_t>(nets[i].rssi)).kv("secure", nets[i].secure).end_object();
+  }
+  w.end_array().end_object().end_object();
 }
 
 // A scene was applied: how many commands went out and how many actions were skipped (an entity

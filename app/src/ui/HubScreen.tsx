@@ -5,6 +5,7 @@ import { describeLocation, locationRequest } from '../model/automation';
 import { chipSummary } from '../model/health';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
+import { WifiCard } from './WifiCard';
 import { useTheme } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
@@ -72,6 +73,7 @@ export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeStat
         )}
       </View>
 
+      <WifiCard home={home} commands={commands} />
       <LocationCard home={home} commands={commands} />
 
       <Text style={[styles.section, { color: t.muted }]}>CHIPS</Text>

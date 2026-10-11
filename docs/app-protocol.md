@@ -59,6 +59,7 @@ given once in the snapshot, so the client knows how to render and edit it.
    ```json
    { "type": "welcome", "v": 1,
      "hub": { "name": "home", "fw": "7843023", "time": 1781000000, "tz": "UTC", "synced": true,
+              "wifi": { "ssid": "home", "rssi": -61, "ip": "192.168.0.202" },  // null while not connected
               "location": { "lat": 50.08, "lon": 14.43 },        // null until set
               "sun": { "rise": "06:12", "set": "20:01" } } }       // today, local; null if unknown
    ```
@@ -122,6 +123,11 @@ events above, because a list can exceed one frame. Clients must therefore handle
 the snapshot at any time (the reducer does); the fine-grained events remain valid
 protocol for a hub that wants to use them. Checked at most once a second.
 
+**Dead connections.** The hub sends something at least every 10 s while a client is connected
+(chip telemetry), so a client treats 35 s of silence (`staleAfterMs`, 0 = off) as a dead link and
+reconnects. This matters when the hub's Wi-Fi blinks or it switches network: the TCP connection can
+stay open on the client's side and nothing would ever tell it. (Found by the `--wifi` check below.)
+
 A client that falls behind (its send queue is full) is dropped rather than
 buffered without bound; it reconnects and gets a fresh snapshot, so there is no
 "missed event" recovery protocol.
@@ -161,6 +167,8 @@ so they also update the desired state (reconciler).
 | `schedule.del` | `index` | |
 | `timer.add` | `delay_s` (1..604800), `entity`, `action` — or `scene` instead of the last two | `index` is the slot number |
 | `timer.cancel` | `index` | |
+| `wifi.scan` | — | the networks the hub sees: `result.networks: [{ssid, rssi, secure}]`, strongest first, one per name, hidden ones left out, at most 16. Blocks the hub for 2–3 s and pauses its own traffic while it listens on other channels |
+| `wifi.set` | `ssid` (1..32 bytes), `password` (`""` = open network, 8..63 characters, or 64 hex digits) | move the hub to another network. The reply (`ok`) goes out first, ~0.7 s later the hub leaves its network and **tries the new one for 30 s**: if it gets an address the credentials are saved (NVS), otherwise it goes back to the old network, so a typo cannot strand it. Every connection drops meanwhile and the app must reconnect (the address may change on a different network: rediscover by mDNS). With no working network to go back to, the new credentials are kept at once. The password is never echoed, logged or sent back |
 | `location.set` / `location.clear` | `lat`, `lon` (degrees, north/east positive; −90..90, −180..180) / — | the hub's position, for sunrise/sunset; kept in NVS; every client gets a `hub` event with the new `location` and today's `sun` |
 | `scene.put` | `name`, `actions: [{entity, attr, value}…]` | creates or **replaces** a scene (name `[a-z][a-z0-9_]{0,22}`, 1..8 actions, up to 8 scenes). Every action must target a writable attribute of a real device (chips excluded) with a value that fits it, and an attribute may appear once: `bad_args` / `read_only` / `not_found` / `table_full`, nothing stored on error |
 | `scene.del` | `name` | `not_found` if there is no such scene |

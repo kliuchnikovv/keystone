@@ -67,6 +67,7 @@
 #include <cmath>
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
+#include "core/wifi_policy.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "app_server.hpp"
@@ -91,6 +92,7 @@ const char* kTag = "brain-s3";
 
 static bool s_sntp_initialized = false;
 static bool s_time_synced = false;
+std::atomic<bool> g_hub_dirty{false};  // something the apps show about the hub itself changed (hub event)
 static bool s_clock_just_synced = false;
 
 static void time_sync_notification_cb(struct timeval *tv) {
@@ -124,21 +126,117 @@ static void sntp_init(void) {
 // the app browses for (docs/app-protocol.md §1).
 static constexpr const char* kHubHostname = "keystone";
 
+// ---- Wi-Fi --------------------------------------------------------------------------------
+// Credentials: the ones saved in NVS (`wifi_join`, the app's `wifi.set`), else the image's built-in
+// default (main/wifi_secrets.h, for development), else none. A change of network is a *trial*: the
+// new credentials are saved only once the hub got an address on that network, otherwise it goes
+// back to the old ones (core::WifiTrial), so a typo cannot strand the hub.
+struct WifiCreds {
+  char ssid[core::kMaxSsidLen + 1] = {};
+  char pass[core::kMaxPasswordLen + 2] = {};  // 64 hex digits (a raw PSK) fit too
+};
+
+static std::atomic<bool> s_wifi_up{false};            // has an address
+static std::atomic<unsigned> s_wifi_got_ip{0};        // how many times an address was obtained
+static std::atomic<unsigned> s_wifi_attempt{0};       // consecutive failed connects (back-off)
+static std::atomic<bool> s_wifi_have_creds{false};
+static WifiCreds s_wifi_active;                       // what is configured now (main loop / init only)
+static esp_timer_handle_t s_wifi_retry = nullptr;
+
+static void wifi_retry_cb(void*) {
+    if (s_wifi_have_creds && !s_wifi_up) esp_wifi_connect();
+}
+
+static constexpr const char* kWifiSsidKey = "wifi_ssid";
+static constexpr const char* kWifiPassKey = "wifi_pass";
+
+static void wifi_creds_save(const WifiCreds& c) {
+    nvs_handle_t h;
+    if (nvs_open("keystone", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, kWifiSsidKey, c.ssid);
+    nvs_set_str(h, kWifiPassKey, c.pass);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool wifi_creds_load(WifiCreds& c) {
+    nvs_handle_t h;
+    if (nvs_open("keystone", NVS_READONLY, &h) != ESP_OK) return false;
+    std::size_t sl = sizeof(c.ssid), pl = sizeof(c.pass);
+    const bool ok = nvs_get_str(h, kWifiSsidKey, c.ssid, &sl) == ESP_OK && nvs_get_str(h, kWifiPassKey, c.pass, &pl) == ESP_OK &&
+                    c.ssid[0] != '\0';
+    nvs_close(h);
+    return ok;
+}
+
+static void wifi_creds_erase() {
+    nvs_handle_t h;
+    if (nvs_open("keystone", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, kWifiSsidKey);
+    nvs_erase_key(h, kWifiPassKey);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 // Обработчик событий WiFi
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(kTag, "WiFi STA Start. Connecting...");
-        esp_wifi_connect();
+        if (s_wifi_have_creds) {
+            ESP_LOGI(kTag, "WiFi STA Start. Connecting...");
+            esp_wifi_connect();
+        } else {
+            ESP_LOGW(kTag, "WiFi STA Start: no credentials (set them with `wifi_join <ssid> <pass>`)");
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
-        ESP_LOGW(kTag, "WiFi disconnected. Reason: %d. Retrying connection...", disconn->reason);
-        esp_wifi_connect(); // Попытка переподключения
+        s_wifi_up = false;
+        g_hub_dirty = true;
+        if (!s_wifi_have_creds) return;
+        const std::uint32_t delay = core::wifi_reconnect_delay_ms(s_wifi_attempt.fetch_add(1));
+        ESP_LOGW(kTag, "WiFi disconnected. Reason: %d. Retrying in %u ms", disconn->reason, static_cast<unsigned>(delay));
+        if (s_wifi_retry != nullptr) {
+            esp_timer_stop(s_wifi_retry);
+            esp_timer_start_once(s_wifi_retry, static_cast<std::uint64_t>(delay) * 1000u);
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(kTag, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        s_wifi_attempt = 0;
+        s_wifi_up = true;
+        ++s_wifi_got_ip;
+        g_hub_dirty = true;
         sntp_init();
     }
+}
+
+// Make `c` the network the station joins (now). Does not save anything.
+static void wifi_apply(const WifiCreds& c) {
+    if (s_wifi_retry != nullptr) esp_timer_stop(s_wifi_retry);
+    s_wifi_attempt = 0;
+    s_wifi_up = false;
+    wifi_config_t cfg = {};
+    std::strncpy(reinterpret_cast<char*>(cfg.sta.ssid), c.ssid, sizeof(cfg.sta.ssid) - 1);
+    std::strncpy(reinterpret_cast<char*>(cfg.sta.password), c.pass, sizeof(cfg.sta.password) - 1);
+    cfg.sta.threshold.authmode = c.pass[0] != '\0' ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+    s_wifi_active = c;
+    s_wifi_have_creds = true;
+    esp_wifi_disconnect();
+    esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    esp_wifi_connect();
+}
+
+// The network the hub is on, for `wifi_status` and the apps (never the password).
+static bool wifi_current(char* ssid, std::size_t ssid_cap, int& rssi, char* ip, std::size_t ip_cap) {
+    wifi_ap_record_t ap{};
+    if (!s_wifi_up || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return false;
+    std::snprintf(ssid, ssid_cap, "%s", reinterpret_cast<const char*>(ap.ssid));
+    rssi = ap.rssi;
+    esp_netif_ip_info_t info{};
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr || esp_netif_get_ip_info(netif, &info) != ESP_OK) return false;
+    std::snprintf(ip, ip_cap, IPSTR, IP2STR(&info.ip));
+    return true;
 }
 
 // Функция для инициализации WiFi
@@ -163,22 +261,41 @@ static void wifi_init(void) {
     // Конфигурация Wi-Fi
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    // Our own NVS key is the single source of truth, not the driver's copy (a trial must not stick).
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    const esp_timer_create_args_t ta = {.callback = &wifi_retry_cb, .arg = nullptr,
+                                        .dispatch_method = ESP_TIMER_TASK, .name = "wifi_retry",
+                                        .skip_unhandled_events = true};
+    ESP_ERROR_CHECK(esp_timer_create(&ta, &s_wifi_retry));
 
     // Регистрация обработчика событий WiFi
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
-    // Настройка Wi-Fi в режиме Station
-    wifi_config_t wifi_config = {};
-    strncpy((char *)wifi_config.sta.ssid, KEYSTONE_WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, KEYSTONE_WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
-
+    // Credentials: saved ones, else the built-in development default, else none.
+    WifiCreds creds;
+    const char* source = "saved";
+    if (!wifi_creds_load(creds)) {
+        creds = WifiCreds{};
+        std::strncpy(creds.ssid, KEYSTONE_WIFI_SSID, sizeof(creds.ssid) - 1);
+        std::strncpy(creds.pass, KEYSTONE_WIFI_PASSWORD, sizeof(creds.pass) - 1);
+        source = "built-in default";
+    }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    if (creds.ssid[0] != '\0') {
+        wifi_config_t wc = {};
+        std::strncpy(reinterpret_cast<char*>(wc.sta.ssid), creds.ssid, sizeof(wc.sta.ssid) - 1);
+        std::strncpy(reinterpret_cast<char*>(wc.sta.password), creds.pass, sizeof(wc.sta.password) - 1);
+        wc.sta.threshold.authmode = creds.pass[0] != '\0' ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+        s_wifi_active = creds;
+        s_wifi_have_creds = true;
+        ESP_LOGI(kTag, "Wi-Fi: joining %s (%s credentials)", creds.ssid, source);
+    } else {
+        ESP_LOGW(kTag, "Wi-Fi: no credentials yet; use `wifi_join <ssid> <password>`");
+    }
     ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(kTag, "Wi-Fi initialization complete. Attempting to connect to %s", wifi_config.sta.ssid);
 }
 
 // UART1 = Zigbee coordinator (chip 0x01).
@@ -646,7 +763,6 @@ constexpr std::size_t kSceneBlobMax =
 std::atomic<std::int32_t> g_loc_lat_e6{0};
 std::atomic<std::int32_t> g_loc_lon_e6{0};
 std::atomic<bool> g_loc_set{false};
-std::atomic<bool> g_hub_dirty{false};
 
 void persist_location() {
   nvs_handle_t h;
@@ -735,6 +851,57 @@ bool sun_today(core::SunTimes& out) {
 }
 
 bool sun_cb(void* /*ctx*/, core::SunTimes& out) { return sun_today(out); }
+
+// ---- changing the Wi-Fi network (main loop only) -----------------------------------------------
+// A request waits a moment (so the app's reply goes out first), then the new network is applied as a
+// trial: it is saved only if the hub gets an address on it within 30 s, otherwise the old network is
+// restored. With no working network to go back to, the new credentials are kept at once.
+constexpr std::uint32_t kWifiTrialMs = 30000;
+struct WifiRequest {
+  bool pending = false;
+  WifiCreds creds;
+  std::uint32_t apply_at = 0;
+};
+WifiRequest g_wifi_req;
+core::WifiTrial g_wifi_trial;
+WifiCreds g_wifi_new, g_wifi_prev;
+unsigned g_wifi_ip_count_at_apply = 0;
+
+void wifi_request(const char* ssid, const char* pass, std::uint32_t now) {
+  g_wifi_req.creds = WifiCreds{};
+  std::strncpy(g_wifi_req.creds.ssid, ssid, sizeof(g_wifi_req.creds.ssid) - 1);
+  std::strncpy(g_wifi_req.creds.pass, pass, sizeof(g_wifi_req.creds.pass) - 1);
+  g_wifi_req.apply_at = now + 700;
+  g_wifi_req.pending = true;
+}
+
+void wifi_service(std::uint32_t now) {
+  if (g_wifi_req.pending && static_cast<std::int32_t>(now - g_wifi_req.apply_at) >= 0) {
+    g_wifi_req.pending = false;
+    const bool can_revert = s_wifi_up && s_wifi_have_creds;
+    g_wifi_prev = s_wifi_active;
+    g_wifi_new = g_wifi_req.creds;
+    g_wifi_ip_count_at_apply = s_wifi_got_ip;
+    ESP_LOGI(kTag, "wifi: trying %s%s", g_wifi_new.ssid, can_revert ? "" : " (no working network to go back to)");
+    wifi_apply(g_wifi_new);
+    g_wifi_trial.begin(now, kWifiTrialMs, can_revert);
+  }
+  if (g_wifi_trial.active() && s_wifi_got_ip != g_wifi_ip_count_at_apply) g_wifi_trial.on_connected();
+  switch (g_wifi_trial.poll(now)) {
+    case core::WifiTrial::Decision::Commit:
+      wifi_creds_save(g_wifi_new);
+      ESP_LOGI(kTag, "wifi: %s kept", g_wifi_new.ssid);
+      g_hub_dirty = true;
+      break;
+    case core::WifiTrial::Decision::Revert:
+      ESP_LOGW(kTag, "wifi: could not join %s in %u s, going back to %s", g_wifi_new.ssid,
+               static_cast<unsigned>(kWifiTrialMs / 1000), g_wifi_prev.ssid);
+      wifi_apply(g_wifi_prev);
+      break;
+    case core::WifiTrial::Decision::None:
+      break;
+  }
+}
 
 // The scene store is edited and read only by the main loop (console, app requests, schedules, timers).
 // Rules fire in the UART task, so they only queue the scene id (g_scene_q) and the main loop applies it.
@@ -1572,18 +1739,34 @@ int cmd_log(int argc, char** argv) {
 }
 
 int cmd_wifi_join(int argc, char** argv) {
-  if (argc < 3) {
-    printf("usage: wifi_join <ssid> <pass>\n");
+  if (argc < 2 || argc > 3) {
+    printf("usage: wifi_join <ssid> [<password>]   (no password = an open network)\n");
     return 1;
   }
-  char buf[128];
+  const char* why = nullptr;
+  if (!core::wifi_credentials_valid(argv[1], argc == 3 ? argv[2] : "", &why)) {
+    printf("%s\n", why != nullptr ? why : "bad credentials");
+    return 1;
+  }
+  char buf[192];
   Req r{};
   r.kind = REQ_WIFI_JOIN;
   r.ssid = argv[1];
-  r.pass = argv[2];
+  r.pass = argc == 3 ? argv[2] : "";
   r.out = buf;
   r.out_cap = sizeof(buf);
   printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+// wifi_forget: drop the saved network. The hub disconnects; after a reboot it uses the image's built-in
+// default if there is one, else it waits for `wifi_join`.
+int cmd_wifi_forget(int /*argc*/, char** /*argv*/) {
+  wifi_creds_erase();
+  s_wifi_have_creds = false;
+  s_wifi_up = false;
+  esp_wifi_disconnect();
+  printf("saved Wi-Fi credentials erased; disconnected\n");
   return 0;
 }
 
@@ -1806,6 +1989,7 @@ void start_console() {
   reg_cmd("identify", "identify <id> - blink the device's LED for 10s", &cmd_identify);
   reg_cmd("wifi_join", "wifi_join <ssid> <pass> - connect to a Wi-Fi network", &cmd_wifi_join);
   reg_cmd("wifi_status", "show current Wi-Fi connection status", &cmd_wifi_status);
+  reg_cmd("wifi_forget", "erase the saved Wi-Fi credentials", &cmd_wifi_forget);
   reg_cmd("wifi_scan", "scan for nearby Wi-Fi networks", &cmd_wifi_scan);
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
@@ -2186,6 +2370,57 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "timer.cancel")) {
     o = timer_cancel(timers, reader, m.args);
     if (o.ok) persist_timers(timers, now);
+  } else if (!std::strcmp(op, "wifi.set")) {
+    char ssid[core::kMaxSsidLen + 2], pass[core::kMaxPasswordLen + 4];
+    o = wifi_parse(reader, m.args, ssid, sizeof(ssid), pass, sizeof(pass));
+    if (o.ok) wifi_request(ssid, pass, now);  // applied in ~0.7 s, after this reply has gone out
+    std::memset(pass, 0, sizeof(pass));
+  } else if (!std::strcmp(op, "wifi.scan")) {
+    // The scan blocks for a couple of seconds; it is the whole reply, so answer here.
+    static char sb[1200];
+    struct Net { char ssid[core::kMaxSsidLen + 1]; int rssi; bool secure; };
+    static Net nets[16];
+    std::size_t n = 0;
+    wifi_scan_config_t sc = {};
+    if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+      uint16_t found = 0;
+      esp_wifi_scan_get_ap_num(&found);
+      uint16_t take = found > 40 ? 40 : found;
+      static wifi_ap_record_t recs[40];
+      if (esp_wifi_scan_get_ap_records(&take, recs) == ESP_OK) {
+        for (uint16_t i = 0; i < take; ++i) {
+          const char* name = reinterpret_cast<const char*>(recs[i].ssid);
+          if (name[0] == '\0') continue;  // hidden network
+          std::size_t k = 0;
+          while (k < n && std::strcmp(nets[k].ssid, name) != 0) ++k;  // one entry per name: the strongest
+          if (k < n) {
+            if (recs[i].rssi > nets[k].rssi) nets[k].rssi = recs[i].rssi;
+            continue;
+          }
+          if (n == 16) continue;
+          std::snprintf(nets[n].ssid, sizeof(nets[n].ssid), "%s", name);
+          nets[n].rssi = recs[i].rssi;
+          nets[n].secure = recs[i].authmode != WIFI_AUTH_OPEN;
+          ++n;
+        }
+      }
+      for (std::size_t i = 1; i < n; ++i) {  // strongest first (insertion sort, n <= 16)
+        const Net cur = nets[i];
+        std::size_t j = i;
+        while (j > 0 && nets[j - 1].rssi < cur.rssi) { nets[j] = nets[j - 1]; --j; }
+        nets[j] = cur;
+      }
+      core::JsonWriter sw(sb, sizeof(sb));
+      encode_res_networks(sw, in.id, nets, n);
+      if (sw.ok()) {
+        appsrv::send(in.fd, sb, sw.size());
+        ESP_LOGI(kTag, "app: req wifi.scan -> %u network(s)", static_cast<unsigned>(n));
+        return;
+      }
+      o = Outcome::fail(Err::Internal, "scan result too large");
+    } else {
+      o = Outcome::fail(Err::Internal, "scan failed");
+    }
   } else if (!std::strcmp(op, "location.set")) {
     double lat = 0, lon = 0;
     o = location_parse(reader, m.args, lat, lon);
@@ -2247,6 +2482,7 @@ void app_hub_info(core::app::HubInfo& h) {
   h.time = s_time_synced ? static_cast<std::int64_t>(time(nullptr)) : 0;
   h.tz = tz != nullptr ? tz : "UTC";
   h.synced = s_time_synced;
+  h.has_wifi = wifi_current(h.wifi_ssid, sizeof(h.wifi_ssid), h.wifi_rssi, h.wifi_ip, sizeof(h.wifi_ip));
   if (g_loc_set) {
     h.has_location = true;
     h.lat = g_loc_lat_e6 / 1e6;
@@ -2715,6 +2951,7 @@ extern "C" void app_main(void) {
         if (w.ok()) appsrv::broadcast(b, w.size());
       }
       mdns_sync();
+      wifi_service(t);
       if (appsrv::running()) {
         appsrv::tick(t);
         if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
@@ -3119,28 +3356,21 @@ extern "C" void app_main(void) {
           break;
         }
         case REQ_WIFI_JOIN: {
-          wifi_config_t wifi_config = {};
-          std::strncpy((char *)wifi_config.sta.ssid, r->ssid, sizeof(wifi_config.sta.ssid));
-          std::strncpy((char *)wifi_config.sta.password, r->pass, sizeof(wifi_config.sta.password));
-          wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-          ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-          ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-          esp_wifi_connect();
-          std::snprintf(r->out, r->out_cap, "connecting to %s...\n", r->ssid);
+          wifi_request(r->ssid, r->pass, t);
+          std::snprintf(r->out, r->out_cap,
+                        "trying %s: kept only if the hub gets an address within %u s, otherwise it goes back to the old network\n",
+                        r->ssid, static_cast<unsigned>(kWifiTrialMs / 1000));
           break;
         }
         case REQ_WIFI_STATUS: {
-          wifi_ap_record_t ap_info;
-          esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
-          if (err == ESP_OK) {
-            esp_netif_ip_info_t ip_info;
-            esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            esp_netif_get_ip_info(netif, &ip_info);
-            std::snprintf(r->out, r->out_cap, "connected to %s, rssi=%d, ip=" IPSTR "\n",
-                          ap_info.ssid, ap_info.rssi, IP2STR(&ip_info.ip));
+          char ssid[core::kMaxSsidLen + 1], ip[16];
+          int rssi = 0;
+          if (wifi_current(ssid, sizeof(ssid), rssi, ip, sizeof(ip))) {
+            std::snprintf(r->out, r->out_cap, "connected to %s, rssi=%d, ip=%s%s\n", ssid, rssi, ip,
+                          g_wifi_trial.active() ? " (trial: not saved yet)" : "");
           } else {
-            std::snprintf(r->out, r->out_cap, "not connected (err=0x%x)\n", err);
+            std::snprintf(r->out, r->out_cap, "not connected%s%s\n", s_wifi_have_creds ? " (retrying with back-off), configured: " : " (no credentials)",
+                          s_wifi_have_creds ? s_wifi_active.ssid : "");
           }
           break;
         }

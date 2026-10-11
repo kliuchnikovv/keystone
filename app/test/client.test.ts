@@ -455,6 +455,40 @@ describe('management requests', () => {
     expect(hub.scenes).toEqual([]);
   });
 
+  it('wifi.scan lists the networks, strongest first; wifi.set answers at once and the hub then moves (or not)', async () => {
+    const c = client({ backoffMs: { min: 20, max: 40 } });
+    c.connect();
+    await ready(c);
+    expect(c.getSnapshot().hub?.wifi).toMatchObject({ ssid: 'home' });
+    const res = await c.req('wifi.scan');
+    expect((res?.networks as { ssid: string }[]).map((n) => n.ssid)).toEqual(['home', 'cafe', 'neighbour']);
+
+    // An open network that exists: the hub answers, drops the connection while it switches, and the client comes back.
+    await c.req('wifi.set', { ssid: 'cafe', password: '' });
+    await until(() => hub.wifiRequests.length === 1, 'request seen');
+    await until(() => c.getSnapshot().hub?.wifi?.ssid === 'cafe', 'moved to cafe and reconnected', 4000);
+    expect(hub.wifiRequests[0]).toMatchObject({ ssid: 'cafe', kept: true });
+
+    // A secured network with the wrong password: the hub could not join, so it stays where it was.
+    await c.req('wifi.set', { ssid: 'neighbour', password: 'wrongpass1' });
+    await until(() => hub.wifiRequests.length === 2, 'second request');
+    await until(() => c.getSnapshot().status === 'ready', 'reconnected', 4000);
+    expect(hub.wifiRequests[1]).toMatchObject({ kept: false });
+    expect(c.getSnapshot().hub?.wifi?.ssid).toBe('cafe');
+  });
+
+  it('wifi.set refuses what the hub would refuse, before touching the network', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    for (const bad of [{}, { ssid: 'home' }, { password: '12345678' }, { ssid: '', password: '12345678' }, { ssid: 'home', password: 'short' },
+                       { ssid: 's'.repeat(33), password: '' }, { ssid: 5, password: '12345678' }, { ssid: 'home', password: null }]) {
+      await expect(c.req('wifi.set', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    expect(hub.wifiRequests).toHaveLength(0);
+    expect(c.getSnapshot().status).toBe('ready'); // still connected: nothing was dropped
+  });
+
   it('the hub location: set, pushed to every client with today\'s sun, cleared; bad input refused', async () => {
     const a = client();
     const b = client();
@@ -499,6 +533,65 @@ describe('management requests', () => {
     c.connect();
     await ready(c);
     await expect(c.req('reboot')).rejects.toMatchObject({ code: 'unsupported' });
+  });
+});
+
+describe('a connection that went silent', () => {
+  it('is dropped and re-made when nothing arrives for staleAfterMs, though the socket never closed', async () => {
+    let freeze = false;
+    let made = 0;
+    const freezing = (url: string): SocketLike => {
+      made++;
+      const ws = new NodeWebSocket(url) as unknown as SocketLike;
+      const wrapped: SocketLike = {
+        onopen: null, onmessage: null, onclose: null, onerror: null,
+        send: (d) => ws.send(d),
+        close: () => ws.close(),
+      };
+      ws.onopen = (e) => wrapped.onopen?.(e);
+      ws.onmessage = (e) => { if (!freeze) wrapped.onmessage?.(e); };   // the link "dies": data stops, no close
+      ws.onclose = (e) => { if (!freeze) wrapped.onclose?.(e); };
+      ws.onerror = (e) => wrapped.onerror?.(e);
+      return wrapped;
+    };
+    const c = client({ socketFactory: freezing, staleAfterMs: 300, backoffMs: { min: 20, max: 40 } });
+    c.connect();
+    await ready(c);
+    expect(made).toBe(1);
+    freeze = true;
+    await until(() => made === 2, 'a second socket was opened', 3000);
+    freeze = false;
+    await ready(c); // and the new connection works: a fresh welcome and snapshot
+    expect(c.getSnapshot().entities.length).toBeGreaterThan(0);
+  });
+
+  it('a healthy connection that keeps hearing from the hub is left alone; 0 turns the watch off', async () => {
+    const made: number[] = [];
+    const counting = (url: string): SocketLike => { made.push(1); return wsFactory(url); };
+    const a = client({ socketFactory: counting, staleAfterMs: 400 });
+    a.connect();
+    await ready(a);
+    for (let i = 0; i < 6; i++) {            // 6 × 150 ms of live traffic, longer than staleAfterMs
+      hub.setValue(0x0100, 0x13, 10 + i);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(made).toHaveLength(1);
+
+    let frozen = false;
+    const mute = (url: string): SocketLike => {
+      const ws = new NodeWebSocket(url) as unknown as SocketLike;
+      const w: SocketLike = { onopen: null, onmessage: null, onclose: null, onerror: null, send: (d) => ws.send(d), close: () => ws.close() };
+      ws.onopen = (e) => w.onopen?.(e);
+      ws.onmessage = (e) => { if (!frozen) w.onmessage?.(e); };
+      ws.onclose = (e) => w.onclose?.(e);
+      return w;
+    };
+    const b = client({ socketFactory: (u) => { made.push(2); return mute(u); }, staleAfterMs: 0 });
+    b.connect();
+    await ready(b);
+    frozen = true;
+    await new Promise((r) => setTimeout(r, 700));
+    expect(made.filter((x) => x === 2)).toHaveLength(1); // never replaced
   });
 });
 

@@ -58,6 +58,13 @@ export interface HubClientOptions {
   backoffMs?: { min: number; max: number };
   /** How long to wait for a reply to a cmd/req (default 15 s). */
   requestTimeoutMs?: number;
+  /**
+   * Treat the connection as dead after this long without a single message (default 35 s; 0 = never). The
+   * hub sends something at least every 10 s (chip telemetry), so silence means the link is gone even though
+   * the socket still looks open — typical when the hub's Wi-Fi blinks or a phone changes network. The client
+   * then reconnects instead of waiting for a send to fail.
+   */
+  staleAfterMs?: number;
 }
 
 /** A failure reported by the hub, or by the connection itself. */
@@ -89,6 +96,8 @@ export class HubClient {
   private attempt = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  private lastRx = 0;
+  private staleTimer: ReturnType<typeof setInterval> | null = null;
   private readonly opts: Required<Omit<HubClientOptions, 'socketFactory'>> & { socketFactory: SocketFactory };
 
   constructor(options: HubClientOptions) {
@@ -100,6 +109,7 @@ export class HubClient {
       reconnect: options.reconnect ?? true,
       backoffMs: options.backoffMs ?? { min: 500, max: 10_000 },
       requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
+      staleAfterMs: options.staleAfterMs ?? 35_000,
       socketFactory: options.socketFactory ?? defaultSocketFactory,
       pinnedFingerprint: options.pinnedFingerprint ?? '',
     };
@@ -139,13 +149,17 @@ export class HubClient {
       return;
     }
     this.socket = sock;
+    this.lastRx = Date.now();
+    this.startStaleWatch(sock);
     sock.onopen = () => {
       if (this.socket !== sock) return;
+      this.lastRx = Date.now();
       this.set(withStatus(this.state, 'authenticating', this.state.error));
       this.send({ type: 'hello', v: PROTOCOL_VERSION, token: this.opts.token, client: this.opts.clientName });
     };
     sock.onmessage = (ev) => {
       if (this.socket !== sock || typeof ev.data !== 'string') return;
+      this.lastRx = Date.now();
       const msg = parseServerMessage(ev.data);
       if (msg) this.handle(msg);
     };
@@ -160,21 +174,49 @@ export class HubClient {
         }
       }
     };
-    sock.onclose = () => {
-      if (this.socket !== sock) return;
-      this.socket = null;
-      this.failPending(new HubError('disconnected'));
-      const s = this.state.status;
-      if (this.stopped || s === 'unauthorized' || s === 'incompatible' || s === 'untrusted') return;
-      this.set(withStatus(cleared(this.state), 'reconnecting', this.state.error));
-      this.scheduleRetry();
-    };
+    sock.onclose = () => this.socketClosed(sock);
+  }
+
+  /** The socket is gone (it said so, or it went silent): fail what was waiting and reconnect. */
+  private socketClosed(sock: SocketLike): void {
+    if (this.socket !== sock) return;
+    this.socket = null;
+    this.stopStaleWatch();
+    this.failPending(new HubError('disconnected'));
+    const s = this.state.status;
+    if (this.stopped || s === 'unauthorized' || s === 'incompatible' || s === 'untrusted') return;
+    this.set(withStatus(cleared(this.state), 'reconnecting', this.state.error));
+    this.scheduleRetry();
+  }
+
+  private startStaleWatch(sock: SocketLike): void {
+    this.stopStaleWatch();
+    const limit = this.opts.staleAfterMs;
+    if (limit <= 0) return;
+    const timer = setInterval(() => {
+      if (this.socket !== sock || Date.now() - this.lastRx < limit) return;
+      // Half-open: no close event will come, so do what a close would, then try to close it.
+      this.socketClosed(sock);
+      try {
+        sock.close();
+      } catch {
+        /* already gone */
+      }
+    }, Math.max(50, Math.floor(limit / 4)));
+    (timer as { unref?: () => void }).unref?.();
+    this.staleTimer = timer;
+  }
+
+  private stopStaleWatch(): void {
+    if (this.staleTimer) clearInterval(this.staleTimer);
+    this.staleTimer = null;
   }
 
   /** Stop for good: no further reconnects. Pending requests fail with `closed`. */
   close(): void {
     this.stopped = true;
     this.clearRetry();
+    this.stopStaleWatch();
     const sock = this.socket;
     this.socket = null;
     this.failPending(new HubError('closed'));

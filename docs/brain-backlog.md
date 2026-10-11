@@ -63,12 +63,17 @@ the wall clock inside rule conditions (§1), sunrise/sunset (needs a location).
 Needed for SNTP, for Matter's mDNS discovery, later for any web UI or push
 notifications:
 
-Done (`91de2c2`): STA connect with automatic reconnect; credentials come from
-the gitignored `main/wifi_secrets.h` (compile-time). Open:
-- Provisioning (SoftAP + captive portal, or BLE, or a config file on SD) so
-  credentials are not baked into the image.
-- Exponential backoff on reconnect.
-- Chip status in `chips`: also show WiFi RSSI, IP.
+Done (`91de2c2`): STA connect; credentials from the gitignored `main/wifi_secrets.h`.
+Done since: the network is **saved in NVS** (`wifi_join <ssid> [<password>]`, the app's
+`wifi.set`; `wifi_forget`), and the built-in default is only the fallback for a blank device;
+**exponential back-off** on reconnect (1 s … 30 s); a change of network is a **trial**: the new
+credentials are kept only if the hub gets an address within 30 s, otherwise it goes back to the
+old network (so a typo over the app cannot strand it); `wifi.scan` for a list; the hub reports
+the network (SSID, RSSI, IP — never the password) in `welcome`/`hub`. Open:
+- First-time setup of a blank device with no console: SoftAP + captive portal, or BLE, or a
+  config file on SD (needs a setup secret: the app protocol needs a token that today is set on the console).
+- Chip status in `chips`: also show WiFi RSSI, IP (the app's Hub tab shows them now).
+- Passwords sit in NVS unencrypted, like the TLS key (flash encryption is a separate project).
 
 ## 4. Persistent state on the brain
 
@@ -165,7 +170,7 @@ that apply them), the app protocol + client ([app-protocol.md](app-protocol.md))
 management requests, pair/unpair/identify.
 
 1. **Structured event stream** — precondition for the recorder (Phase 7).
-2. **Wi-Fi provisioning** — credentials are still baked into the image (§3).
+2. **First-time Wi-Fi setup without a console** — SoftAP/BLE (§3).
 3. **Phone build** of the app's native module (not verified on a device) — see app-protocol §10.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).

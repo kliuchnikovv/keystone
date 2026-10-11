@@ -678,3 +678,32 @@ TEST_CASE("location.set takes numeric lat/lon in range and nothing else") {
     CHECK(o.err == Err::BadArgs);
   }
 }
+
+TEST_CASE("wifi.set needs a valid SSID and password and refuses anything else with a reason") {
+  auto parse = [](const std::string& args, std::string& ssid_out, std::string& pass_out) {
+    const std::string frame = R"({"type":"req","id":1,"op":"wifi.set","args":)" + args + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    char ssid[64] = {}, pass[96] = {};
+    const auto o = core::app::wifi_parse(r, m.args, ssid, sizeof(ssid), pass, sizeof(pass));
+    ssid_out = ssid;
+    pass_out = pass;
+    return o;
+  };
+  std::string s, p;
+  CHECK(parse(R"({"ssid":"home","password":"correct horse"})", s, p).ok);
+  CHECK(s == "home");
+  CHECK(p == "correct horse");
+  CHECK(parse(R"({"ssid":"cafe","password":""})", s, p).ok);  // open network
+  CHECK(parse(R"({"ssid":"Тест","password":"12345678"})", s, p).ok);
+  for (const char* bad : {R"({})", R"({"ssid":"home"})", R"({"password":"12345678"})", R"({"ssid":"","password":"12345678"})",
+                          R"({"ssid":"home","password":"short"})", R"({"ssid":5,"password":"12345678"})",
+                          R"({"ssid":"home","password":null})", R"({"ssid":"a\nb","password":"12345678"})",
+                          R"({"ssid":"home","password":"123456789012345678901234567890123456789012345678901234567890123456"})"}) {
+    CAPTURE(bad);
+    const auto o = parse(bad, s, p);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}

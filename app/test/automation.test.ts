@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
-  describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
+  describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
   nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
@@ -315,5 +315,28 @@ describe('location', () => {
     expect(describeLocation({ location: { lat: 50.08, lon: 14.43 }, sun: { rise: '06:12', set: '20:01' } })).toBe('50.0800, 14.4300 · sunrise 06:12, sunset 20:01');
     expect(describeLocation({ location: { lat: 50.08, lon: 14.43 }, sun: null, synced: false })).toMatch(/waiting for the clock/);
     expect(describeLocation({ location: { lat: 69.6, lon: 18.9 }, sun: null, synced: true })).toMatch(/does not rise and set today/);
+  });
+});
+
+describe('wifi', () => {
+  it('wifiRequest applies the hub\'s rules so a typo is caught before the hub leaves its network', () => {
+    expect(wifiRequest('home', 'correct horse')).toEqual({ ok: true, value: { ssid: 'home', password: 'correct horse' } });
+    expect(wifiRequest('cafe', '')).toMatchObject({ ok: true });                       // open network
+    expect(wifiRequest('home', '12345678')).toMatchObject({ ok: true });
+    expect(wifiRequest('home', 'a'.repeat(63))).toMatchObject({ ok: true });
+    expect(wifiRequest('home', 'a'.repeat(64))).toMatchObject({ ok: true });           // raw PSK (hex digits)
+    expect(wifiRequest('кухня', 'пароль-ok')).toMatchObject({ ok: true });             // UTF-8: bytes, not letters
+    expect(wifiRequest('s'.repeat(32), '')).toMatchObject({ ok: true });
+    for (const [s, p] of [['', '12345678'], ['s'.repeat(33), ''], ['я'.repeat(17), ''], ['a\nb', '12345678'], ['home', 'short'],
+                          ['home', 'x'.repeat(65)], ['home', 'z'.repeat(64)], ['home', 'tab\there1']]) {
+      expect(wifiRequest(s!, p!), `${s}/${p}`).toMatchObject({ ok: false });
+    }
+  });
+
+  it('describes the connection and the signal', () => {
+    expect(describeWifi(null)).toBe('Not connected');
+    expect(describeWifi({ wifi: null })).toBe('Not connected');
+    expect(describeWifi({ wifi: { ssid: 'home', rssi: -61, ip: '192.168.0.202' } })).toBe('home · -61 dBm · 192.168.0.202');
+    expect([-40, -55, -56, -70, -71, -82, -83, -95].map(signalText)).toEqual(['strong', 'strong', 'good', 'good', 'weak', 'weak', 'very weak', 'very weak']);
   });
 });

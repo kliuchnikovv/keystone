@@ -15,6 +15,7 @@ import {
   type Entity,
   type ErrorCode,
   type HubInfo,
+  type WifiNetwork,
   type Rule,
   type Scene,
   type Schedule,
@@ -42,6 +43,8 @@ export interface MockHubOptions {
   snapshotChunk?: number;
   /** Serve wss:// with this identity (PEM strings) instead of plain ws://. */
   tls?: { key: string; cert: string } | null;
+  /** The real hub sends something at least every 10 s (chip telemetry); the mock sends a `time` event this often (0 = never). */
+  heartbeatMs?: number;
 }
 
 interface TimerEntry {
@@ -136,6 +139,7 @@ export class MockHub {
   /** How many `hello` frames the hub has received (a pinned client must send none to a wrong server). */
   helloCount = 0;
   readonly opts: Required<MockHubOptions>;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
   /** When set, every command is answered with this ACK status (and changes nothing unless 'ok'). */
   forceAck: AckStatus | null = null;
 
@@ -144,6 +148,10 @@ export class MockHub {
     this.opts = opts;
     this.token = opts.token;
     wss.on('connection', (ws, req) => this.onConnection(ws, req.socket.remoteAddress ?? '?'));
+    if (opts.heartbeatMs > 0) {
+      this.heartbeat = setInterval(() => this.broadcast({ type: 'time', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true }), opts.heartbeatMs);
+      this.heartbeat.unref();
+    }
   }
 
   static async start(options: MockHubOptions = {}): Promise<MockHub> {
@@ -156,6 +164,7 @@ export class MockHub {
       name: 'mock-home',
       snapshotChunk: 0,
       tls: null,
+      heartbeatMs: 10_000,
       ...options,
     };
     if (opts.tls) {
@@ -183,6 +192,7 @@ export class MockHub {
   }
 
   async close(): Promise<void> {
+    if (this.heartbeat) clearInterval(this.heartbeat);
     for (const t of this.timers) clearTimeout(t.handle);
     this.timers = [];
     for (const c of this.clients) {
@@ -537,6 +547,27 @@ export class MockHub {
         if (!sc) return no('not_found', 'no such scene');
         return ok(this.applyScene(sc));
       }
+      case 'wifi.scan': {
+        return ok({ networks: [...this.networks].sort((a, b) => b.rssi - a.rssi) });
+      }
+      case 'wifi.set': {
+        const { ssid, password } = args;
+        if (typeof ssid !== 'string' || ssid.length < 1 || new TextEncoder().encode(ssid).length > 32 || /[\u0000-\u001f]/.test(ssid)) return no('bad_args', 'ssid: 1..32 bytes');
+        if (typeof password !== 'string') return no('bad_args', 'password');
+        const hex64 = password.length === 64 && /^[0-9a-fA-F]+$/.test(password);
+        if (password !== '' && !hex64 && (password.length < 8 || password.length > 63)) return no('bad_args', 'password: empty (open network), or 8..63 characters');
+        // The real hub answers, then drops every connection while it tries the new network, and goes back if
+        // it cannot join. The mock does the same, with a short trial.
+        const net = this.networks.find((n) => n.ssid === ssid);
+        const works = !!net && (!net.secure || password === 'goodpass1');
+        const entry = { ssid, password, kept: works };
+        this.wifiRequests.push(entry);
+        setTimeout(() => {
+          this.dropAll();
+          if (works) this.wifi = { ssid, rssi: net!.rssi, ip: '192.168.0.77' };
+        }, 30);
+        return ok();
+      }
       case 'location.set': {
         const { lat, lon } = args;
         if (typeof lat !== 'number' || typeof lon !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lon)) return no('bad_args', 'lat and lon: numbers');
@@ -683,10 +714,19 @@ export class MockHub {
 
   /** Where the hub is, set with location.set; the mock's "sun" is a fixed 06:00-18:00 once it is known. */
   location: { lat: number; lon: number } | null = null;
+  /** The network the mock "is on", the networks a scan sees (a secured one needs the password `goodpass1`), and what the app asked for. */
+  wifi: HubInfo['wifi'] = { ssid: 'home', rssi: -58, ip: '192.168.0.202' };
+  networks: WifiNetwork[] = [
+    { ssid: 'home', rssi: -58, secure: true },
+    { ssid: 'neighbour', rssi: -77, secure: true },
+    { ssid: 'cafe', rssi: -64, secure: false },
+  ];
+  readonly wifiRequests: { ssid: string; password: string; kept: boolean }[] = [];
   private hubInfo(): HubInfo {
     return {
       name: this.opts.name, fw: 'mock', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true,
       location: this.location,
+      wifi: this.wifi,
       sun: this.location ? { rise: '06:00', set: '18:00' } : null,
     };
   }

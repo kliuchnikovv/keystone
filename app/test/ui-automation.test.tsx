@@ -270,6 +270,42 @@ describe('Rules', () => {
   });
 });
 
+describe('Wi-Fi', () => {
+  it('scans, picks a network, asks for the password and sends it; the app reconnects by itself', async () => {
+    await openApp();
+    click('Hub');
+    await screen.findByText(/home · -58 dBm · 192.168.0.202/);
+    click('Change network');
+    click('Scan for networks');
+    await screen.findByLabelText('Network cafe');
+    expect(screen.getByLabelText('Network cafe').textContent).toContain('open');
+    click('Network neighbour');
+    expect((screen.getByLabelText('Network name') as HTMLInputElement).value).toBe('neighbour');
+    type('Wi-Fi password', 'goodpass1');
+    click('Connect');
+    await screen.findByText(/Switching to neighbour/);
+    expect(hub.wifiRequests).toEqual([{ ssid: 'neighbour', password: 'goodpass1', kept: true }]);
+    // The hub dropped the connection while it switched; the app came back and shows the new network.
+    await screen.findByText(/neighbour · -77 dBm · 192.168.0.77/, {}, { timeout: 4000 });
+  });
+
+  it('an open network needs no password, and a too-short password is explained without bothering the hub', async () => {
+    await openApp();
+    click('Hub');
+    click('Change network');
+    type('Network name', 'home');
+    type('Wi-Fi password', 'short');
+    click('Connect');
+    expect(await screen.findByText(/The password is 8 to 63 characters/)).toBeTruthy();
+    expect(hub.wifiRequests).toHaveLength(0);
+    type('Wi-Fi password', '');
+    type('Network name', 'cafe');
+    click('Connect');
+    await screen.findByText(/Switching to cafe/);
+    expect(hub.wifiRequests[0]).toMatchObject({ ssid: 'cafe', password: '' });
+  });
+});
+
 describe('The sun', () => {
   it('the Hub tab sets and clears the location; the sun times show up', async () => {
     await openApp();

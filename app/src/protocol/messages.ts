@@ -54,6 +54,8 @@ export interface HubInfo {
   synced: boolean;
   /** Where the hub is (degrees), for sunrise/sunset; null until set. */
   location?: { lat: number; lon: number } | null;
+  /** The network the hub is on (never its password); null while it is not connected. */
+  wifi?: { ssid: string; rssi: number; ip: string } | null;
   /** Today's sunrise and sunset, local "HH:MM"; null when unknown (no location, clock not synced, polar day/night). */
   sun?: { rise: string; set: string } | null;
 }
@@ -195,6 +197,12 @@ export interface TimersEvent {
   timers: Timer[];
 }
 /** The hub's own facts changed (location, today's sun): the whole object again. */
+export interface WifiNetwork {
+  ssid: string;
+  rssi: number;
+  secure: boolean;
+}
+
 export interface HubEvent {
   type: 'hub';
   hub: HubInfo;

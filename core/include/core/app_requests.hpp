@@ -504,6 +504,18 @@ Outcome location_parse(const Reader& r, int args, double& lat, double& lon) {
   return Outcome::done();
 }
 
+// ---- Wi-Fi ------------------------------------------------------------------------------------
+
+/** `wifi.set {ssid, password}` ("" = an open network). The caller applies it as a trial (WifiTrial). */
+template <typename Reader>
+Outcome wifi_parse(const Reader& r, int args, char* ssid, std::size_t ssid_cap, char* password, std::size_t pass_cap) {
+  if (args < 0 || !r.get_string(r.find(args, "ssid"), ssid, ssid_cap)) return Outcome::fail(Err::BadArgs, "ssid");
+  if (!r.get_string(r.find(args, "password"), password, pass_cap)) return Outcome::fail(Err::BadArgs, "password");
+  const char* why = nullptr;
+  if (!core::wifi_credentials_valid(ssid, password, &why)) return Outcome::fail(Err::BadArgs, why != nullptr ? why : "credentials");
+  return Outcome::done();
+}
+
 // ---- Zigbee chip operations: pair, unpair, identify ----------------------------------------
 //
 // These do not change anything on the brain: they validate the request and say which

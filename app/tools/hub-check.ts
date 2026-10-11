@@ -2,6 +2,7 @@
 //   npm run hub-check -- --url ws://192.168.0.202:8080/ws --token <token> [--lockout] [--hold 20]
 //   npm run hub-check -- --url wss://192.168.0.202:8443/ws --token <token> --fingerprint <sha256>
 // For wss:// the certificate is pinned (--fingerprint is required) and extra TLS checks run.
+// `--wifi` also moves the hub to a network that does not exist and checks that it comes back (~45 s, disruptive).
 // Raw-socket tests of the behaviours docs/app-protocol.md promises. `--lockout` also
 // exercises the failed-auth lockout (it locks THIS machine out of the hub for a
 // minute, so it is off by default). `--mutate` also exercises the management requests
@@ -504,6 +505,24 @@ if (process.argv.includes('--mutate')) {
         else await c.req('location.clear').catch(() => undefined);
       }
     });
+    // Wi-Fi: a scan (which blocks the hub for a couple of seconds) and argument validation. Nothing here
+    // changes the network; `--wifi` below does, on purpose.
+    await check('wifi.scan lists networks, strongest first, one per name; wifi.set validates its arguments', async () => {
+      const res = await c.req('wifi.scan');
+      const nets = res?.networks as { ssid: string; rssi: number; secure: boolean }[] | undefined;
+      if (!Array.isArray(nets)) return 'no networks array';
+      if (nets.some((n, i) => i > 0 && n.rssi > nets[i - 1]!.rssi)) return 'not sorted strongest first';
+      if (new Set(nets.map((n) => n.ssid)).size !== nets.length) return 'a name appears twice';
+      const here = c.getSnapshot().hub?.wifi?.ssid;
+      if (here && !nets.some((n) => n.ssid === here)) return `the network the hub is on (${here}) is not in the scan`;
+      const bad = [
+        await code(c.req('wifi.set', { ssid: '', password: '12345678' })),
+        await code(c.req('wifi.set', { ssid: 'x', password: 'short' })),
+        await code(c.req('wifi.set', { ssid: 'x' })),
+        await code(c.req('wifi.set', { ssid: 's'.repeat(33), password: '' })),
+      ];
+      return bad.every((x) => x === 'bad_args') ? true : bad.join(',');
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();
@@ -513,6 +532,42 @@ if (process.argv.includes('--mutate')) {
     });
   }
   c.close();
+}
+
+if (process.argv.includes('--wifi')) {
+  // Moves the hub to a network that does not exist: it must drop the connection, fail to join, and come
+  // back on its own network within about a minute. Takes ~45 s and the hub is unreachable for ~35 s.
+  await check('wifi.set to a network that does not exist: the hub goes back to its own', async () => {
+    const c = newClient('hub-check-wifi');
+    c.connect();
+    for (let i = 0; i < 100 && c.getSnapshot().status !== 'ready'; i++) await sleep(100);
+    const before = c.getSnapshot().hub?.wifi?.ssid;
+    if (!before) { c.close(); return 'the hub reports no Wi-Fi network (is it on Wi-Fi?)'; }
+    const hubBefore = c.getSnapshot().hub;
+    await c.req('wifi.set', { ssid: 'hub-check-no-such-network', password: '12345678' });
+    // While the hub tries the other network it is unreachable. The TCP connection may survive the gap (the
+    // hub keeps its state) or break and be re-made; either way, once the hub is back it announces itself with
+    // a fresh `hub` event or a new welcome, naming the network it is on.
+    let dropped = false;
+    const t0 = Date.now();
+    let back = false;
+    while (Date.now() - t0 < 90_000) {
+      const st = c.getSnapshot().status;
+      if (st !== 'ready') dropped = true;
+      const h = c.getSnapshot().hub;
+      const secs = (Date.now() - t0) / 1000;
+      if (secs >= 20 && st === 'ready' && h !== hubBefore && h?.wifi?.ssid === before) {
+        back = true;
+        break;
+      }
+      await sleep(500);
+    }
+    const after = c.getSnapshot().hub?.wifi?.ssid;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    c.close();
+    if (!back) return `no sign of the hub on ${before} after ${secs} s (now: ${after ?? 'nothing'})`;
+    return secs <= 80 ? `ok` === 'ok' : `came back after ${secs} s (expected ~35)`;
+  });
 }
 
 if (process.argv.includes('--lockout')) {
