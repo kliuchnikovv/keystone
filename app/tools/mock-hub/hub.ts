@@ -45,6 +45,11 @@ export interface MockHubOptions {
   tls?: { key: string; cert: string } | null;
   /** The real hub sends something at least every 10 s (chip telemetry); the mock sends a `time` event this often (0 = never). */
   heartbeatMs?: number;
+  /**
+   * The first-time setup code (12 characters, as the real hub's label has it). A client that signs in with it is a setup
+   * client: no snapshot, no events, only `wifi.scan` and `setup.apply`. null = this hub has no setup mode.
+   */
+  setupCode?: string | null;
 }
 
 interface TimerEntry {
@@ -60,6 +65,8 @@ interface ClientInfo {
   ws: WebSocket;
   ip: string;
   authed: boolean;
+  /** Signed in with the setup code. */
+  setupOnly: boolean;
   helloTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -165,6 +172,7 @@ export class MockHub {
       snapshotChunk: 0,
       tls: null,
       heartbeatMs: 10_000,
+      setupCode: null,
       ...options,
     };
     if (opts.tls) {
@@ -266,6 +274,7 @@ export class MockHub {
       ws,
       ip,
       authed: false,
+      setupOnly: false,
       helloTimer: setTimeout(() => {
         this.sendTo(ws, { type: 'error', code: 'unauthorized', message: 'hello timeout' });
         ws.close();
@@ -301,8 +310,13 @@ export class MockHub {
     const id = typeof msg.id === 'number' ? msg.id : undefined;
     switch (msg.type) {
       case 'cmd':
+        if (c.setupOnly) return this.sendTo(c.ws, { type: 'error', ...(id !== undefined ? { id } : {}), code: 'unsupported', message: 'setup only' });
         return this.command(c, id, msg);
       case 'req':
+        if (c.setupOnly && msg.op !== 'wifi.scan' && msg.op !== 'setup.apply') {
+          if (id === undefined) return this.sendTo(c.ws, { type: 'error', code: 'bad_args', message: 'missing id' });
+          return this.sendTo(c.ws, { type: 'res', id, ok: false, code: 'unsupported', message: 'setup only' });
+        }
         return this.request(c, id, msg);
       default:
         this.sendTo(c.ws, { type: 'error', ...(id !== undefined ? { id } : {}), code: 'unsupported' });
@@ -320,7 +334,10 @@ export class MockHub {
       c.ws.close();
       return;
     }
-    if (typeof msg.token !== 'string' || !constantTimeEqual(msg.token, this.opts.token)) {
+    const viaToken = typeof msg.token === 'string' && constantTimeEqual(msg.token, this.opts.token);
+    const typed = typeof msg.token === 'string' ? msg.token.replace(/[-\s]/g, '').toUpperCase() : '';
+    const viaSetup = !viaToken && this.opts.setupCode !== null && constantTimeEqual(typed, this.opts.setupCode);
+    if (!viaToken && !viaSetup) {
       const f = this.failures.get(c.ip) ?? { count: 0, until: 0 };
       f.count += 1;
       f.until = Date.now() + this.opts.lockoutMs;
@@ -332,12 +349,14 @@ export class MockHub {
     this.failures.delete(c.ip);
     clearTimeout(c.helloTimer);
     c.authed = true;
+    c.setupOnly = viaSetup;
     this.sendTo(c.ws, {
       type: 'welcome',
       v: PROTOCOL_VERSION,
       hub: this.hubInfo(),
+      ...(viaSetup ? { setup: true } : {}),
     });
-    this.sendSnapshot(c.ws);
+    if (!viaSetup) this.sendSnapshot(c.ws);
   }
 
   /** Send the whole picture, in parts of `snapshotChunk` entities if configured. */
@@ -361,7 +380,7 @@ export class MockHub {
 
   /** Re-send the snapshot to every client (what the real hub does after an event overflow). */
   resync(): void {
-    for (const c of this.clients) if (c.authed) this.sendSnapshot(c.ws);
+    for (const c of this.clients) if (c.authed && !c.setupOnly) this.sendSnapshot(c.ws);
   }
 
   /** Add `count` plain switches (ids from 0x0200) to the home, before clients connect. */
@@ -568,6 +587,25 @@ export class MockHub {
         }, 30);
         return ok();
       }
+      case 'setup.apply': {
+        // Like the real hub: validate, answer, then (after a moment) drop everyone, switch to the new network and take
+        // the new token. A network that does not exist, or a wrong password, leaves it on no network, still in setup.
+        const { ssid, password, token } = args;
+        if (typeof ssid !== 'string' || ssid.length < 1 || new TextEncoder().encode(ssid).length > 32 || /[\u0000-\u001f]/.test(ssid)) return no('bad_args', 'ssid: 1..32 bytes');
+        if (typeof password !== 'string') return no('bad_args', 'password');
+        const hex64 = password.length === 64 && /^[0-9a-fA-F]+$/.test(password);
+        if (password !== '' && !hex64 && (password.length < 8 || password.length > 63)) return no('bad_args', 'password: empty (open network), or 8..63 characters');
+        if (typeof token !== 'string' || !/^[\x21-\x7e]{8,64}$/.test(token)) return no('bad_args', 'token: 8..64 printable characters');
+        const net = this.networks.find((n) => n.ssid === ssid);
+        const works = !!net && (!net.secure || password === 'goodpass1');
+        this.setupRequests.push({ ssid, password, token, kept: works });
+        setTimeout(() => {
+          this.opts.token = token;
+          this.dropAll();
+          if (works) this.wifi = { ssid, rssi: net!.rssi, ip: '192.168.0.77' };
+        }, 30);
+        return ok();
+      }
       case 'location.set': {
         const { lat, lon } = args;
         if (typeof lat !== 'number' || typeof lon !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lon)) return no('bad_args', 'lat and lon: numbers');
@@ -722,6 +760,8 @@ export class MockHub {
     { ssid: 'cafe', rssi: -64, secure: false },
   ];
   readonly wifiRequests: { ssid: string; password: string; kept: boolean }[] = [];
+  /** What `setup.apply` asked for (the token is the one the hub accepts from then on). */
+  readonly setupRequests: { ssid: string; password: string; token: string; kept: boolean }[] = [];
   private hubInfo(): HubInfo {
     return {
       name: this.opts.name, fw: 'mock', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true,
@@ -760,7 +800,7 @@ export class MockHub {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
   }
   private broadcast(m: ServerMessage): void {
-    for (const c of this.clients) if (c.authed) this.sendTo(c.ws, m);
+    for (const c of this.clients) if (c.authed && !c.setupOnly) this.sendTo(c.ws, m);
   }
 }
 

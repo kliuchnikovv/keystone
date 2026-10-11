@@ -6,6 +6,7 @@ import { createSettingsStore, type Settings } from './src/settings';
 import { defaultStore } from './src/storage';
 import { ConnectScreen } from './src/ui/ConnectScreen';
 import { Home } from './src/ui/Home';
+import { SetupScreen } from './src/ui/SetupScreen';
 
 // mDNS browsing runs only while this screen is up.
 function ConnectWithDiscovery(props: Omit<ComponentProps<typeof ConnectScreen>, 'discovery'>) {
@@ -17,6 +18,7 @@ export default function App() {
   // undefined = still reading the saved settings, null = none (ask for them).
   const [settings, setSettings] = useState<Settings | null | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
 
   useEffect(() => {
     void store.load().then(setSettings);
@@ -27,9 +29,19 @@ export default function App() {
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator />
       </View>
+    ) : settings === null && settingUp ? (
+      <SetupScreen
+        onCancel={() => setSettingUp(false)}
+        onDone={(s) => {
+          setNotice(null);
+          setSettingUp(false);
+          void store.save(s).then(() => setSettings(s));
+        }}
+      />
     ) : settings === null ? (
       <ConnectWithDiscovery
         notice={notice}
+        onSetup={() => setSettingUp(true)}
         onSave={(s) => {
           setNotice(null);
           void store.save(s).then(() => setSettings(s));

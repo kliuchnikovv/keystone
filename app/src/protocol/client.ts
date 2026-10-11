@@ -28,7 +28,18 @@ export interface SocketLike {
  * the server certificate's SHA-256 against it before the socket reports `open` (so the
  * token is never sent to an unverified server), or throw PinUnsupportedError.
  */
-export type SocketFactory = (url: string, opts: { fingerprint?: string }) => SocketLike;
+export type SocketFactory = (url: string, opts: SocketOptions) => SocketLike;
+
+/**
+ * `fingerprint`: trust only this certificate. `learn`: accept whatever certificate the hub presents and report its
+ * SHA-256 in the `open` event (`{ fingerprint }`) so the caller can remember it. Only the first-time setup uses
+ * `learn`, over the hub's own password-protected access point; everything else pins. A factory that cannot do
+ * it throws PinUnsupportedError.
+ */
+export interface SocketOptions {
+  fingerprint?: string;
+  learn?: boolean;
+}
 
 /** This platform's sockets cannot pin a certificate (browsers, stock React Native). */
 export class PinUnsupportedError extends Error {
@@ -348,10 +359,10 @@ export class HubClient {
   }
 }
 
-export function defaultSocketFactory(url: string, opts: { fingerprint?: string }): SocketLike {
+export function defaultSocketFactory(url: string, opts: SocketOptions): SocketLike {
   // The platform WebSocket (browser, React Native) exposes no TLS details, so a pin
-  // cannot be checked. Pretending otherwise would be false assurance: refuse instead.
-  if (opts.fingerprint) throw new PinUnsupportedError();
+  // cannot be checked, nor a certificate learned. Pretending otherwise would be false assurance: refuse instead.
+  if (opts.fingerprint || opts.learn) throw new PinUnsupportedError();
   const WS = (globalThis as { WebSocket?: new (url: string) => SocketLike }).WebSocket;
   if (!WS) throw new Error('no global WebSocket; pass socketFactory');
   return new WS(url);

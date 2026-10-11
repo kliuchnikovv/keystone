@@ -36,6 +36,7 @@
 #include <ctime>
 #include <sys/time.h>
 
+#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "nvs.h"
@@ -67,6 +68,7 @@
 #include <cmath>
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
+#include "core/setup_mode.hpp"
 #include "core/wifi_policy.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
@@ -85,6 +87,13 @@
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
 #include "hubproto/version.hpp"
+
+#ifdef KEYSTONE_HAVE_TLS
+// The setup code lives in the generated hub_identity.cpp (scripts/gen-hub-cert.sh). An identity made before
+// setup mode existed does not have it: the symbol is weak, so that firmware still links and simply offers no
+// setup access point.
+extern const char kHubSetupCode[] __attribute__((weak));
+#endif
 
 namespace {
 
@@ -257,6 +266,7 @@ static void wifi_init(void) {
     // Создание default Wi-Fi station
     esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
     esp_netif_set_hostname(sta_netif, kHubHostname);
+    esp_netif_create_default_wifi_ap();  // only used while the setup access point is up
 
     // Конфигурация Wi-Fi
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -1945,6 +1955,7 @@ int cmd_ota(int argc, char** argv) {
 }
 
 int cmd_webtoken(int argc, char** argv);  // defined with the app glue, below
+int cmd_setup(int argc, char** argv);
 int cmd_webplain(int argc, char** argv);
 
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
@@ -1991,6 +2002,7 @@ void start_console() {
   reg_cmd("wifi_status", "show current Wi-Fi connection status", &cmd_wifi_status);
   reg_cmd("wifi_forget", "erase the saved Wi-Fi credentials", &cmd_wifi_forget);
   reg_cmd("wifi_scan", "scan for nearby Wi-Fi networks", &cmd_wifi_scan);
+  reg_cmd("setup", "setup [on|off] - the first-time setup access point: status, or open/close it", &cmd_setup);
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
   reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | status | abort - update a C6 over the link", &cmd_ota);
@@ -2332,6 +2344,9 @@ void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::u
   bus.publish(h, payload, sizeof(payload));
 }
 
+void persist_webtoken(const char* token);
+void setup_token_request(const char* token, std::uint32_t now);  // defined with the setup code, below
+
 void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
                     Schedules& sched, core::TimerTable<8>& timers, Scenes& scenes, std::uint32_t now) {
   using namespace core::app;
@@ -2344,6 +2359,24 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   const char* op = m.kind == ClientMsg::Kind::Req ? m.op : "";
   if (m.kind != ClientMsg::Kind::Req) {
     o = Outcome::fail(Err::BadArgs, "not a request");
+  } else if (in.setup_only && !core::setup_op_allowed(op)) {
+    o = Outcome::fail(Err::Unsupported, "setup only");  // the server already refuses these; this is the second lock
+  } else if (!std::strcmp(op, "setup.apply")) {
+    if (!in.setup_only) {
+      o = Outcome::fail(Err::Unsupported, "setup only");
+    } else {
+      char ssid[core::kMaxSsidLen + 2], pass[core::kMaxPasswordLen + 4], token[kMaxToken + 2];
+      o = setup_parse(reader, m.args, ssid, sizeof(ssid), pass, sizeof(pass), token, sizeof(token));
+      if (o.ok) {
+        // Both are applied ~0.7 s from now, after this reply has gone out: the token (the app server restarts
+        // with it) and the network (the hub leaves the access point's channel for the home router's).
+        setup_token_request(token, now);
+        wifi_request(ssid, pass, now);
+        ESP_LOGI(kTag, "setup: network %s and a new app token accepted", ssid);
+      }
+      std::memset(pass, 0, sizeof(pass));
+      std::memset(token, 0, sizeof(token));
+    }
   } else if (!std::strcmp(op, "name.set")) {
     o = name_set(reg, reader, m.args);
     if (o.ok) persist_names(reg.names());
@@ -2657,6 +2690,114 @@ int cmd_webtoken(int argc, char** argv) {
   return 0;
 }
 
+// ---- first-time setup access point (core/setup_mode.hpp) ----------------------------------------
+// With no network credentials, or after ten minutes without a connection, the hub opens `Keystone-XXXX`,
+// protected by the setup code from its TLS identity. A phone that joined it can reach the app server and
+// authenticate with that code instead of the token, which lets it scan for networks and send `setup.apply`
+// (the home network plus the app's long-term token) and nothing more. The policy lives in core; this is the
+// radio and server side.
+core::SetupPolicy g_setup_policy;
+std::atomic<bool> g_ap_up{false};
+std::atomic<int> g_setup_force{0};  // from the console: 1 = open the access point, 2 = close it
+
+struct PendingToken {
+  bool pending = false;
+  char token[core::app::kMaxToken + 1] = {};
+  std::uint32_t at = 0;
+} g_new_token;
+
+// The code this firmware was built with, or null (an identity from before setup mode existed has none).
+const char* setup_code() {
+#ifdef KEYSTONE_HAVE_TLS
+  if (kHubSetupCode != nullptr && core::setup_code_valid(kHubSetupCode)) return kHubSetupCode;
+#endif
+  return nullptr;
+}
+
+void setup_token_request(const char* token, std::uint32_t now) {
+  std::snprintf(g_new_token.token, sizeof(g_new_token.token), "%s", token);
+  persist_webtoken(token);  // saved now; the server picks it up when the reply has gone out
+  g_new_token.at = now + 700;
+  g_new_token.pending = true;
+}
+
+void setup_ap_set(bool up) {
+  const char* code = setup_code();
+  if (up) {
+    std::uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char ssid[24];
+    core::setup_ap_ssid(mac, ssid, sizeof(ssid));
+    wifi_config_t ap = {};
+    std::strncpy(reinterpret_cast<char*>(ap.ap.ssid), ssid, sizeof(ap.ap.ssid) - 1);
+    ap.ap.ssid_len = static_cast<std::uint8_t>(std::strlen(ssid));
+    std::strncpy(reinterpret_cast<char*>(ap.ap.password), code, sizeof(ap.ap.password) - 1);
+    ap.ap.channel = 6;  // follows the station's channel while it is connected
+    ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    ap.ap.max_connection = 2;
+    ap.ap.pmf_cfg.required = false;
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_set_config(WIFI_IF_AP, &ap);
+    appsrv::set_setup_code(code);
+    if (!appsrv::running()) {
+      char tok[core::app::kMaxToken + 1] = {};
+      const bool have = restore_webtoken(tok, sizeof(tok));
+      if (!appsrv::start(have ? tok : nullptr, &app_hub_info, restore_webplain())) ESP_LOGE(kTag, "setup: the app server did not start");
+    }
+    ESP_LOGW(kTag, "setup: access point %s is open (the code is on the label; `setup` shows it)", ssid);
+  } else {
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    appsrv::set_setup_code(nullptr);
+    char tok[core::app::kMaxToken + 1] = {};
+    if (!restore_webtoken(tok, sizeof(tok))) appsrv::stop();  // nothing but setup clients could have used it
+    ESP_LOGI(kTag, "setup: access point closed");
+  }
+  g_ap_up = up;
+  g_hub_dirty = true;
+}
+
+void setup_service(std::uint32_t now) {
+  if (g_new_token.pending && static_cast<std::int32_t>(now - g_new_token.at) >= 0) {
+    g_new_token.pending = false;
+    if (!appsrv::start(g_new_token.token, &app_hub_info, restore_webplain())) ESP_LOGE(kTag, "setup: the app server did not restart");
+    std::memset(g_new_token.token, 0, sizeof(g_new_token.token));
+  }
+  const int f = g_setup_force.exchange(0);
+  if (f == 1) g_setup_policy.force(true);
+  else if (f == 2) g_setup_policy.force(false);
+  if (setup_code() == nullptr) return;
+  g_setup_policy.update(now, s_wifi_up, s_wifi_have_creds);
+  const bool want = g_setup_policy.ap_wanted();
+  if (want != g_ap_up) setup_ap_set(want);
+}
+
+// setup [on|off]: the first-time setup access point. Shows the state and the code (the console is physical access).
+int cmd_setup(int argc, char** argv) {
+  const char* code = setup_code();
+  if (code == nullptr) {
+    printf("this firmware has no setup code: make one with scripts/gen-hub-cert.sh --setup-code, then rebuild\n");
+    return 1;
+  }
+  if (argc >= 2) {
+    if (std::strcmp(argv[1], "on") == 0) g_setup_force = 1;
+    else if (std::strcmp(argv[1], "off") == 0) g_setup_force = 2;
+    else {
+      printf("usage: setup [on|off]\n");
+      return 1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));  // the main loop picks it up
+  }
+  std::uint8_t mac[6] = {};
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char ssid[24];
+  core::setup_ap_ssid(mac, ssid, sizeof(ssid));
+  printf("setup access point %s: %s\n", ssid, g_ap_up ? "OPEN" : "closed");
+  printf("setup code: %.4s-%.4s-%.4s  (it is the access point's password and what the app asks for)\n", code, code + 4, code + 8);
+  printf("it opens by itself with no saved network, or after %u min without a connection\n",
+         static_cast<unsigned>(core::SetupPolicy::kDownMs / 60000u));
+  return 0;
+}
+
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -2952,6 +3093,7 @@ extern "C" void app_main(void) {
       }
       mdns_sync();
       wifi_service(t);
+      setup_service(t);
       if (appsrv::running()) {
         appsrv::tick(t);
         if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
@@ -2985,7 +3127,9 @@ extern "C" void app_main(void) {
         }
         appsrv::Inbound in;
         while (appsrv::next(in)) {
-          if (in.kind == appsrv::Inbound::Kind::Connected) {
+          if (in.kind == appsrv::Inbound::Kind::Connected && in.setup_only) {
+            // A setup client gets the welcome and nothing about the home.
+          } else if (in.kind == appsrv::Inbound::Kind::Connected) {
             AppSource src(reg, rules, schedule_table, timer_table, scene_store, coord, t);
             app_last_fp = src.fingerprint();
             app_send_snapshot(in.fd, src);

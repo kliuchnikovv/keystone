@@ -105,6 +105,25 @@ Also worth a minute: turn Wi-Fi off and on on the phone while connected (the app
 "reconnecting" and recover — it detects a silent connection after 35 s), and tap a hub in the discovered
 list (it fills the address but never the fingerprint).
 
+## Setting up a hub that is not on your Wi-Fi yet
+
+The connect screen has **Set up a new hub** (docs/app-protocol.md §11). You need a **real phone**: the flow
+needs the phone itself to join the hub's own Wi-Fi, and the Simulator uses the Mac's network (a Mac that joins
+`Keystone-XXXX` loses its internet while it is there, but it does work as a stand-in).
+
+1. Plug the hub in. With no saved network it opens a Wi-Fi called `Keystone-XXXX` (also after 10 minutes without a
+   connection, or when the hub console says `setup on`). Its password is the **setup code**, which the hub console
+   prints with `setup` and `scripts/gen-hub-cert.sh` printed when the identity was made.
+2. Join that Wi-Fi in the phone's settings (ignore "no internet"). Open the app, tap **Set up a new hub**, type the
+   code, choose your home network and its password.
+3. The app invents a token for the hub (you never see it), the hub joins your network, and the phone goes back to
+   your Wi-Fi. The app then connects to the hub with the certificate fingerprint it learned over the setup link.
+
+A rebuild is needed after the app gained this (and `expo-location`, `expo-crypto`): `npx expo prebuild --platform ios`
+then `npx expo run:ios --device` again. The Swift module has a new function, `connectLearning`, next to `connect`.
+The first connection over the setup link is the only one that does not check a known fingerprint; if setup says the
+hub's network cannot be reached, you are probably still on your home Wi-Fi.
+
 ## If it does not compile (or misbehaves)
 
 Everything iOS-specific is in two places:

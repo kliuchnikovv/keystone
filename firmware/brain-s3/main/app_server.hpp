@@ -28,6 +28,9 @@ struct Inbound {
   };
   Kind kind;
   int fd;
+  // The client authenticated with the setup code (core/setup_mode.hpp), not the token: it only gets
+  // `wifi.scan` and `setup.apply`, no snapshot and no events.
+  bool setup_only;
   std::int32_t id;
   std::int64_t entity;
   std::int64_t attr;
@@ -48,9 +51,13 @@ bool tls_available();
 // SHA-256 of the embedded certificate as "AA:BB:…" (what apps pin), or "" without TLS.
 const char* cert_fingerprint();
 
-// Start (or restart with a new token) the server. Token: 8..64 characters. TLS is used
-// when available unless `force_plain` asks for ws:// (development only).
+// Start (or restart with a new token) the server. Token: 8..64 characters, or null/empty for "no token yet"
+// (then only a setup-code client can get in, see set_setup_code). TLS is used when available unless
+// `force_plain` asks for ws:// (development only).
 bool start(const char* token, HubInfoFn info, bool force_plain = false);
+// The code a client may use instead of the token while the hub's setup access point is up (null = off).
+// Takes effect for new connections; one that is already in stays until it closes.
+void set_setup_code(const char* code);
 Mode mode();
 void stop();
 bool running();

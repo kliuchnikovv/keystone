@@ -4,7 +4,8 @@
 // mDNS. Keep this in step with both native files.
 
 /** One message from a native socket. `open` is only ever sent AFTER the platform verified
- *  the pinned certificate, and carries the fingerprint it saw (checked again in JS). */
+ *  the pinned certificate (or, for `connectLearning`, after the handshake), and carries the
+ *  fingerprint it saw (checked again in JS). */
 export type NativeSocketEvent =
   | { id: string; kind: 'open'; fingerprint?: string }
   | { id: string; kind: 'message'; data: string }
@@ -29,6 +30,11 @@ export interface NativeSubscription {
 export interface KeystoneNetModule {
   /** Open `url` (wss://) trusting only the certificate whose SHA-256 is `fingerprint`. */
   connect(id: string, url: string, fingerprint: string): void;
+  /**
+   * Open `url` (wss://) accepting whatever certificate the server presents, and report its SHA-256 in `open`.
+   * Only for the first-time setup over the hub's own password-protected access point (src/protocol/setup.ts).
+   */
+  connectLearning(id: string, url: string): void;
   send(id: string, text: string): void;
   close(id: string): void;
   startDiscovery(): void;

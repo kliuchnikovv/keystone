@@ -516,6 +516,30 @@ Outcome wifi_parse(const Reader& r, int args, char* ssid, std::size_t ssid_cap, 
   return Outcome::done();
 }
 
+/** A token the hub accepts: 8..kMaxToken printable ASCII characters without spaces (what `webtoken` checks). */
+inline bool token_valid(const char* t) noexcept {
+  if (t == nullptr) return false;
+  const std::size_t n = std::strlen(t);
+  if (n < 8 || n > kMaxToken) return false;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (t[i] < 0x21 || t[i] > 0x7E) return false;
+  }
+  return true;
+}
+
+/** `setup.apply {ssid, password, token}`: the home network and the app's long-term token, in one request,
+ *  from a client that authenticated with the setup code. The caller saves both and applies the network. */
+template <typename Reader>
+Outcome setup_parse(const Reader& r, int args, char* ssid, std::size_t ssid_cap, char* password, std::size_t pass_cap,
+                    char* token, std::size_t token_cap) {
+  const Outcome wifi = wifi_parse(r, args, ssid, ssid_cap, password, pass_cap);
+  if (!wifi.ok) return wifi;
+  if (!r.get_string(r.find(args, "token"), token, token_cap) || !token_valid(token)) {
+    return Outcome::fail(Err::BadArgs, "token: 8..64 printable characters");
+  }
+  return Outcome::done();
+}
+
 // ---- Zigbee chip operations: pair, unpair, identify ----------------------------------------
 //
 // These do not change anything on the brain: they validate the request and say which

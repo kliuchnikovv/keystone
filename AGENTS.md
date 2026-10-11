@@ -73,7 +73,10 @@ at). Tools against a real hub: `npm run discover`, `probe`, `hub-check` (see `ap
 
 **TLS identity for the brain (optional).** `scripts/gen-hub-cert.sh` creates the hub's own
 certificate and key (gitignored, per device) so the app protocol is served over `wss://`;
-without it the brain builds and serves plain `ws://` only. See docs/app-protocol.md §10.
+without it the brain builds and serves plain `ws://` only. See docs/app-protocol.md §10. The same
+generated file carries the hub's *setup code* (the password of the first-time setup Wi-Fi
+`Keystone-XXXX`, §11): `scripts/gen-hub-cert.sh --setup-code` adds one to an existing identity without
+changing the key or certificate; console `setup` shows it and `setup on|off` opens/closes the access point.
 
 **Firmware.** Each app is its own ESP-IDF project. Two toolchains are in use:
 

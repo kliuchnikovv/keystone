@@ -11,6 +11,7 @@
     "probe": "tsx tools/probe.ts",
     "hub-check": "tsx tools/hub-check.ts",
     "discover": "tsx tools/discover.ts",
+    "setup-check": "tsx tools/setup-check.ts",
     "start": "expo start",
     "web": "expo start --web",
     "export:web": "expo export --platform web"
@@ -30,6 +31,7 @@
   "dependencies": {
     "@expo/metro-runtime": "57.0.16",
     "expo": "57.0.27",
+    "expo-crypto": "~57.0.3",
     "expo-dev-client": "~57.0.19",
     "expo-location": "~57.0.20",
     "expo-secure-store": "57.0.4",

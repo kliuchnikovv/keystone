@@ -16,6 +16,7 @@
 #include "lwip/sockets.h"
 
 #include "core/json.hpp"
+#include "core/setup_mode.hpp"
 #include "core/sha256.hpp"
 
 #ifdef KEYSTONE_HAVE_TLS
@@ -43,6 +44,7 @@ constexpr std::size_t kSlots = kMaxClients + 1;  // + one connection that is sti
 struct Client {
   int fd = -1;
   bool authed = false;
+  bool setup_only = false;        // authenticated with the setup code
   std::uint32_t gen = 0;          // bumped on every accept: stale queued frames are dropped
   std::uint32_t deadline_ms = 0;  // handshake deadline
   std::uint32_t ip = 0;
@@ -60,6 +62,7 @@ SemaphoreHandle_t g_mu = nullptr;
 QueueHandle_t g_in_q = nullptr;
 HubInfoFn g_info = nullptr;
 char g_token[core::app::kMaxToken + 1] = {};
+char g_setup_code[core::kSetupCodeLen + 1] = {};
 Client g_clients[kSlots];
 Lock g_locks[4];
 std::uint32_t g_gen = 0;
@@ -186,6 +189,7 @@ esp_err_t on_open(httpd_handle_t, int fd) {
     if (c.fd >= 0) continue;
     c.fd = fd;
     c.authed = false;
+    c.setup_only = false;
     c.gen = ++g_gen;
     c.deadline_ms = now_ms() + kHelloTimeoutMs;
     c.ip = peer_ip(fd);
@@ -205,6 +209,7 @@ void on_close(httpd_handle_t, int fd) {
                static_cast<unsigned>(esp_get_free_heap_size()));
       c->fd = -1;
       c->authed = false;
+      c->setup_only = false;
     }
   }
   close(fd);
@@ -272,6 +277,12 @@ esp_err_t reply(httpd_req_t* req, const core::JsonWriter& w) {
   return httpd_ws_send_frame(req, &f);
 }
 
+// A reply to an authenticated client goes through the server task's queue, like every other frame to it. Writing it
+// from inside the handler also works for one request at a time, but then nothing wakes the server for frames that
+// arrived in the same TLS record: a burst of requests would be answered up to the first and the rest would wait for
+// the next packet.
+void post(int fd, const core::JsonWriter& w) { send(fd, w.c_str(), w.size()); }
+
 // ---- the /ws handler ----------------------------------------------------------------
 
 esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
@@ -282,11 +293,13 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
   const ClientMsg m = decode_client(reader, text, len);
 
   bool authed = false;
+  bool setup_only = false;
   std::uint32_t ip = 0;
   {
     Guard g;
     if (Client* c = find_locked(fd)) {
       authed = c->authed;
+      setup_only = c->setup_only;
       ip = c->ip;
     }
   }
@@ -314,9 +327,14 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       return ESP_FAIL;
     }
     bool good = false;
+    bool via_setup = false;
     if (m.token_ok) {
       Guard g;
       good = g_token[0] != '\0' && ct_equal(m.token, g_token);
+      if (!good && g_setup_code[0] != '\0') {
+        char typed[core::kSetupCodeLen + 1];  // the person may have typed it in lower case, with dashes
+        good = via_setup = core::setup_code_normalize(m.token, typed, sizeof(typed)) && ct_equal(typed, g_setup_code);
+      }
     }
     if (!good) {
       note_failure(ip);
@@ -333,17 +351,21 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
         reply(req, w);
         return ESP_FAIL;
       }
-      if (Client* c = find_locked(fd)) c->authed = true;
+      if (Client* c = find_locked(fd)) {
+        c->authed = true;
+        c->setup_only = via_setup;
+      }
     }
     HubInfo info{"home", "?", 0, "UTC", false};
     if (g_info != nullptr) g_info(info);
-    encode_welcome(w, info);
+    encode_welcome(w, info, via_setup);
     reply(req, w);
     Inbound in{};
     in.kind = Inbound::Kind::Connected;
     in.fd = fd;
+    in.setup_only = via_setup;
     xQueueSend(g_in_q, &in, 0);
-    ESP_LOGI(kTag, "client fd=%d authenticated (%u/%u), heap free %u", fd,
+    ESP_LOGI(kTag, "client fd=%d authenticated%s (%u/%u), heap free %u", fd, via_setup ? " with the setup code" : "",
              static_cast<unsigned>(client_count()), static_cast<unsigned>(kMaxClients),
              static_cast<unsigned>(esp_get_free_heap_size()));
     return ESP_OK;
@@ -351,14 +373,19 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
 
   switch (m.kind) {
     case ClientMsg::Kind::Cmd: {
+      if (setup_only) {
+        encode_error(w, m.has_id ? m.id : -1, Err::Unsupported, "setup only");
+        post(fd, w);
+        return ESP_OK;
+      }
       if (!m.has_id) {
         encode_error(w, -1, Err::BadArgs, "missing id");
-        reply(req, w);
+        post(fd, w);
         return ESP_OK;
       }
       if (!m.has_entity || !m.has_attr || m.entity < 0 || m.entity > 0xFFFF || m.attr < 0 || m.attr > 0xFF) {
         encode_error(w, m.id, Err::BadArgs, "entity/attr");
-        reply(req, w);
+        post(fd, w);
         return ESP_OK;
       }
       Inbound in{};
@@ -370,14 +397,19 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       in.value = m.value;
       if (xQueueSend(g_in_q, &in, 0) != pdTRUE) {
         encode_error(w, m.id, Err::Internal, "busy, retry");
-        reply(req, w);
+        post(fd, w);
       }
       return ESP_OK;
     }
     case ClientMsg::Kind::Req: {
       if (!m.has_id) {
         encode_error(w, -1, Err::BadArgs, "missing id");
-        reply(req, w);
+        post(fd, w);
+        return ESP_OK;
+      }
+      if (setup_only && !core::setup_op_allowed(m.op)) {
+        encode_res_error(w, m.id, Err::Unsupported, "setup only");
+        post(fd, w);
         return ESP_OK;
       }
       // The frame is parsed again in the main loop, which owns the registry and the
@@ -385,6 +417,7 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       Inbound in{};
       in.kind = Inbound::Kind::Req;
       in.fd = fd;
+      in.setup_only = setup_only;
       in.id = m.id;
       in.text = static_cast<char*>(std::malloc(len + 1));
       in.len = len;
@@ -395,7 +428,7 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       if (in.text == nullptr || xQueueSend(g_in_q, &in, 0) != pdTRUE) {
         std::free(in.text);
         encode_res_error(w, m.id, Err::Internal, "busy, retry");
-        reply(req, w);
+        post(fd, w);
       }
       return ESP_OK;
     }
@@ -403,7 +436,7 @@ esp_err_t on_message(httpd_req_t* req, int fd, char* text, std::size_t len) {
       return ESP_OK;
     default:
       encode_error(w, m.has_id ? m.id : -1, Err::Unsupported);
-      reply(req, w);
+      post(fd, w);
       return ESP_OK;
   }
 }
@@ -445,15 +478,15 @@ esp_err_t ws_handler(httpd_req_t* req) {
 // ---- public API ------------------------------------------------------------------------
 
 bool start(const char* token, HubInfoFn info, bool force_plain) {
-  if (token == nullptr) return false;
-  const std::size_t n = std::strlen(token);
-  if (n < 8 || n > core::app::kMaxToken) return false;
+  const std::size_t n = token != nullptr ? std::strlen(token) : 0;
+  if (n != 0 && (n < 8 || n > core::app::kMaxToken)) return false;
   if (g_mu == nullptr) g_mu = xSemaphoreCreateMutex();
   if (g_in_q == nullptr) g_in_q = xQueueCreate(8, sizeof(Inbound));
   if (g_mu == nullptr || g_in_q == nullptr) return false;
   {
     Guard g;
-    std::memcpy(g_token, token, n + 1);
+    if (n != 0) std::memcpy(g_token, token, n + 1);
+    else g_token[0] = '\0';
   }
   g_info = info;
   if (g_server != nullptr) {
@@ -542,6 +575,14 @@ void stop() {
   g_mode = Mode::Stopped;
 }
 
+void set_setup_code(const char* code) {
+  if (g_mu == nullptr) g_mu = xSemaphoreCreateMutex();
+  if (g_mu == nullptr) return;
+  Guard g;
+  if (code != nullptr && core::setup_code_valid(code)) std::memcpy(g_setup_code, code, core::kSetupCodeLen + 1);
+  else g_setup_code[0] = '\0';
+}
+
 bool running() { return g_server != nullptr; }
 Mode mode() { return g_mode; }
 int port() { return g_mode == Mode::Tls ? kPortTls : kPortPlain; }
@@ -594,7 +635,8 @@ void broadcast(const char* data, std::size_t len) {
   std::size_t n = 0;
   {
     Guard g;
-    for (auto& c : g_clients) if (c.fd >= 0 && c.authed) fds[n++] = c.fd;
+    // A setup client sees only the answers to its own requests, never the home's events.
+    for (auto& c : g_clients) if (c.fd >= 0 && c.authed && !c.setup_only) fds[n++] = c.fd;
   }
   for (std::size_t i = 0; i < n; ++i) send(fds[i], data, len);
 }

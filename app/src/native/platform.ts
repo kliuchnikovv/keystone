@@ -10,7 +10,7 @@ import type { KeystoneNetModule } from './types';
 export function chooseSocketFactory(native: KeystoneNetModule | null): SocketFactory {
   const pinned = native ? createNativeSocketFactory(native) : null;
   return (url, opts) => {
-    if (opts.fingerprint) {
+    if (opts.fingerprint || opts.learn) {
       if (!pinned) throw new PinUnsupportedError();
       return pinned(url, opts);
     }

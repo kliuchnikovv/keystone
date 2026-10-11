@@ -63,13 +63,18 @@ class PinnedSocket implements SocketLike {
   onerror: SocketLike['onerror'] = null;
   private ws: WebSocket;
 
-  constructor(url: string, fingerprint?: string) {
+  constructor(url: string, fingerprint?: string, learn = false) {
     const secure = /^wss:/i.test(url);
     // Verification is by pin, not by CA, so the chain error of a self-signed certificate is expected.
     this.ws = new WebSocket(url, secure ? { rejectUnauthorized: false } : {});
     this.ws.on('open', () => {
       if (secure) {
         const seen = (this.ws as unknown as { _socket?: { getPeerCertificate(): { fingerprint256?: string } } })._socket?.getPeerCertificate().fingerprint256;
+        if (learn) {
+          // First-time setup: take what the hub presents and say what it was.
+          this.onopen?.({ fingerprint: seen ? (normalizeFingerprint(seen) ?? undefined) : undefined });
+          return;
+        }
         if (!fingerprint || !seen || !sameFingerprint(seen, fingerprint)) {
           const ev: PinMismatchEvent = { pinMismatch: true, seen: seen ? (normalizeFingerprint(seen) ?? undefined) : undefined };
           this.onerror?.(ev);
@@ -91,5 +96,5 @@ class PinnedSocket implements SocketLike {
   }
 }
 
-/** HubClient socket factory: ws:// as is, wss:// only with a matching `fingerprint`. */
-export const pinnedSocketFactory: SocketFactory = (url, opts) => new PinnedSocket(url, opts.fingerprint);
+/** HubClient socket factory: ws:// as is, wss:// only with a matching `fingerprint` (or `learn`: take any and report it). */
+export const pinnedSocketFactory: SocketFactory = (url, opts) => new PinnedSocket(url, opts.fingerprint, opts.learn === true);

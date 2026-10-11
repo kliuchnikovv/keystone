@@ -28,9 +28,11 @@ private func parsePin(_ s: String) -> [UInt8]? {
 /// One pinned WebSocket. The URLSession delegate decides trust: the server certificate is
 /// accepted only if its SHA-256 equals the pin, and `open` is only reported after the
 /// handshake, so the app never sends the token to an unverified server.
+/// With no pin (`connectLearning`, first-time setup only) every certificate is accepted and `open`
+/// reports the fingerprint it had, for the app to remember.
 private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
   let id: String
-  let pin: [UInt8]
+  let pin: [UInt8]?
   let emit: (String, String, [String: Any?]) -> Void
   private var session: URLSession?
   private var task: URLSessionWebSocketTask?
@@ -39,7 +41,7 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
   private var finished = false
   private let lock = NSLock()
 
-  init(id: String, pin: [UInt8], emit: @escaping (String, String, [String: Any?]) -> Void) {
+  init(id: String, pin: [UInt8]?, emit: @escaping (String, String, [String: Any?]) -> Void) {
     self.id = id
     self.pin = pin
     self.emit = emit
@@ -99,7 +101,7 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
     }
     let digest = Array(SHA256.hash(data: SecCertificateCopyData(leaf) as Data))
     seen = hexColon(digest)
-    if digest == pin {
+    if pin == nil || digest == pin! {
       completionHandler(.useCredential, URLCredential(trust: trust))
     } else {
       mismatch = true
@@ -226,6 +228,18 @@ public final class KeystoneNetModule: Module {
         return
       }
       let s = PinnedSocket(id: id, pin: pin) { [weak self] id, kind, extra in self?.emit(id, kind, extra) }
+      self.lock.lock(); self.sockets[id] = s; self.lock.unlock()
+      s.start(url: u)
+    }
+
+    // First-time setup only: accept whatever certificate the hub presents and report its fingerprint.
+    Function("connectLearning") { (id: String, url: String) in
+      guard let u = URL(string: url) else {
+        self.emit(id, "error", ["message": "bad url"])
+        self.emit(id, "close", [:])
+        return
+      }
+      let s = PinnedSocket(id: id, pin: nil) { [weak self] id, kind, extra in self?.emit(id, kind, extra) }
       self.lock.lock(); self.sockets[id] = s; self.lock.unlock()
       s.start(url: u)
     }

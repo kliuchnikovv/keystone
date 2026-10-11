@@ -13,9 +13,11 @@ export interface ConnectScreenProps {
   onSave(s: Settings): void;
   /** Hubs found on the network (native builds only); tapping one fills in the address. */
   discovery?: Discovery;
+  /** A hub that has never been on a network: walk through its first-time setup. */
+  onSetup?(): void;
 }
 
-export function ConnectScreen({ initial, notice, onSave, discovery }: ConnectScreenProps) {
+export function ConnectScreen({ initial, notice, onSave, discovery, onSetup }: ConnectScreenProps) {
   const t = useTheme();
   const [url, setUrl] = useState(initial?.url ?? '');
   const [token, setToken] = useState(initial?.token ?? '');
@@ -130,6 +132,13 @@ export function ConnectScreen({ initial, notice, onSave, discovery }: ConnectScr
         <Pressable accessibilityRole="button" accessibilityLabel="Connect" onPress={submit} style={[styles.button, { backgroundColor: t.accent }]}>
           <Text style={[styles.buttonText, { color: t.onAccent }]}>Connect</Text>
         </Pressable>
+
+        {onSetup && (
+          <Pressable accessibilityRole="button" accessibilityLabel="Set up a new hub" onPress={onSetup} style={styles.setup}>
+            <Text style={{ color: t.accent, fontSize: 15, fontWeight: '600' }}>Set up a new hub</Text>
+            <Text style={{ color: t.muted, fontSize: 12, marginTop: 2 }}>For a hub that is not on your Wi-Fi yet</Text>
+          </Pressable>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -151,4 +160,5 @@ const styles = StyleSheet.create({
   notice: { fontSize: 14, marginBottom: 4, fontWeight: '600' },
   button: { marginTop: 22, borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
   buttonText: { fontSize: 16, fontWeight: '600' },
+  setup: { marginTop: 18, alignItems: 'center', paddingVertical: 8 },
 });

@@ -68,7 +68,8 @@ given once in the snapshot, so the client knows how to render and edit it.
 3. The token is **never** in the URL (URLs end up in logs). It is compared in
    constant time. After 5 failed attempts from one IP the hub refuses that IP
    for 60 s. The token is set on the hub console (`webtoken <value>`, stored in
-   NVS) — there is no way to read or set it over this protocol.
+   NVS) — there is no way to read it over this protocol, and the only way to set it
+   is the first-time setup (§11).
 
 No `hello` ⇒ no other message is processed.
 
@@ -184,8 +185,10 @@ table is `table_full`. Both the hub (`core::app`, `core/app_requests.hpp`) and t
 mock hub follow this.
 
 Every mutating op re-broadcasts the affected list (`rules`/`schedules`/…) to all
-clients. Anything that changes the hub's security posture (token, Wi-Fi
-credentials, OTA) is **not** available over this protocol.
+clients. Anything that changes who may control the hub is **not** available to a normal client:
+the token is set on the console, or by the first-time setup (§11) from a client that
+proved it knows the setup code; OTA is not available at all. (A normal client may change the
+Wi-Fi network, with the rollback described under `wifi.set`.)
 
 ## 6. Rule / schedule objects
 
@@ -326,7 +329,56 @@ means a client must not send a frame over ~6 KB (the protocol caps frames at 4 K
 anyway). A certificate is valid for 10 years; renewing means regenerating and
 re-pinning everywhere.
 
-## 11. Stages
+## 11. First-time setup (a hub with no network, no console)
+
+A hub that was just flashed knows no Wi-Fi network and has no token, so nothing can reach it. The
+console fixes that with `wifi_join` and `webtoken`; this section is the way for a person who has no
+console (and the way to recover a hub whose network is gone for good).
+
+**The setup code.** `scripts/gen-hub-cert.sh` puts a 12-character *setup code* into the generated
+`hub_identity.cpp` next to the TLS identity (`--setup-code` adds one to an existing identity and keeps
+its key and certificate, so pinned fingerprints stay valid). The alphabet has no look-alikes (no 0/O,
+1/I/L; ~59 bits). It is meant for a label on the hub, shown as `ABCD-EFGH-JKMN`; the hub console prints
+it with `setup`. A firmware built from an identity without one has no setup mode at all.
+
+**The access point.** The hub opens a Wi-Fi network `Keystone-XXXX` (last two bytes of its MAC), WPA2,
+password = the setup code, at 192.168.4.1 (the app server listens there too, `wss://192.168.4.1:8443/ws`).
+`core::SetupPolicy` decides when it is up: at once when the hub has **no** network credentials, after
+**10 minutes** without a connection when it has some (the router was replaced), and once open it stays
+until the hub has had its network for a minute (long enough for the app to see the result). The console
+forces it with `setup on|off` (and shows the state; `wifi_forget` is the way to test the blank-hub case).
+
+**A setup client** signs in with `hello` whose token is the setup code (case, dashes and spaces do not
+matter). It gets `welcome` with `"setup": true`, **no snapshot and no events**, and may send exactly
+`wifi.scan` and `setup.apply`. Everything else (`cmd`, every other `req`) is refused with
+`unsupported` (`"setup only"`), twice: in the server task and again in the main loop. A normal client
+cannot use `setup.apply`. Failed codes count towards the same lockout as failed tokens.
+
+| op | args | effect |
+|---|---|---|
+| `setup.apply` | `ssid`, `password` (as `wifi.set`), `token` (8..64 printable, no spaces) | saves the token and moves the hub to the network, both ~0.7 s after the reply. The app server restarts with the new token (every connection drops), and the network is applied as in `wifi.set`; with no working network the credentials are kept at once, so a **wrong password leaves the hub in setup mode** (the access point stays and the person can try again) |
+
+**Trust.** The hub's certificate is self-signed and not known to the phone yet, so for this one
+connection the socket is asked to *learn*: it accepts any certificate and reports its SHA-256 in `open`
+(`SocketOptions.learn`; Swift/Kotlin `connectLearning`). Nothing is sent to the hub before that besides the
+`hello`, and the only link on which this is done is the access point, which is WPA2 with the setup code as
+password: a device that can talk to it already knows the code (which is also the token for this
+connection), so a fingerprint learned there is the hub's. The app stores it and pins it from then on, on the
+home network, like any other hub. Browsers and Expo Go cannot learn (`unsupported`).
+
+**The app** (`SetupScreen`, "Set up a new hub" on the connect screen): the person joins `Keystone-XXXX` in the
+phone's settings, types the code, picks the home network (the scan runs by itself) and its password. The app
+invents the token (16 random bytes, 32 hex digits; the person never sees or types it), sends `setup.apply`, then
+asks the person to put the phone back on the home Wi-Fi and connects with the learned fingerprint, the new token
+and the address found by mDNS (fallback `keystone.local`). `npm run setup-check` is the conformance check.
+
+**Limits.** The setup code sits in unencrypted flash next to the private key (see §10). A phone on a Wi-Fi network
+without internet may route traffic elsewhere: iOS sends local addresses over Wi-Fi anyway; Android may need the
+network to be kept (untested). The Wi-Fi password travels over TLS inside WPA2 and is never stored by the app.
+While the access point is up a second Wi-Fi network is on the air (a visible `Keystone-…`, not a way in without the
+code).
+
+## 12. Stages
 
 1. **This document** — agree on the protocol.
 2. ✅ **Mock hub + client library** (`app/`, 41 tests): a Node mock hub that speaks this
@@ -367,6 +419,9 @@ re-pinning everywhere.
    Discovery inside the phone app: native browser in `keystone-net`, a list on the connect
    screen (tapping a hub fills the address, never the fingerprint: mDNS is unauthenticated).
    Unverified on a device, see §10. *Open:* polish.
+
+7. ✅ **First-time setup** (hub + app + tool): §11. Setup access point, setup-code sign-in, `setup.apply`,
+   `SetupScreen`, `npm run setup-check`. Hub verified over the LAN; the access point and the phone are not.
 
 Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

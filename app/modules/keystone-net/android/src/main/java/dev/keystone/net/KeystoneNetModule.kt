@@ -37,8 +37,9 @@ private fun parsePin(s: String): ByteArray? {
 }
 
 /** Trusts exactly one certificate: the one whose SHA-256 is the pin. Nothing else is checked
- *  (not the chain, not the host name): the pin IS the identity. */
-private class PinTrust(private val pin: ByteArray) : X509TrustManager {
+ *  (not the chain, not the host name): the pin IS the identity. With no pin (`connectLearning`, first-time
+ *  setup only) it accepts any certificate and just records what it was. */
+private class PinTrust(private val pin: ByteArray?) : X509TrustManager {
   @Volatile var seen: String? = null
   @Volatile var mismatch: Boolean = false
 
@@ -50,7 +51,7 @@ private class PinTrust(private val pin: ByteArray) : X509TrustManager {
     val leaf = chain?.firstOrNull() ?: throw CertificateException("the server sent no certificate")
     val digest = MessageDigest.getInstance("SHA-256").digest(leaf.encoded)
     seen = hex(digest)
-    if (!MessageDigest.isEqual(digest, pin)) {
+    if (pin != null && !MessageDigest.isEqual(digest, pin)) {
       mismatch = true
       throw CertificateException("certificate does not match the pinned fingerprint")
     }
@@ -77,6 +78,7 @@ class KeystoneNetModule : Module() {
     Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST)
 
     Function("connect") { id: String, url: String, fingerprint: String -> connect(id, url, fingerprint) }
+    Function("connectLearning") { id: String, url: String -> openSocket(id, url, null) }
     Function("send") { id: String, text: String -> conns[id]?.ws?.send(text); Unit }
     Function("close") { id: String -> conns.remove(id)?.ws?.close(1000, null); Unit }
     Function("startDiscovery") { startDiscovery() }
@@ -102,6 +104,11 @@ class KeystoneNetModule : Module() {
       emit(id, "close")
       return
     }
+    openSocket(id, url, pin)
+  }
+
+  /** `pin` null = learn: accept any certificate and report its fingerprint in `open`. */
+  private fun openSocket(id: String, url: String, pin: ByteArray?) {
     val trust = PinTrust(pin)
     val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
     val client = OkHttpClient.Builder()

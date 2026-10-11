@@ -13,7 +13,8 @@ class NativeSocket implements SocketLike {
   constructor(
     private readonly mod: KeystoneNetModule,
     private readonly id: string,
-    private readonly pin: string,
+    /** null = learning: accept the certificate and report what it was. */
+    private readonly pin: string | null,
     private readonly release: (id: string) => void,
   ) {}
 
@@ -25,6 +26,15 @@ class NativeSocket implements SocketLike {
         // reports again costs nothing and means a bug in one native file cannot silently
         // turn pinning off (an `open` without a matching fingerprint is treated as a mismatch).
         const seen = e.fingerprint ? normalizeFingerprint(e.fingerprint) : null;
+        if (this.pin === null) {
+          // Learning: the caller decides what to do with the fingerprint; without one there is nothing to remember.
+          if (!seen) {
+            this.fail({ pinMismatch: true });
+            return;
+          }
+          this.onopen?.({ fingerprint: seen });
+          return;
+        }
         if (!seen || !sameFingerprint(seen, this.pin)) {
           this.fail({ pinMismatch: true, ...(seen ? { seen } : {}) });
           return;
@@ -77,8 +87,9 @@ class NativeSocket implements SocketLike {
 
 /**
  * HubClient socket factory backed by the native module. With a fingerprint it connects only to
- * a server presenting exactly that certificate; without one it refuses (the stock
- * WebSocket is the right tool for ws:// and for hubs with a CA-signed certificate).
+ * a server presenting exactly that certificate; with `learn` it accepts any certificate and reports its
+ * fingerprint (first-time setup only); with neither it refuses (the stock WebSocket is the right tool for
+ * ws:// and for hubs with a CA-signed certificate).
  */
 export function createNativeSocketFactory(mod: KeystoneNetModule): SocketFactory {
   const sockets = new Map<string, NativeSocket>();
@@ -95,13 +106,15 @@ export function createNativeSocketFactory(mod: KeystoneNetModule): SocketFactory
 
   return (url, opts) => {
     const pin = opts.fingerprint ? normalizeFingerprint(opts.fingerprint) : null;
-    if (!pin) throw new Error('the native socket needs a SHA-256 fingerprint to pin');
+    if (opts.fingerprint && opts.learn) throw new Error('a socket either pins a certificate or learns one');
+    if (!pin && !opts.learn) throw new Error('the native socket needs a SHA-256 fingerprint to pin');
     if (!/^wss:\/\//i.test(url)) throw new Error('the native socket is for wss:// hubs');
     if (!sub) sub = mod.addListener('onSocketEvent', (e) => sockets.get(e.id)?.handle(e));
     const id = `s${++next}`;
     const sock = new NativeSocket(mod, id, pin, release);
     sockets.set(id, sock);
-    mod.connect(id, url, pin);
+    if (pin) mod.connect(id, url, pin);
+    else mod.connectLearning(id, url);
     return sock;
   };
 }

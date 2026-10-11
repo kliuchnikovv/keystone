@@ -152,6 +152,8 @@ export interface Welcome {
   type: 'welcome';
   v: number;
   hub: HubInfo;
+  /** The client got in with the hub's setup code: it gets no snapshot and may only scan and `setup.apply`. */
+  setup?: boolean;
 }
 /**
  * The snapshot may be split into parts that each fit one frame. Part 0 resets the

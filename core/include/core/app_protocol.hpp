@@ -322,9 +322,12 @@ inline void write_hub_info(JsonWriter& w, const HubInfo& h) noexcept {
   w.end_object();
 }
 
-inline void encode_welcome(JsonWriter& w, const HubInfo& h) noexcept {
+// `setup`: the client authenticated with the setup code (docs/app-protocol.md §11). It gets no snapshot and may
+// only scan for networks and send `setup.apply`.
+inline void encode_welcome(JsonWriter& w, const HubInfo& h, bool setup = false) noexcept {
   w.begin_object().kv("type", "welcome").kv("v", kProtocolVersion).key("hub");
   write_hub_info(w, h);
+  if (setup) w.kv("setup", true);
   w.end_object();
 }
 

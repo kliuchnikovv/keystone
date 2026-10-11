@@ -45,6 +45,10 @@ npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 19 conforma
 # over TLS: pin the certificate (the hub console prints it with `webtoken`); adds 5 TLS checks
 npm run hub-check -- --url wss://<hub-ip>:8443/ws --token <token> --fingerprint <sha256>
 # without --fingerprint, `probe` on a wss:// URL just shows what the hub presents, to compare
+# first-time setup mode (the hub's setup access point must be open: console `setup on`)
+npm run setup-check -- --url wss://<hub-ip>:8443/ws --code <setup code> --token <token> --fingerprint <sha256>
+#   --apply    also send setup.apply with the hub's current network (password in KS_SETUP_PASS) and the same token:
+#              the whole hand-over runs for real (~20 s; every connection drops once)
 #   --mutate   also create and remove a name, schedule, timer, rule and scene, and try pair/identify
 #              (12 more checks: 31 in all, 36 over TLS). Puts everything back; never unpairs a device
 #   --wifi     also move the hub to a network that does not exist and check it comes back on its own

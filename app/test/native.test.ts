@@ -17,6 +17,7 @@ function fakeModule() {
   const lostListeners = new Set<(h: { instance: string }) => void>();
   const mod = {
     connect: (id: string, url: string, fp: string) => calls.push(`connect ${id} ${url} ${fp}`),
+    connectLearning: (id: string, url: string) => calls.push(`learn ${id} ${url}`),
     send: (id: string, text: string) => calls.push(`send ${id} ${text}`),
     close: (id: string) => calls.push(`close ${id}`),
     startDiscovery: () => calls.push('startDiscovery'),
@@ -47,6 +48,39 @@ describe('native socket (certificate pinning on a phone)', () => {
     expect(opened).toEqual([]); // nothing is "open" yet, so no token is sent
     f.emit({ id: 's1', kind: 'open', fingerprint: PIN });
     expect(opened).toHaveLength(1);
+  });
+
+  it('learning: any certificate is accepted by the platform, and open carries the fingerprint it saw', () => {
+    const f = fakeModule();
+    const sock = createNativeSocketFactory(f.mod)(URL, { learn: true });
+    expect(f.calls).toEqual([`learn s1 ${URL}`]);
+    const opened: unknown[] = [];
+    sock.onopen = (e) => opened.push(e);
+    f.emit({ id: 's1', kind: 'open', fingerprint: PIN.toLowerCase().replaceAll(':', '') });
+    expect(opened).toEqual([{ fingerprint: PIN }]);
+  });
+
+  it('learning without a reported fingerprint is an error, not a silent open', () => {
+    const f = fakeModule();
+    const sock = createNativeSocketFactory(f.mod)(URL, { learn: true });
+    const log: unknown[] = [];
+    sock.onopen = () => log.push('open');
+    sock.onerror = (e) => log.push(e);
+    sock.onclose = () => log.push('close');
+    f.emit({ id: 's1', kind: 'open' });
+    expect(log).toEqual([{ pinMismatch: true }, 'close']);
+  });
+
+  it('a socket pins or learns, never both, and needs one of them', () => {
+    const f = fakeModule();
+    const make = createNativeSocketFactory(f.mod);
+    expect(() => make(URL, { fingerprint: PIN, learn: true })).toThrow();
+    expect(() => make(URL, {})).toThrow();
+    expect(f.calls).toEqual([]);
+  });
+
+  it('the platform chooser refuses to learn when the build has no native module (browser, Expo Go)', () => {
+    expect(() => chooseSocketFactory(null)(URL, { learn: true })).toThrow(/cannot verify/);
   });
 
   it('an open that reports another certificate is a mismatch, even though the platform said open', () => {
