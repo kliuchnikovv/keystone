@@ -194,6 +194,33 @@ describe('names', () => {
   });
 });
 
+describe('scene targets', () => {
+  it('schedules, timers and rules that apply a scene read like sentences', () => {
+    const sched: Schedule = { index: 0, time: '22:00', days: 'weekdays', scene: 'night' };
+    expect(describeSchedule(sched, ents)).toEqual({ title: '22:00 · Scene night', detail: 'Weekdays' });
+    const timer: Timer = { index: 0, scene: 'night', left_s: 600 };
+    expect(describeTimer(timer, ents, 600)).toEqual({ title: 'Scene night', detail: 'in 10 min' });
+    const rule: Rule = { index: 0, when: { entity: 258, attr: 0x50, op: 'any' }, then: { scene: 'night' } };
+    expect(describeRule(rule, ents)).toMatchObject({ when: 'When Motion sensor 0x0102 presence changes', then: 'apply scene night' });
+    expect(describeRule(rule, ents).when).toBe('When Motion sensor 0x0102 presence changes');
+  });
+
+  it('the request builders send {scene} instead of a device and action', () => {
+    expect(scheduleRequest({ time: '22:00', days: 'daily', entity: null, action: 'off', scene: 'night' }))
+      .toEqual({ ok: true, value: { time: '22:00', days: 'daily', scene: 'night' } });
+    expect(scheduleRequest({ time: '22:00', days: 'daily', entity: null, action: 'off', scene: '' }))
+      .toMatchObject({ ok: false, error: 'Pick a device' }); // an empty scene is "nothing chosen"
+    expect(timerRequest({ entity: null, action: 'on', minutes: '5', scene: 'night' }))
+      .toEqual({ ok: true, value: { scene: 'night', delay_s: 300 } });
+    expect(timerRequest({ entity: null, action: 'on', minutes: 'x', scene: 'night' })).toMatchObject({ ok: false });
+    const when = { option: opt('Motion sensor 0x0102 · Presence'), op: 'any' as const, value: '' };
+    expect(ruleRequest({ when, then: { option: null, value: '', scene: 'night' }, between: null, and: null, cooldown: '' }))
+      .toEqual({ ok: true, value: { when: { entity: 258, attr: 0x50, op: 'any' }, then: { scene: 'night' } } });
+    expect(ruleRequest({ when, then: { option: null, value: '', scene: null }, between: null, and: null, cooldown: '' }))
+      .toMatchObject({ ok: false });
+  });
+});
+
 describe('scenes', () => {
   it('captureScene stores the writable settings as they are, skipping read-only and unknown values', () => {
     expect(captureScene(ents, [0x0100])).toEqual([{ entity: 0x0100, attr: 1, value: true }]); // power/energy are read-only

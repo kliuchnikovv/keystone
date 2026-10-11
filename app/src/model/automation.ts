@@ -76,12 +76,18 @@ export function actionText(a: Action): string {
   return a === 'on' ? 'On' : a === 'off' ? 'Off' : 'Toggle';
 }
 
+/** What a schedule or timer does, in words: "Off plug1" or "Scene evening". */
+function doText(x: { entity?: number; action?: Action; scene?: string }, entities: Entity[]): string {
+  if (x.scene !== undefined) return `Scene ${x.scene}`;
+  return `${actionText(x.action ?? 'toggle')} ${entityName(entities, x.entity ?? 0)}`;
+}
+
 export function describeSchedule(s: Schedule, entities: Entity[]): { title: string; detail: string } {
-  return { title: `${s.time} · ${actionText(s.action)} ${entityName(entities, s.entity)}`, detail: describeDays(s.days) };
+  return { title: `${s.time} · ${doText(s, entities)}`, detail: describeDays(s.days) };
 }
 
 export function describeTimer(t: Timer, entities: Entity[], leftSeconds: number): { title: string; detail: string } {
-  return { title: `${actionText(t.action)} ${entityName(entities, t.entity)}`, detail: `in ${formatCountdown(leftSeconds)}` };
+  return { title: doText(t, entities), detail: `in ${formatCountdown(leftSeconds)}` };
 }
 
 /** "plug1 off · lamp brightness 50 %": what applying the scene does. */
@@ -101,12 +107,17 @@ export function describeRule(r: Rule, entities: Entity[]): { when: string; then:
     r.when.op === 'any'
       ? `When ${who} ${what} changes`
       : `When ${who} ${what} ${opText(r.when.op)} ${valueFor(entities, r.when.entity, r.when.attr, r.when.value ?? null)}`;
-  const target = attrOf(entities, r.then.entity, r.then.attr);
-  const to = valueFor(entities, r.then.entity, r.then.attr, r.then.value);
-  const then =
-    target?.name === 'on_off'
-      ? `turn ${entityName(entities, r.then.entity)} ${r.then.value ? 'on' : 'off'}`
-      : `set ${entityName(entities, r.then.entity)} ${attrName(entities, r.then.entity, r.then.attr)} to ${to}`;
+  let then: string;
+  if ('scene' in r.then) {
+    then = `apply scene ${r.then.scene}`;
+  } else {
+    const target = attrOf(entities, r.then.entity, r.then.attr);
+    const to = valueFor(entities, r.then.entity, r.then.attr, r.then.value);
+    then =
+      target?.name === 'on_off'
+        ? `turn ${entityName(entities, r.then.entity)} ${r.then.value ? 'on' : 'off'}`
+        : `set ${entityName(entities, r.then.entity)} ${attrName(entities, r.then.entity, r.then.attr)} to ${to}`;
+  }
   const extras: string[] = [];
   if (r.between) extras.push(`between ${r.between.from} and ${r.between.to}`);
   if (r.and) {
@@ -206,10 +217,13 @@ export interface ScheduleForm {
   days: Days;
   entity: number | null;
   action: Action;
+  /** Set to apply a scene instead of switching `entity`. */
+  scene?: string | null;
 }
 export function scheduleRequest(f: ScheduleForm): Built {
   if (!validTime(f.time)) return { ok: false, error: 'Time must look like 07:30' };
   if (Array.isArray(f.days) && f.days.length === 0) return { ok: false, error: 'Pick at least one day' };
+  if (f.scene) return { ok: true, value: { time: f.time, days: f.days, scene: f.scene } };
   if (f.entity === null) return { ok: false, error: 'Pick a device' };
   return { ok: true, value: { time: f.time, days: f.days, entity: f.entity, action: f.action } };
 }
@@ -218,13 +232,15 @@ export interface TimerForm {
   entity: number | null;
   action: Action;
   minutes: string;
+  scene?: string | null;
 }
 export function timerRequest(f: TimerForm): Built {
-  if (f.entity === null) return { ok: false, error: 'Pick a device' };
+  if (!f.scene && f.entity === null) return { ok: false, error: 'Pick a device' };
   const m = Number(f.minutes);
   if (!/^\d+(\.\d+)?$/.test(f.minutes.trim()) || m <= 0) return { ok: false, error: 'Enter how many minutes' };
   const seconds = Math.round(m * 60);
   if (seconds > 7 * 24 * 3600) return { ok: false, error: 'At most 7 days' };
+  if (f.scene) return { ok: true, value: { scene: f.scene, delay_s: seconds } };
   return { ok: true, value: { entity: f.entity, action: f.action, delay_s: seconds } };
 }
 
@@ -235,7 +251,7 @@ export interface ConditionForm {
 }
 export interface RuleForm {
   when: ConditionForm;
-  then: { option: AttrOption | null; value: string };
+  then: { option: AttrOption | null; value: string; scene?: string | null };
   between: { from: string; to: string } | null;
   and: ConditionForm | null;
   cooldown: string;
@@ -254,13 +270,16 @@ function condition(label: string, c: ConditionForm, allowAny: boolean): Parsed<R
 export function ruleRequest(f: RuleForm): Built {
   const when = condition('When', f.when, true);
   if (!when.ok) return when;
-  if (!f.then.option) return { ok: false, error: 'Then: pick what to set' };
-  const then = parseInput(f.then.option.name, f.then.option.vt, f.then.value);
-  if (!then.ok) return { ok: false, error: `Then: ${then.error}` };
-  const args: Record<string, unknown> = {
-    when: when.value,
-    then: { entity: f.then.option.entity, attr: f.then.option.attr, value: then.value },
-  };
+  let thenArgs: Record<string, unknown>;
+  if (f.then.scene) {
+    thenArgs = { scene: f.then.scene };
+  } else {
+    if (!f.then.option) return { ok: false, error: 'Then: pick what to set' };
+    const then = parseInput(f.then.option.name, f.then.option.vt, f.then.value);
+    if (!then.ok) return { ok: false, error: `Then: ${then.error}` };
+    thenArgs = { entity: f.then.option.entity, attr: f.then.option.attr, value: then.value };
+  }
+  const args: Record<string, unknown> = { when: when.value, then: thenArgs };
   if (f.between) {
     if (!validTime(f.between.from) || !validTime(f.between.to)) return { ok: false, error: 'Between: times must look like 18:00' };
     if (f.between.from === f.between.to) return { ok: false, error: 'Between: start and end must differ' };

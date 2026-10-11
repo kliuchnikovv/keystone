@@ -443,6 +443,37 @@ if (process.argv.includes('--mutate')) {
       const want = ['bad_args', 'bad_args', 'bad_args', 'bad_args', 'bad_args', 'read_only', 'not_found', 'not_found', 'not_found'];
       return JSON.stringify(got) === JSON.stringify(want) && c.getSnapshot().scenes.length === before.scenes ? true : got.join(',');
     });
+    // A schedule (never fires: 03:33 daily, removed at once), a timer (an hour) and a rule (power > 65000 W)
+    // that apply a scene; the scene is kept while any of them uses it.
+    await check('schedule / timer / rule can apply a scene; a scene in use cannot be deleted', async () => {
+      const sw = c.getSnapshot().entities.find((e) => e.id === ent)!.attrs.find((a) => a.id === 0x01)!;
+      await c.req('scene.put', { name: 'chk_scene', actions: [{ entity: ent, attr: 0x01, value: sw.value }] });
+      const sched = await c.req('schedule.add', { time: '03:33', days: 'daily', scene: 'chk_scene' });
+      const timer = await c.req('timer.add', { delay_s: 3600, scene: 'chk_scene' });
+      const rule = await c.req('rule.add', { when: { entity: ent, attr: 0x13, op: '>', value: 65000 }, then: { scene: 'chk_scene' } });
+      try {
+        const listed = await waitFor(() => {
+          const s = c.getSnapshot();
+          return s.schedules.some((x) => x.scene === 'chk_scene') && s.timers.some((x) => x.scene === 'chk_scene') &&
+            s.rules.some((x) => 'scene' in x.then && x.then.scene === 'chk_scene');
+        });
+        if (!listed) return 'not listed with the scene name';
+        const refused = await code(c.req('scene.del', { name: 'chk_scene' }));
+        if (refused !== 'bad_args') return `delete in use gave ${refused}`;
+        const unknown = [
+          await code(c.req('schedule.add', { time: '03:33', days: 'daily', scene: 'chk_nope' })),
+          await code(c.req('schedule.add', { time: '03:33', days: 'daily', scene: 'chk_scene', entity: ent })),
+          await code(c.req('timer.add', { delay_s: 5, scene: 'chk_nope' })),
+          await code(c.req('rule.add', { when: { entity: ent, attr: 0x13, op: '>', value: 65000 }, then: { scene: 'chk_nope' } })),
+        ];
+        return JSON.stringify(unknown) === JSON.stringify(['not_found', 'bad_args', 'not_found', 'not_found']) ? true : unknown.join(',');
+      } finally {
+        await c.req('rule.del', { index: Number(rule?.index ?? 0) }).catch(() => undefined);
+        await c.req('timer.cancel', { index: Number(timer?.index ?? 0) }).catch(() => undefined);
+        await c.req('schedule.del', { index: Number(sched?.index ?? 0) }).catch(() => undefined);
+        await c.req('scene.del', { name: 'chk_scene' }).catch(() => undefined);
+      }
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();

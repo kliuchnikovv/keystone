@@ -125,10 +125,17 @@ class RuleEngine {
   using ReadFn = bool (*)(void* ctx, std::uint16_t entity, std::uint8_t attr,
                           hubproto::Value& out);
 
+  // Offered every action before it is dispatched; return true to say "handled" (the engine then
+  // sends nothing). The brain uses it for rules whose action is a scene, which is not a command to
+  // one entity. Called from whatever context evaluates the rules, so keep it quick and thread-safe.
+  using ActionFn = bool (*)(void* ctx, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& value,
+                            std::uint32_t now);
+
   RuleEngine(Dispatcher& dispatcher, NowFn now_fn, void* now_ctx) noexcept
       : disp_(dispatcher), now_fn_(now_fn), now_ctx_(now_ctx) {}
 
   void set_clock(MinuteFn fn, void* ctx) noexcept { clock_fn_ = fn; clock_ctx_ = ctx; }
+  void set_action_hook(ActionFn fn, void* ctx) noexcept { action_fn_ = fn; action_ctx_ = ctx; }
   void set_state_reader(ReadFn fn, void* ctx) noexcept { read_fn_ = fn; read_ctx_ = ctx; }
 
   // Is `minute` inside the rule's time window? No window = always; window set but
@@ -298,6 +305,8 @@ class RuleEngine {
   void* clock_ctx_ = nullptr;
   ReadFn read_fn_ = nullptr;
   void* read_ctx_ = nullptr;
+  ActionFn action_fn_ = nullptr;
+  void* action_ctx_ = nullptr;
   Rule rules_[MaxRules];
   bool fired_[MaxRules] = {};                // cool-down bookkeeping, not persisted
   std::uint32_t last_fire_ms_[MaxRules] = {};
@@ -347,7 +356,9 @@ void RuleEngine<Dispatcher, MaxRules>::evaluate(
       continue;
     }
     std::uint16_t seq = 0;
-    disp_.send(r.action_entity, r.action_attr, r.action_value, now, seq);
+    if (action_fn_ == nullptr || !action_fn_(action_ctx_, r.action_entity, r.action_attr, r.action_value, now)) {
+      disp_.send(r.action_entity, r.action_attr, r.action_value, now, seq);
+    }
     fired_[i] = true;
     last_fire_ms_[i] = now;
   }

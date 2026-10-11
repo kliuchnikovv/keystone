@@ -158,7 +158,7 @@ TEST_CASE("load is all-or-nothing and survives every truncation and corruption")
   bad[4] = 4;  // more scenes than the table holds
   CHECK_FALSE(keep.load(bad, n));
   std::memcpy(bad, buf, n);
-  bad[6 + 24] = 0;  // first scene with zero actions
+  bad[6 + 24 + 1] = 0;  // first scene with zero actions
   CHECK_FALSE(keep.load(bad, n));
   std::memcpy(bad, buf, n);
   bad[6] = 'X';  // name no longer valid
@@ -174,9 +174,48 @@ TEST_CASE("load rejects duplicate names") {
   std::uint8_t buf[256];
   const std::size_t n = t.save(buf, sizeof(buf));
   // Rename the second scene to the first's name.
-  const std::size_t second = 6 + 24 + 1 + 9;
+  const std::size_t second = 6 + 24 + 2 + 9;
   std::memcpy(buf + second, "one", 4);
   Table u;
   CHECK_FALSE(u.load(buf, n));
   CHECK(u.active_count() == 0);
+}
+
+TEST_CASE("scenes have stable ids: kept on replace, unique, reused only after a delete, persisted") {
+  Table t;
+  const Action a[] = {act(1, 1, Value::make_bool(true))};
+  REQUIRE(t.put("one", a, 1) >= 0);
+  REQUIRE(t.put("two", a, 1) >= 0);
+  const std::uint8_t one = t.find("one")->id;
+  const std::uint8_t two = t.find("two")->id;
+  CHECK(one != 0);
+  CHECK(two != 0);
+  CHECK(one != two);
+  CHECK(t.find_by_id(two) == t.find("two"));
+  CHECK(t.find_by_id(99) == nullptr);
+
+  REQUIRE(t.put("one", a, 1) >= 0);  // replaced: same id
+  CHECK(t.find("one")->id == one);
+
+  REQUIRE(t.remove("one"));
+  CHECK(t.find_by_id(one) == nullptr);
+  REQUIRE(t.put("three", a, 1) >= 0);
+  CHECK(t.find("three")->id == one);  // the freed id is the smallest free one
+
+  std::uint8_t buf[256];
+  const std::size_t n = t.save(buf, sizeof(buf));
+  Table u;
+  REQUIRE(u.load(buf, n));
+  CHECK(u.find("two")->id == two);
+  CHECK(u.find("three")->id == one);
+  CHECK(u.find_by_id(one) == u.find("three"));
+
+  // A stored table with a zero or duplicate id is corrupt.
+  std::uint8_t bad[256];
+  std::memcpy(bad, buf, n);
+  bad[6 + 24] = 0;
+  CHECK_FALSE(u.load(bad, n));
+  std::memcpy(bad, buf, n);
+  bad[6 + 24 + 2 + 9 + 24] = bad[6 + 24];  // second scene's id := first scene's id
+  CHECK_FALSE(u.load(bad, n));
 }

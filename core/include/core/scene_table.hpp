@@ -30,11 +30,16 @@ inline bool valid_scene_name(const char* s) noexcept {
   return n > 0;
 }
 
+// A schedule, timer or rule that should apply a scene stores an ordinary (entity, attr, value)
+// action whose entity is this reserved id and whose attr is the scene's stable id. Real
+// entities are 0x0100.. and chips 1..15, so it never collides.
+inline constexpr std::uint16_t kSceneTarget = 0xFFFE;
+
 template <std::size_t MaxScenes = 8, std::size_t MaxActions = 8>
 class SceneTable {
  public:
   static constexpr std::uint16_t kMagic = 0x5344;  // 'SD'
-  static constexpr std::uint8_t kVersion = 1;
+  static constexpr std::uint8_t kVersion = 2;  // 2: every scene has a stable id
   static constexpr std::size_t kHeaderSize = 6;
   static constexpr std::size_t kNameWire = 24;       // NUL-padded
   static constexpr std::size_t kActionWire = 9;      // entity u16, attr u8, value (type u8, len u8, raw[4])
@@ -51,6 +56,7 @@ class SceneTable {
   struct Scene {
     bool active = false;
     char name[kNameCap] = {};
+    std::uint8_t id = 0;  // stable while the scene exists (1..255); what schedules and rules refer to
     std::uint8_t count = 0;
     Action actions[MaxActions] = {};
   };
@@ -79,7 +85,9 @@ class SceneTable {
     }
     if (slot < 0) return -1;
     Scene& s = items_[slot];
+    const std::uint8_t keep_id = s.active ? s.id : free_id();  // replacing keeps the id
     s = Scene{};
+    s.id = keep_id;
     s.active = true;
     std::strncpy(s.name, name, kNameCap - 1);
     s.count = static_cast<std::uint8_t>(n);
@@ -101,6 +109,11 @@ class SceneTable {
   const Scene* find(const char* name) const noexcept {
     const int slot = find_slot(name);
     return slot < 0 ? nullptr : &items_[slot];
+  }
+
+  const Scene* find_by_id(std::uint8_t id) const noexcept {
+    for (const auto& s : items_) if (s.active && s.id == id) return &s;
+    return nullptr;
   }
 
   const Scene* get(std::size_t slot) const noexcept {
@@ -129,10 +142,10 @@ class SceneTable {
 
   // ---- persistence ---------------------------------------------------------
   // Header (magic u16, version u8, reserved u8, scene count u16); per scene: name[24],
-  // action count u8, then the actions.
+  // id u8, action count u8, then the actions.
   std::size_t serialized_size() const noexcept {
     std::size_t n = kHeaderSize;
-    for (const auto& s : items_) if (s.active) n += kNameWire + 1 + s.count * kActionWire;
+    for (const auto& s : items_) if (s.active) n += kNameWire + 2 + s.count * kActionWire;
     return n;
   }
 
@@ -149,8 +162,9 @@ class SceneTable {
       if (!s.active) continue;
       std::memset(p + off, 0, kNameWire);
       std::memcpy(p + off, s.name, std::strlen(s.name));
-      p[off + kNameWire] = s.count;
-      off += kNameWire + 1;
+      p[off + kNameWire] = s.id;
+      p[off + kNameWire + 1] = s.count;
+      off += kNameWire + 2;
       for (std::size_t i = 0; i < s.count; ++i) {
         const Action& a = s.actions[i];
         detail::put_u16_le(p + off, a.entity_id);
@@ -176,15 +190,18 @@ class SceneTable {
     Scene loaded[MaxScenes];
     std::size_t off = kHeaderSize;
     for (std::size_t i = 0; i < n; ++i) {
-      if (len < off + kNameWire + 1) return false;
+      if (len < off + kNameWire + 2) return false;
       Scene& s = loaded[i];
       std::memcpy(s.name, p + off, kNameCap - 1);
       s.name[kNameCap - 1] = '\0';
       if (p[off + kNameWire - 1] != 0) return false;  // not NUL-terminated within the field
       if (!valid_scene_name(s.name)) return false;
       for (std::size_t k = 0; k < i; ++k) if (std::strcmp(loaded[k].name, s.name) == 0) return false;
-      const std::size_t count = p[off + kNameWire];
-      off += kNameWire + 1;
+      s.id = p[off + kNameWire];
+      if (s.id == 0) return false;
+      for (std::size_t k = 0; k < i; ++k) if (loaded[k].id == s.id) return false;
+      const std::size_t count = p[off + kNameWire + 1];
+      off += kNameWire + 2;
       if (count == 0 || count > MaxActions || len < off + count * kActionWire) return false;
       for (std::size_t a = 0; a < count; ++a, off += kActionWire) {
         const std::uint8_t* e = p + off;
@@ -206,6 +223,15 @@ class SceneTable {
   }
 
  private:
+  // The smallest id (1..255) no scene uses. Safe to reuse after a delete: a scene that something
+  // refers to cannot be deleted.
+  std::uint8_t free_id() const noexcept {
+    for (unsigned id = 1; id <= 255; ++id) {
+      if (find_by_id(static_cast<std::uint8_t>(id)) == nullptr) return static_cast<std::uint8_t>(id);
+    }
+    return 0;  // unreachable: at most MaxScenes <= 255 scenes exist
+  }
+
   int find_slot(const char* name) const noexcept {
     if (name == nullptr) return -1;
     for (std::size_t i = 0; i < MaxScenes; ++i) {

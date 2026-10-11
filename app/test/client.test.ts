@@ -390,6 +390,48 @@ describe('management requests', () => {
     await until(() => c.getSnapshot().scenes.length === 0, 'scene deleted');
   });
 
+  it('schedules, timers and rules can apply a scene, and a scene in use cannot be deleted', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.req('scene.put', { name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] });
+    await c.req('schedule.add', { time: '22:00', days: 'weekdays', scene: 'night' });
+    await c.req('timer.add', { delay_s: 1, scene: 'night' });
+    await c.req('rule.add', { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { scene: 'night' } });
+    await until(() => c.getSnapshot().schedules.length === 1 && c.getSnapshot().timers.length === 1 && c.getSnapshot().rules.length === 1, 'all listed');
+    expect(c.getSnapshot().schedules[0]).toMatchObject({ time: '22:00', days: 'weekdays', scene: 'night' });
+    expect(c.getSnapshot().timers[0]).toMatchObject({ scene: 'night' });
+    expect(c.getSnapshot().rules[0]!.then).toEqual({ scene: 'night' });
+
+    await expect(c.req('scene.del', { name: 'night' })).rejects.toMatchObject({ code: 'bad_args' });
+    await until(() => attrValue(c.getSnapshot(), 0x0101, 0x01) === true, 'the timer applied the scene', 3000);
+    await c.req('schedule.del', { index: 0 });
+    await c.req('rule.del', { index: 0 });
+    await until(() => c.getSnapshot().timers.length === 0, 'timer gone');
+    await c.req('scene.del', { name: 'night' }); // nothing uses it any more
+  });
+
+  it('a scene target is checked: unknown scene, mixed with a device, or malformed', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.req('scene.put', { name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] });
+    const cases: [string, Record<string, unknown>, string][] = [
+      ['schedule.add', { time: '22:00', days: 'daily', scene: 'nope' }, 'not_found'],
+      ['schedule.add', { time: '22:00', days: 'daily', scene: 'night', entity: 0x0100 }, 'bad_args'],
+      ['schedule.add', { time: '22:00', days: 'daily', scene: 'night', action: 'on' }, 'bad_args'],
+      ['schedule.add', { time: '22:00', days: 'daily', scene: 'Bad Name' }, 'bad_args'],
+      ['timer.add', { delay_s: 5, scene: 'nope' }, 'not_found'],
+      ['timer.add', { delay_s: 5, scene: 'night', entity: 0x0100 }, 'bad_args'],
+      ['rule.add', { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { scene: 'nope' } }, 'not_found'],
+      ['rule.add', { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { scene: 'night', entity: 0x0100 } }, 'bad_args'],
+    ];
+    for (const [op, args, code] of cases) {
+      await expect(c.req(op, args)).rejects.toMatchObject({ code });
+    }
+    expect([hub.schedules.length, hub.timersCount(), hub.rules.length]).toEqual([0, 0, 0]);
+  });
+
   it('scenes: bad input gets specific codes and stores nothing', async () => {
     const c = client();
     c.connect();

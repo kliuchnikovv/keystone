@@ -5,7 +5,7 @@ import {
   type AttrOption, type ConditionForm, type RuleForm,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
-import type { Action, CmpOp, Days, Entity, Weekday } from '../protocol/messages';
+import type { Action, CmpOp, Days, Entity, Scene, Weekday } from '../protocol/messages';
 import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
 import { useTheme } from './theme';
 
@@ -38,6 +38,29 @@ function ActionChips({ value, onChange }: { value: Action; onChange(a: Action): 
   );
 }
 
+type Target = 'device' | 'scene';
+
+/** "A device" or "A scene": shown only when the hub has scenes. */
+function TargetToggle({ scenes, value, onChange }: { scenes: Scene[]; value: Target; onChange(t: Target): void }) {
+  if (scenes.length === 0) return null;
+  return (
+    <ChipRow>
+      <Chip label="A device" a11y="Target a device" selected={value === 'device'} onPress={() => onChange('device')} />
+      <Chip label="A scene" a11y="Target a scene" selected={value === 'scene'} onPress={() => onChange('scene')} />
+    </ChipRow>
+  );
+}
+
+function SceneChoice({ scenes, value, onChange }: { scenes: Scene[]; value: string | null; onChange(name: string): void }) {
+  return (
+    <ChipRow>
+      {scenes.map((s) => (
+        <Chip key={s.name} label={s.name} a11y={`Scene ${s.name}`} selected={value === s.name} onPress={() => onChange(s.name)} />
+      ))}
+    </ChipRow>
+  );
+}
+
 function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }: {
   title: string; children: React.ReactNode; error: string | null; onCancel(): void; onSave(): void; busy: boolean; saveLabel: string;
 }) {
@@ -57,11 +80,13 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
 
 // ---- schedule ---------------------------------------------------------------------------
 
-export function ScheduleForm({ entities, busy, onSubmit, onCancel }: { entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+export function ScheduleForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const [time, setTime] = useState('');
   const [days, setDays] = useState<Days>('daily');
   const [entity, setEntity] = useState<number | null>(null);
   const [action, setAction] = useState<Action>('off');
+  const [target, setTarget] = useState<Target>('device');
+  const [scene, setScene] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const custom = Array.isArray(days);
@@ -71,7 +96,7 @@ export function ScheduleForm({ entities, busy, onSubmit, onCancel }: { entities:
   };
 
   const save = async () => {
-    const r = scheduleRequest({ time, days, entity, action });
+    const r = scheduleRequest({ time, days, entity, action, scene: target === 'scene' ? scene ?? '' : null });
     if (!r.ok) return setError(r.error);
     setError(null);
     await onSubmit(r.value);
@@ -99,26 +124,37 @@ export function ScheduleForm({ entities, busy, onSubmit, onCancel }: { entities:
           </View>
         )}
       </Field>
-      <Field label="Device">
-        <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
-      </Field>
-      <Field label="Do">
-        <ActionChips value={action} onChange={setAction} />
-      </Field>
+      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
+      {target === 'scene' ? (
+        <Field label="Scene">
+          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
+        </Field>
+      ) : (
+        <>
+          <Field label="Device">
+            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
+          </Field>
+          <Field label="Do">
+            <ActionChips value={action} onChange={setAction} />
+          </Field>
+        </>
+      )}
     </FormShell>
   );
 }
 
 // ---- timer ------------------------------------------------------------------------------
 
-export function TimerForm({ entities, busy, onSubmit, onCancel }: { entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+export function TimerForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const [entity, setEntity] = useState<number | null>(null);
   const [action, setAction] = useState<Action>('off');
   const [minutes, setMinutes] = useState('');
+  const [target, setTarget] = useState<Target>('device');
+  const [scene, setScene] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const save = async () => {
-    const r = timerRequest({ entity, action, minutes });
+    const r = timerRequest({ entity, action, minutes, scene: target === 'scene' ? scene ?? '' : null });
     if (!r.ok) return setError(r.error);
     setError(null);
     await onSubmit(r.value);
@@ -126,12 +162,21 @@ export function TimerForm({ entities, busy, onSubmit, onCancel }: { entities: En
 
   return (
     <FormShell title="New timer" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Start timer">
-      <Field label="Device">
-        <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
-      </Field>
-      <Field label="Then">
-        <ActionChips value={action} onChange={setAction} />
-      </Field>
+      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
+      {target === 'scene' ? (
+        <Field label="Scene">
+          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
+        </Field>
+      ) : (
+        <>
+          <Field label="Device">
+            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
+          </Field>
+          <Field label="Then">
+            <ActionChips value={action} onChange={setAction} />
+          </Field>
+        </>
+      )}
       <Field label="After (minutes)">
         <ChipRow>
           {['5', '15', '30', '60'].map((m) => (
@@ -197,7 +242,7 @@ function ConditionEditor({ name, options, value, onChange, allowAny }: { name: s
 
 const EMPTY: ConditionForm = { option: null, op: '==', value: '' };
 
-export function RuleFormView({ entities, busy, onSubmit, onCancel }: { entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+export function RuleFormView({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const t = useTheme();
   const all = attrOptions(entities);
   const writable = attrOptions(entities, { writable: true });
@@ -210,12 +255,14 @@ export function RuleFormView({ entities, busy, onSubmit, onCancel }: { entities:
   const [useAnd, setUseAnd] = useState(false);
   const [and, setAnd] = useState<ConditionForm>({ ...EMPTY, op: '>' });
   const [cooldown, setCooldown] = useState('');
+  const [thenTarget, setThenTarget] = useState<Target>('device');
+  const [thenScene, setThenScene] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const save = async () => {
     const form: RuleForm = {
       when,
-      then,
+      then: { ...then, scene: thenTarget === 'scene' ? thenScene ?? '' : null },
       between: useWindow ? { from, to } : null,
       and: useAnd ? and : null,
       cooldown,
@@ -231,6 +278,12 @@ export function RuleFormView({ entities, busy, onSubmit, onCancel }: { entities:
       <Field label="When">
         <ConditionEditor name="When" options={all} value={when} onChange={setWhen} allowAny />
       </Field>
+      <TargetToggle scenes={scenes} value={thenTarget} onChange={setThenTarget} />
+      {thenTarget === 'scene' ? (
+        <Field label="Then apply scene">
+          <SceneChoice scenes={scenes} value={thenScene} onChange={setThenScene} />
+        </Field>
+      ) : (
       <Field label="Then set">
         <Picker
           label="Then attribute"
@@ -245,6 +298,7 @@ export function RuleFormView({ entities, busy, onSubmit, onCancel }: { entities:
           <ValueField scope="Then" option={then.option} value={then.value} onChange={(v) => setThen({ ...then, value: v })} />
         </View>
       </Field>
+      )}
 
       <View style={{ marginTop: 14 }}>
         <Button kind="plain" label={more ? 'Fewer options' : 'More options'} onPress={() => setMore((m) => !m)} />

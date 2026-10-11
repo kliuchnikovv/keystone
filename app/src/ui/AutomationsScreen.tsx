@@ -68,7 +68,7 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'schedules' && (
           <>
             {adding ? (
-              <ScheduleForm entities={home.entities} busy={commands.busy} onSubmit={add('schedule.add')} onCancel={() => setAdding(false)} />
+              <ScheduleForm entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('schedule.add')} onCancel={() => setAdding(false)} />
             ) : (
               <Button label="Add schedule" onPress={() => setAdding(true)} />
             )}
@@ -85,7 +85,7 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'timers' && (
           <>
             {adding ? (
-              <TimerForm entities={home.entities} busy={commands.busy} onSubmit={add('timer.add')} onCancel={() => setAdding(false)} />
+              <TimerForm entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('timer.add')} onCancel={() => setAdding(false)} />
             ) : (
               <Button label="Add timer" onPress={() => setAdding(true)} />
             )}
@@ -102,7 +102,7 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'rules' && (
           <>
             {adding ? (
-              <RuleFormView entities={home.entities} busy={commands.busy} onSubmit={add('rule.add')} onCancel={() => setAdding(false)} />
+              <RuleFormView entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('rule.add')} onCancel={() => setAdding(false)} />
             ) : (
               <Button label="Add rule" onPress={() => setAdding(true)} />
             )}

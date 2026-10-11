@@ -637,6 +637,27 @@ using Scenes = core::SceneTable<8, 8>;
 constexpr std::size_t kSceneBlobMax =
     Scenes::kHeaderSize + 8 * (Scenes::kNameWire + 1 + 8 * Scenes::kActionWire);
 
+// The scene store is edited and read only by the main loop (console, app requests, schedules, timers).
+// Rules fire in the UART task, so they only queue the scene id (g_scene_q) and the main loop applies it.
+Scenes* g_scenes = nullptr;
+QueueHandle_t g_scene_q = nullptr;
+
+bool rule_action_hook(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& /*v*/,
+                      std::uint32_t /*now*/) {
+  if (entity != core::kSceneTarget) return false;
+  if (g_scene_q == nullptr || xQueueSend(g_scene_q, &attr, 0) != pdTRUE) {
+    ESP_LOGW(kTag, "rule: scene queue full, scene %u not applied", static_cast<unsigned>(attr));
+  }
+  return true;  // handled either way: it is not a command for an entity
+}
+
+// The name of the scene an action points at, or nullptr (not a scene action / scene gone).
+const char* scene_name_for(std::uint16_t entity, std::uint8_t attr) {
+  if (entity != core::kSceneTarget || g_scenes == nullptr) return nullptr;
+  const auto* sc = g_scenes->find_by_id(attr);
+  return sc != nullptr ? sc->name : nullptr;
+}
+
 void persist_scenes(const Scenes& scenes) {
   nvs_handle_t h;
   if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
@@ -855,6 +876,7 @@ const char* kRuleUsage =
     "  rule                     - list rules\n"
     "  rule add <entity> <attr> <op> <value> then <entity> <attr> <value>\n"
     "  rule add <entity> <attr> any then <entity> <attr> <value>   (any change)\n"
+    "  rule add <entity> <attr> <op> <value> then scene <name>     (apply a scene)\n"
     "  rule del <n>\n"
     "  optional, after the action (any order):\n"
     "    between HH:MM-HH:MM      local time window (may wrap midnight)\n"
@@ -877,8 +899,14 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
       const core::Rule* ru = rules.rule_at(i);
       char t[48], a[48], ov[24], av[24];
       fmt_target(t, sizeof(t), reg, ru->trigger_entity, ru->trigger_attr);
-      fmt_target(a, sizeof(a), reg, ru->action_entity, ru->action_attr);
-      fmt_value(av, sizeof(av), ru->action_value.type, ru->action_value);
+      if (ru->action_entity == core::kSceneTarget) {
+        const char* sn = scene_name_for(ru->action_entity, ru->action_attr);
+        std::snprintf(a, sizeof(a), "scene %s", sn != nullptr ? sn : "?");
+        av[0] = '\0';
+      } else {
+        fmt_target(a, sizeof(a), reg, ru->action_entity, ru->action_attr);
+        fmt_value(av, sizeof(av), ru->action_value.type, ru->action_value);
+      }
       if (ru->match != nullptr) {
         std::snprintf(ov, sizeof(ov), "<builtin>");
       } else if (ru->op == core::CmpOp::Always) {
@@ -887,7 +915,7 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
         fmt_value(ov, sizeof(ov), ru->operand.type, ru->operand);
       }
       off += static_cast<std::size_t>(std::snprintf(
-          out + off, cap - off, "  #%u  %s %s %s  ->  %s = %s",
+          out + off, cap - off, ru->action_entity == core::kSceneTarget ? "  #%u  %s %s %s  ->  %s%s" : "  #%u  %s %s %s  ->  %s = %s",
           static_cast<unsigned>(i), t, op_str(ru->op), ov, a, av));
       if (ru->window_start != core::kNoWindow && off < cap) {
         off += static_cast<std::size_t>(std::snprintf(
@@ -923,10 +951,11 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
     return;
   }
 
-  if (std::strcmp(argv[1], "add") == 0 && argc >= 9) {
-    const bool any = std::strcmp(argv[4], "any") == 0;
+  if (std::strcmp(argv[1], "add") == 0 && argc >= 8) {
+    const bool any = argc > 4 && std::strcmp(argv[4], "any") == 0;
     const int base = any ? 5 : 6;  // index of "then"
-    if (argc < base + 4 || std::strcmp(argv[base], "then") != 0) {
+    const bool to_scene = argc > base + 1 && std::strcmp(argv[base], "then") == 0 && std::strcmp(argv[base + 1], "scene") == 0;
+    if (argc < base + (to_scene ? 3 : 4) || std::strcmp(argv[base], "then") != 0) {
       std::snprintf(out, cap, "%s", kRuleUsage);
       return;
     }
@@ -954,21 +983,34 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
       std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[5]);
       return;
     }
-    if (!reg.resolve(argv[base + 1], aid) || reg.find(aid) == nullptr) {
-      std::snprintf(out, cap, "%s: action entity not found\n", argv[base + 1]);
-      return;
-    }
-    if (!parse_attr(argv[base + 2], ru.action_attr) || !reg.value_type_of(aid, ru.action_attr, avt)) {
-      std::snprintf(out, cap, "%s: action attribute unknown for that entity\n", argv[base + 2]);
-      return;
-    }
-    ru.action_entity = aid;
-    if (!parse_value(argv[base + 3], avt, ru.action_value)) {
-      std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[base + 3]);
-      return;
+    int tail_from = base + 4;  // first word after the action
+    if (to_scene) {
+      const auto* sc = g_scenes != nullptr ? g_scenes->find(argv[base + 2]) : nullptr;
+      if (sc == nullptr) {
+        std::snprintf(out, cap, "%s: no such scene\n", argv[base + 2]);
+        return;
+      }
+      ru.action_entity = core::kSceneTarget;
+      ru.action_attr = sc->id;
+      ru.action_value = hubproto::Value::make_bool(true);
+      tail_from = base + 3;
+    } else {
+      if (!reg.resolve(argv[base + 1], aid) || reg.find(aid) == nullptr) {
+        std::snprintf(out, cap, "%s: action entity not found\n", argv[base + 1]);
+        return;
+      }
+      if (!parse_attr(argv[base + 2], ru.action_attr) || !reg.value_type_of(aid, ru.action_attr, avt)) {
+        std::snprintf(out, cap, "%s: action attribute unknown for that entity\n", argv[base + 2]);
+        return;
+      }
+      ru.action_entity = aid;
+      if (!parse_value(argv[base + 3], avt, ru.action_value)) {
+        std::snprintf(out, cap, "%s: bad value for that attribute\n", argv[base + 3]);
+        return;
+      }
     }
     // Optional constraints after the action, in any order.
-    for (int k = base + 4; k < argc;) {
+    for (int k = tail_from; k < argc;) {
       if (std::strcmp(argv[k], "between") == 0 && k + 1 < argc) {
         if (!parse_window(argv[k + 1], ru.window_start, ru.window_end)) {
           std::snprintf(out, cap, "%s: bad window (use HH:MM-HH:MM, start != end)\n", argv[k + 1]);
@@ -1089,9 +1131,29 @@ const char* timer_action_text(const hubproto::Value& v) {
 
 // Send a stored action (timer or schedule). A "toggle" is resolved against the live
 // state; an unknown state means there is nothing to flip, so it is skipped.
+// Apply a scene by id: every action as an ordinary command. Main loop only.
+void run_scene(Dispatcher& disp, Registry& reg, std::uint8_t scene_id, std::uint32_t now, const char* kind) {
+  const auto* sc = g_scenes != nullptr ? g_scenes->find_by_id(scene_id) : nullptr;
+  if (sc == nullptr) {
+    ESP_LOGW(kTag, "%s: scene %u no longer exists", kind, static_cast<unsigned>(scene_id));
+    return;
+  }
+  const auto res = core::app::apply_scene(reg, *g_scenes, sc->name,
+                                          [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
+                                            std::uint16_t seq = 0;
+                                            return disp.send(e, a, v, now, seq);
+                                          });
+  ESP_LOGI(kTag, "%s applied scene %s: %u sent, %u skipped", kind, sc->name,
+           static_cast<unsigned>(res.sent), static_cast<unsigned>(res.skipped));
+}
+
 void run_action(Dispatcher& disp, Registry& reg, std::uint32_t now, const char* kind,
                 std::size_t slot, std::uint16_t entity_id, std::uint8_t attr_id,
                 const hubproto::Value& val) {
+  if (entity_id == core::kSceneTarget) {
+    run_scene(disp, reg, attr_id, now, kind);
+    return;
+  }
   hubproto::Value v = val;
   if (is_toggle(val)) {
     hubproto::Value cur{};
@@ -1149,7 +1211,8 @@ const char* days_text(std::uint8_t mask, char* buf, std::size_t cap) {
 // at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,...]
 int cmd_at(int argc, char** argv) {
   static const char* kUsage =
-      "usage: at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n";
+      "usage: at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n"
+      "       at <HH:MM> scene <name> [days]\n";
   if (argc < 4 || argc > 5) { printf("%s", kUsage); return 1; }
   int hh = 0, mm = 0;
   char tail = 0;
@@ -1158,8 +1221,9 @@ int cmd_at(int argc, char** argv) {
     printf("bad time '%s' (use HH:MM, 24 h, local time — see `tz`)\n", argv[1]);
     return 1;
   }
+  const bool is_scene = std::strcmp(argv[2], "scene") == 0;
   const bool toggle = std::strcmp(argv[2], "toggle") == 0;
-  if (!toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
+  if (!is_scene && !toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
     printf("%s", kUsage);
     return 1;
   }
@@ -1173,7 +1237,7 @@ int cmd_at(int argc, char** argv) {
   r.kind = REQ_AT;
   r.target = argv[3];
   r.val = std::strcmp(argv[2], "on") == 0;
-  r.idx = toggle ? 1 : 0;
+  r.idx = is_scene ? 2 : toggle ? 1 : 0;  // REQ_AT: 2 = apply the scene named by `target`
   r.delay_ms = static_cast<std::uint32_t>(hh * 60 + mm);  // minute of day
   r.id = days;                                           // weekday mask
   r.out = buf;
@@ -1218,11 +1282,12 @@ int cmd_unschedule(int argc, char** argv) {
 }
 
 int cmd_in(int argc, char** argv) {
-  if (argc < 4) { printf("usage: in <sec> <on|off|toggle> <id_or_name>\n"); return 1; }
+  if (argc < 4) { printf("usage: in <sec> <on|off|toggle> <id_or_name>\n       in <sec> scene <name>\n"); return 1; }
   const long sec = std::strtol(argv[1], nullptr, 10);
+  const bool is_scene = std::strcmp(argv[2], "scene") == 0;
   const bool toggle = std::strcmp(argv[2], "toggle") == 0;
-  if (!toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
-    printf("usage: in <sec> <on|off|toggle> <id_or_name>\n");
+  if (!is_scene && !toggle && std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0) {
+    printf("usage: in <sec> <on|off|toggle> <id_or_name>\n       in <sec> scene <name>\n");
     return 1;
   }
   const bool on = std::strcmp(argv[2], "on") == 0;
@@ -1231,7 +1296,7 @@ int cmd_in(int argc, char** argv) {
   r.kind = REQ_TIMER;
   r.target = argv[3];
   r.val = on;
-  r.idx = toggle ? 1 : 0;  // REQ_TIMER: 1 = toggle
+  r.idx = is_scene ? 2 : toggle ? 1 : 0;  // REQ_TIMER: 1 = toggle, 2 = apply the scene named by `target`
   r.delay_ms = static_cast<std::uint32_t>(sec) * 1000u;
   r.out = buf;
   r.out_cap = sizeof(buf);
@@ -1788,16 +1853,21 @@ struct AppSource {
       case core::app::Section::Chips:
         core::app::write_chip(w, app_chip_view(chips[i], reg, coord));
         break;
-      case core::app::Section::Rules:
-        core::app::write_rule(w, i, *rules.rule_at(i));
+      case core::app::Section::Rules: {
+        const auto* ru = rules.rule_at(i);
+        core::app::write_rule(w, i, *ru, scene_name_for(ru->action_entity, ru->action_attr));
         break;
-      case core::app::Section::Schedules:
-        core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]));
+      }
+      case core::app::Section::Schedules: {
+        const auto* sc = sched.get(sched_slots[i]);
+        core::app::write_schedule(w, sched_slots[i], *sc, scene_name_for(sc->entity_id, sc->attr_id));
         break;
+      }
       case core::app::Section::Timers: {
         const auto* tm = timers.get(timer_slots[i]);
-        core::app::write_timer(w, core::app::TimerView{timer_slots[i], tm->entity_id, tm->attr_id,
-                                                       tm->value, app_timer_left_s(*tm, now)});
+        core::app::write_timer(w, core::app::TimerView{timer_slots[i], tm->entity_id, tm->attr_id, tm->value,
+                                                       app_timer_left_s(*tm, now),
+                                                       scene_name_for(tm->entity_id, tm->attr_id)});
         break;
       }
       case core::app::Section::Scenes:
@@ -1832,12 +1902,13 @@ struct AppSource {
     char tmp[512];
     for (std::size_t i = 0; i < rules.rule_count(); ++i) {
       core::JsonWriter w(tmp, sizeof(tmp));
-      core::app::write_rule(w, i, *rules.rule_at(i));
+      core::app::write_rule(w, i, *rules.rule_at(i), scene_name_for(rules.rule_at(i)->action_entity, rules.rule_at(i)->action_attr));
       mix(tmp, w.size());
     }
     for (std::size_t i = 0; i < n_sched; ++i) {
       core::JsonWriter w(tmp, sizeof(tmp));
-      core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]));
+      core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]),
+                                scene_name_for(sched.get(sched_slots[i])->entity_id, sched.get(sched_slots[i])->attr_id));
       mix(tmp, w.size());
     }
     char big[1024];
@@ -1950,13 +2021,13 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     o = name_clear(reg, reader, m.args);
     if (o.ok) persist_names(reg.names());
   } else if (!std::strcmp(op, "rule.add")) {
-    o = rule_add(reg, rules, reader, m.args);
+    o = rule_add(reg, scenes, rules, reader, m.args);
     if (o.ok) persist_rules(rules);
   } else if (!std::strcmp(op, "rule.del")) {
     o = rule_del(rules, reader, m.args);
     if (o.ok) persist_rules(rules);
   } else if (!std::strcmp(op, "schedule.add")) {
-    o = schedule_add(reg, sched, reader, m.args);
+    o = schedule_add(reg, scenes, sched, reader, m.args);
     if (o.ok) persist_schedules(sched);
   } else if (!std::strcmp(op, "schedule.del")) {
     o = schedule_del(sched, reader, m.args);
@@ -1964,7 +2035,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "timer.add")) {
     time_t epoch = 0;
     if (s_time_synced) time(&epoch);
-    o = timer_add(reg, timers, reader, m.args, now, static_cast<std::uint64_t>(epoch));
+    o = timer_add(reg, scenes, timers, reader, m.args, now, static_cast<std::uint64_t>(epoch));
     if (o.ok) persist_timers(timers, now);
   } else if (!std::strcmp(op, "timer.cancel")) {
     o = timer_cancel(timers, reader, m.args);
@@ -1973,7 +2044,19 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     o = scene_put(reg, scenes, reader, m.args);
     if (o.ok) persist_scenes(scenes);
   } else if (!std::strcmp(op, "scene.del")) {
-    o = scene_del(scenes, reader, m.args);
+    o = scene_del(scenes, reader, m.args, [&](std::uint8_t id) {
+      for (std::size_t i = 0; i < 8; ++i) {
+        const auto* s = sched.get(i);
+        if (s != nullptr && s->entity_id == core::kSceneTarget && s->attr_id == id) return true;
+        const auto* t = timers.get(i);
+        if (t != nullptr && t->entity_id == core::kSceneTarget && t->attr_id == id) return true;
+      }
+      for (std::size_t i = 0; i < rules.rule_count(); ++i) {
+        const auto* ru = rules.rule_at(i);
+        if (ru->action_entity == core::kSceneTarget && ru->action_attr == id) return true;
+      }
+      return false;
+    });
     if (o.ok) persist_scenes(scenes);
   } else if (!std::strcmp(op, "scene.apply")) {
     o = scene_apply(reg, scenes, reader, m.args, [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
@@ -2277,6 +2360,9 @@ extern "C" void app_main(void) {
   // Scenes: named groups of actions (`scene`), applied from the console or the app.
   static Scenes scene_store;
   restore_scenes(scene_store);
+  g_scenes = &scene_store;
+  g_scene_q = xQueueCreate(8, sizeof(std::uint8_t));
+  rules.set_action_hook(&rule_action_hook, nullptr);
 
   // App protocol: live events from the UART RX task, CMD_ACK bookkeeping, and the
   // server itself (only when a token has been set with `webtoken`).
@@ -2432,6 +2518,14 @@ extern "C" void app_main(void) {
       if (n > 0) persist_schedules(schedule_table);  // keeps last_fired_day across reboots
     }
 
+    // Scenes that rules asked for (queued by the rule hook in the UART task).
+    {
+      std::uint8_t scene_id = 0;
+      for (int n = 0; n < 4 && xQueueReceive(g_scene_q, &scene_id, 0) == pdTRUE; ++n) {
+        run_scene(disp, reg, scene_id, t, "rule");
+      }
+    }
+
     // ---- App protocol: live state, structural resync, chip health, inbound commands ----
     {
       AppEvent ev;
@@ -2583,15 +2677,25 @@ extern "C" void app_main(void) {
         }
         case REQ_TIMER: {
           std::uint16_t id = 0;
-          if (!reg.resolve(r->target, id) || reg.find(id) == nullptr) {
+          std::uint8_t tattr = kOnOffAttr;
+          if (r->idx == 2) {  // a scene
+            const auto* sc = scene_store.find(r->target);
+            if (sc == nullptr) {
+              std::snprintf(r->out, r->out_cap, "%s: no such scene\n", r->target);
+              break;
+            }
+            id = core::kSceneTarget;
+            tattr = sc->id;
+          } else if (!reg.resolve(r->target, id) || reg.find(id) == nullptr) {
             std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
             break;
           }
           time_t cur_epoch = 0;
           if (s_time_synced) time(&cur_epoch);
           const hubproto::Value action =
-              r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
-          int slot = timer_table.schedule(id, kOnOffAttr, action,
+              r->idx == 2 ? hubproto::Value::make_bool(true)
+              : r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
+          int slot = timer_table.schedule(id, tattr, action,
                                           r->delay_ms, t,
                                           static_cast<std::uint64_t>(cur_epoch));
           if (slot < 0) {
@@ -2599,7 +2703,10 @@ extern "C" void app_main(void) {
           } else {
             persist_timers(timer_table, t);
             const char* name = reg.name_of(id);
-            if (name != nullptr) {
+            if (id == core::kSceneTarget) {
+              std::snprintf(r->out, r->out_cap, "timer #%d: scene %s in %us\n", slot, r->target,
+                            static_cast<unsigned>(r->delay_ms / 1000u));
+            } else if (name != nullptr) {
               std::snprintf(r->out, r->out_cap,
                             "timer #%d: 0x%04x (%s) -> %s in %us\n", slot,
                             static_cast<unsigned>(id), name, timer_action_text(action),
@@ -2631,7 +2738,12 @@ extern "C" void app_main(void) {
               left = rem > 0 ? static_cast<std::uint32_t>(rem / 1000) : 0;
             }
             const char* name = reg.name_of(tm->entity_id);
-            if (name != nullptr) {
+            if (tm->entity_id == core::kSceneTarget) {
+              const char* sn = scene_name_for(tm->entity_id, tm->attr_id);
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "#%u: scene %s in %us\n", static_cast<unsigned>(i),
+                  sn != nullptr ? sn : "?", static_cast<unsigned>(left)));
+            } else if (name != nullptr) {
               off += static_cast<std::size_t>(std::snprintf(
                   r->out + off, r->out_cap - off, "#%u: 0x%04x (%s) -> %s in %us\n",
                   static_cast<unsigned>(i), static_cast<unsigned>(tm->entity_id), name,
@@ -2658,14 +2770,24 @@ extern "C" void app_main(void) {
         }
         case REQ_AT: {
           std::uint16_t id = 0;
-          if (!reg.resolve(r->target, id) || reg.find(id) == nullptr) {
+          std::uint8_t sattr = kOnOffAttr;
+          if (r->idx == 2) {  // a scene
+            const auto* sc = scene_store.find(r->target);
+            if (sc == nullptr) {
+              std::snprintf(r->out, r->out_cap, "%s: no such scene\n", r->target);
+              break;
+            }
+            id = core::kSceneTarget;
+            sattr = sc->id;
+          } else if (!reg.resolve(r->target, id) || reg.find(id) == nullptr) {
             std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
             break;
           }
           const hubproto::Value action =
-              r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
+              r->idx == 2 ? hubproto::Value::make_bool(true)
+              : r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
           const int minute = static_cast<int>(r->delay_ms);
-          const int slot = schedule_table.add(id, kOnOffAttr, action, minute / 60, minute % 60,
+          const int slot = schedule_table.add(id, sattr, action, minute / 60, minute % 60,
                                               static_cast<std::uint8_t>(r->id));
           if (slot < 0) {
             std::snprintf(r->out, r->out_cap, "no free schedule slot\n");
@@ -2673,6 +2795,12 @@ extern "C" void app_main(void) {
           }
           persist_schedules(schedule_table);
           char dbuf[40];
+          if (id == core::kSceneTarget) {
+            std::snprintf(r->out, r->out_cap, "schedule #%d: %02d:%02d %s scene %s%s\n", slot, minute / 60,
+                          minute % 60, days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)), r->target,
+                          s_time_synced ? "" : " (clock not synced yet — paused until it is)");
+            break;
+          }
           std::snprintf(r->out, r->out_cap, "schedule #%d: %02d:%02d %s 0x%04x -> %s%s\n", slot,
                         minute / 60, minute % 60,
                         days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)),
@@ -2688,6 +2816,14 @@ extern "C" void app_main(void) {
             if (s == nullptr) continue;
             any = true;
             char dbuf[40];
+            if (s->entity_id == core::kSceneTarget) {
+              const char* sn = scene_name_for(s->entity_id, s->attr_id);
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "#%u: %02u:%02u %s  scene %s\n", static_cast<unsigned>(i),
+                  static_cast<unsigned>(s->minute_of_day / 60), static_cast<unsigned>(s->minute_of_day % 60),
+                  days_text(s->weekdays, dbuf, sizeof(dbuf)), sn != nullptr ? sn : "?"));
+              continue;
+            }
             const char* name = reg.name_of(s->entity_id);
             off += static_cast<std::size_t>(std::snprintf(
                 r->out + off, r->out_cap - off, "#%u: %02u:%02u %s  0x%04x%s%s%s -> %s\n",
@@ -2912,8 +3048,25 @@ extern "C" void app_main(void) {
             if (off == 0) say("no scenes\n");
           } else if (std::strcmp(argv[1], "del") == 0) {
             if (argc != 3) say("usage: scene del <name>\n");
-            else if (!scene_store.remove(argv[2])) say("%s: no such scene\n", argv[2]);
-            else { persist_scenes(scene_store); say("deleted scene %s\n", argv[2]); }
+            else {
+              const auto* sc = scene_store.find(argv[2]);
+              bool used = false;
+              if (sc != nullptr) {
+                for (std::size_t i = 0; i < 8; ++i) {
+                  const auto* sd = schedule_table.get(i);
+                  const auto* tm = timer_table.get(i);
+                  used = used || (sd != nullptr && sd->entity_id == core::kSceneTarget && sd->attr_id == sc->id) ||
+                         (tm != nullptr && tm->entity_id == core::kSceneTarget && tm->attr_id == sc->id);
+                }
+                for (std::size_t i = 0; i < rules.rule_count(); ++i) {
+                  const auto* ru = rules.rule_at(i);
+                  used = used || (ru->action_entity == core::kSceneTarget && ru->action_attr == sc->id);
+                }
+              }
+              if (sc == nullptr) say("%s: no such scene\n", argv[2]);
+              else if (used) say("%s is used by a schedule, timer or rule; remove that first\n", argv[2]);
+              else { scene_store.remove(argv[2]); persist_scenes(scene_store); say("deleted scene %s\n", argv[2]); }
+            }
           } else if (std::strcmp(argv[1], "add") == 0) {
             const int triples = (argc - 3) / 3;
             if (argc < 6 || (argc - 3) % 3 != 0 || triples > 8) {

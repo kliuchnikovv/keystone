@@ -40,8 +40,10 @@ one predicate, one action). To make rules richer:
 - ~~**Scenes**~~ ✅ done (`core::SceneTable`, NVS key `scenes`, up to 8 scenes of 8 actions):
   console `scene`, `scene add <name> <id> <attr> <value> …`, `scene <name>`, `scene del <name>`;
   app ops `scene.put/del/apply` (protocol doc §5). Applied as ordinary commands, so
-  desired state sees them. Still open: a rule/schedule/timer that applies a scene, Zigbee
-  Groups & Scenes (one radio frame for the whole group), editing a scene in place.
+  desired state sees them. Schedules, timers and rules can apply a scene (`at 22:00 scene night`,
+  `in 60 scene night`, `rule add … then scene night`; the reference is the scene's stable id and a
+  scene in use cannot be deleted). Still open: Zigbee Groups & Scenes (one radio frame for the
+  whole group), editing a scene in place.
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
   the in-code table (SPEC §7 already flags this as a later option).
 

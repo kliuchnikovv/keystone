@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <set>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -44,6 +45,7 @@ struct Home {
   Sched sched;
   Timers timers;
   core::SceneTable<3, 4> scenes;
+  std::set<std::uint8_t> busy_ids;  // scene ids a schedule/timer/rule uses (what the brain computes)
   std::vector<std::string> sent;  // what scene.apply dispatched, as "entity:attr"
 
   Home() {
@@ -67,13 +69,13 @@ struct Home {
   }
   Outcome name_set(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::name_set(reg, r, g); }); }
   Outcome name_clear(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::name_clear(reg, r, g); }); }
-  Outcome rule_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_add(reg, rules, r, g); }); }
+  Outcome rule_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_add(reg, scenes, rules, r, g); }); }
   Outcome rule_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_del(rules, r, g); }); }
-  Outcome sched_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, sched, r, g); }); }
+  Outcome sched_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, scenes, sched, r, g); }); }
   Outcome sched_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_del(sched, r, g); }); }
-  Outcome timer_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::timer_add(reg, timers, r, g, 5000, 1000000); }); }
+  Outcome timer_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::timer_add(reg, scenes, timers, r, g, 5000, 1000000); }); }
   Outcome scene_put(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_put(reg, scenes, r, g); }); }
-  Outcome scene_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_del(scenes, r, g); }); }
+  Outcome scene_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_del(scenes, r, g, [&](std::uint8_t id) { return busy_ids.count(id) != 0; }); }); }
   Outcome scene_apply(const std::string& a, bool accept = true) {
     return call(a, [&](Reader& r, int g) {
       return core::app::scene_apply(reg, scenes, r, g, [&](std::uint16_t e, std::uint8_t at, const Value&) {
@@ -508,4 +510,102 @@ TEST_CASE("write_scene and encode_res_ok_counts") {
   JsonWriter r(buf, sizeof(buf));
   core::app::encode_res_ok_counts(r, 4, 2, 1);
   CHECK(std::string(r.c_str()) == R"({"type":"res","id":4,"ok":true,"result":{"sent":2,"skipped":1}})");
+}
+
+// ---- schedules, timers and rules that apply a scene ------------------------------------
+
+TEST_CASE("a schedule or timer can apply a scene instead of switching one device") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  const std::uint8_t id = h.scenes.find("evening")->id;
+
+  auto o = h.sched_add(R"({"time":"22:00","days":"weekdays","scene":"evening"})");
+  REQUIRE(o.ok);
+  const auto* s = h.sched.get(static_cast<std::size_t>(o.index));
+  REQUIRE(s != nullptr);
+  CHECK(s->entity_id == core::kSceneTarget);
+  CHECK(s->attr_id == id);
+  CHECK(s->minute_of_day == 22 * 60);
+
+  o = h.timer_add(R"({"delay_s":60,"scene":"evening"})");
+  REQUIRE(o.ok);
+  const auto* t = h.timers.get(static_cast<std::size_t>(o.index));
+  REQUIRE(t != nullptr);
+  CHECK(t->entity_id == core::kSceneTarget);
+  CHECK(t->attr_id == id);
+}
+
+TEST_CASE("a scene target is refused when ambiguous, unknown or malformed") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  struct Case { const char* args; Err err; };
+  const Case bad[] = {
+      {R"({"time":"22:00","scene":"evening","entity":256})", Err::BadArgs},
+      {R"({"time":"22:00","scene":"evening","action":"on"})", Err::BadArgs},
+      {R"({"time":"22:00","scene":"nope"})", Err::NotFound},
+      {R"({"time":"22:00","scene":"Bad Name"})", Err::BadArgs},
+      {R"({"time":"22:00","scene":5})", Err::BadArgs},
+      {R"({"time":"22:00"})", Err::BadArgs},  // neither
+  };
+  for (const auto& c : bad) {
+    CAPTURE(c.args);
+    const auto o = h.sched_add(c.args);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == c.err);
+  }
+  CHECK(h.sched.active_count() == 0);
+  CHECK(h.timer_add(R"({"delay_s":5,"scene":"nope"})").err == Err::NotFound);
+  CHECK(h.timers.active_count() == 0);
+}
+
+TEST_CASE("a rule can apply a scene") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  const std::uint8_t id = h.scenes.find("evening")->id;
+  const auto o = h.rule_add(R"({"when":{"entity":258,"attr":80,"op":"==","value":true},"then":{"scene":"evening"},"cooldown_s":30})");
+  REQUIRE(o.ok);
+  const auto* r = h.rules.rule_at(static_cast<std::size_t>(o.index));
+  REQUIRE(r != nullptr);
+  CHECK(r->action_entity == core::kSceneTarget);
+  CHECK(r->action_attr == id);
+
+  for (const char* bad : {R"({"when":{"entity":258,"attr":80,"op":"any"},"then":{"scene":"nope"}})",
+                          R"({"when":{"entity":258,"attr":80,"op":"any"},"then":{"scene":"evening","entity":257}})",
+                          R"({"when":{"entity":258,"attr":80,"op":"any"},"then":{"scene":"evening","value":true}})"}) {
+    CAPTURE(bad);
+    CHECK_FALSE(h.rule_add(bad).ok);
+  }
+  CHECK(h.rules.rule_count() == 1);
+}
+
+TEST_CASE("a scene that something uses cannot be deleted") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  h.busy_ids.insert(h.scenes.find("evening")->id);
+  const auto o = h.scene_del(R"({"name":"evening"})");
+  CHECK_FALSE(o.ok);
+  CHECK(o.err == Err::BadArgs);
+  CHECK(h.scenes.find("evening") != nullptr);
+  h.busy_ids.clear();
+  CHECK(h.scene_del(R"({"name":"evening"})").ok);
+}
+
+TEST_CASE("schedules, timers and rules that apply a scene are written with the scene's name") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  REQUIRE(h.sched_add(R"({"time":"22:00","scene":"evening"})").ok);
+  REQUIRE(h.rule_add(R"({"when":{"entity":258,"attr":80,"op":"any"},"then":{"scene":"evening"}})").ok);
+  char buf[512];
+  JsonWriter w(buf, sizeof(buf));
+  core::app::write_schedule(w, 0, *h.sched.get(0), "evening");
+  CHECK(std::string(w.c_str()) == R"({"index":0,"time":"22:00","days":"daily","scene":"evening"})");
+  JsonWriter t(buf, sizeof(buf));
+  core::app::write_timer(t, core::app::TimerView{1, core::kSceneTarget, 4, Value::make_bool(true), 30, "evening"});
+  CHECK(std::string(t.c_str()) == R"({"index":1,"scene":"evening","left_s":30})");
+  JsonWriter ru(buf, sizeof(buf));
+  core::app::write_rule(ru, 0, *h.rules.rule_at(0), "evening");
+  CHECK(std::string(ru.c_str()).find(R"("then":{"scene":"evening"})") != std::string::npos);
+  JsonWriter gone(buf, sizeof(buf));
+  core::app::write_rule(gone, 0, *h.rules.rule_at(0), nullptr);
+  CHECK(std::string(gone.c_str()).find(R"("then":{"scene":"?"})") != std::string::npos);
 }

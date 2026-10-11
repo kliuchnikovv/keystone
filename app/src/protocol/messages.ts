@@ -59,7 +59,7 @@ export type CmpOp = 'any' | '==' | '!=' | '<' | '<=' | '>' | '>=';
 export interface Rule {
   index: number;
   when: { entity: number; attr: number; op: CmpOp; value?: Value };
-  then: { entity: number; attr: number; value: Value };
+  then: { entity: number; attr: number; value: Value } | { scene: string };
   between?: { from: string; to: string };
   and?: { entity: number; attr: number; op: Exclude<CmpOp, 'any'>; value: Value };
   cooldown_s?: number;
@@ -82,20 +82,23 @@ export interface Scene {
   actions: SceneAction[];
 }
 
+/** What a schedule or timer does: switch one device (`entity`, `attr`, `action`) or apply a scene (`scene`). */
 export interface Schedule {
   index: number;
   time: string;
   days: Days;
-  entity: number;
-  attr: number;
-  action: Action;
+  entity?: number;
+  attr?: number;
+  action?: Action;
+  scene?: string;
 }
 
 export interface Timer {
   index: number;
-  entity: number;
-  attr: number;
-  action: Action;
+  entity?: number;
+  attr?: number;
+  action?: Action;
+  scene?: string;
   left_s: number;
 }
 

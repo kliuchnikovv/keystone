@@ -10,6 +10,7 @@
 
 #include "core/json.hpp"
 #include "core/rule_engine.hpp"
+#include "core/scene_table.hpp"
 #include "core/schedule_table.hpp"
 #include "hubproto/payload.hpp"
 
@@ -436,7 +437,9 @@ inline const char* action_name(const hubproto::Value& v) noexcept {
   return v.as_bool() ? "on" : "off";
 }
 
-inline void write_rule(JsonWriter& w, std::size_t index, const Rule& r) noexcept {
+// `scene` is the name of the scene an action targets (kSceneTarget); the caller resolves the id. A
+// scene action is written as {"scene": "name"} instead of entity/attr/value ("?" if it cannot be resolved).
+inline void write_rule(JsonWriter& w, std::size_t index, const Rule& r, const char* scene = nullptr) noexcept {
   w.begin_object().kv("index", static_cast<std::int64_t>(index));
   w.key("when").begin_object().kv("entity", static_cast<std::int64_t>(r.trigger_entity))
       .kv("attr", static_cast<std::int64_t>(r.trigger_attr)).kv("op", r.match != nullptr ? "any" : cmp_name(r.op));
@@ -445,9 +448,13 @@ inline void write_rule(JsonWriter& w, std::size_t index, const Rule& r) noexcept
     write_value(w, r.operand);
   }
   w.end_object();
-  w.key("then").begin_object().kv("entity", static_cast<std::int64_t>(r.action_entity))
-      .kv("attr", static_cast<std::int64_t>(r.action_attr)).key("value");
-  write_value(w, r.action_value);
+  w.key("then").begin_object();
+  if (r.action_entity == kSceneTarget) {
+    w.kv("scene", scene != nullptr ? scene : "?");
+  } else {
+    w.kv("entity", static_cast<std::int64_t>(r.action_entity)).kv("attr", static_cast<std::int64_t>(r.action_attr)).key("value");
+    write_value(w, r.action_value);
+  }
   w.end_object();
   if (r.window_start != kNoWindow) {
     w.key("between").begin_object().key("from");
@@ -468,7 +475,7 @@ inline void write_rule(JsonWriter& w, std::size_t index, const Rule& r) noexcept
 
 // `S` is ScheduleTable<N>::Schedule (N is irrelevant to the encoding).
 template <typename S>
-void write_schedule(JsonWriter& w, std::size_t index, const S& s) noexcept {
+void write_schedule(JsonWriter& w, std::size_t index, const S& s, const char* scene = nullptr) noexcept {
   w.begin_object().kv("index", static_cast<std::int64_t>(index)).key("time");
   write_hhmm(w, s.minute_of_day);
   w.key("days");
@@ -483,6 +490,10 @@ void write_schedule(JsonWriter& w, std::size_t index, const S& s) noexcept {
     w.begin_array();
     for (int d = 0; d < 7; ++d) if (s.weekdays & (1u << d)) w.str(kDay[d]);
     w.end_array();
+  }
+  if (s.entity_id == kSceneTarget) {
+    w.kv("scene", scene != nullptr ? scene : "?").end_object();
+    return;
   }
   w.kv("entity", static_cast<std::int64_t>(s.entity_id)).kv("attr", static_cast<std::int64_t>(s.attr_id))
       .kv("action", action_name(s.value)).end_object();
@@ -508,12 +519,18 @@ struct TimerView {
   std::uint8_t attr;
   hubproto::Value action;
   std::uint32_t left_s;
+  const char* scene = nullptr;  // name, when `entity` is kSceneTarget
 };
 
 inline void write_timer(JsonWriter& w, const TimerView& t) noexcept {
-  w.begin_object().kv("index", static_cast<std::int64_t>(t.index))
-      .kv("entity", static_cast<std::int64_t>(t.entity)).kv("attr", static_cast<std::int64_t>(t.attr))
-      .kv("action", action_name(t.action)).kv("left_s", t.left_s).end_object();
+  w.begin_object().kv("index", static_cast<std::int64_t>(t.index));
+  if (t.entity == kSceneTarget) {
+    w.kv("scene", t.scene != nullptr ? t.scene : "?");
+  } else {
+    w.kv("entity", static_cast<std::int64_t>(t.entity)).kv("attr", static_cast<std::int64_t>(t.attr))
+        .kv("action", action_name(t.action));
+  }
+  w.kv("left_s", t.left_s).end_object();
 }
 
 // ---- snapshot, chunked to fit a frame --------------------------------------------

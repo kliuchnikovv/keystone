@@ -270,6 +270,63 @@ describe('Rules', () => {
   });
 });
 
+describe('Automations that apply a scene', () => {
+  const night = { name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] };
+
+  it('without scenes the forms offer only devices', async () => {
+    await openApp();
+    await gotoAutomations();
+    click('Add schedule');
+    expect(screen.queryByLabelText('Target a scene')).toBeNull();
+  });
+
+  it('a schedule, a timer and a rule can each target a scene', async () => {
+    hub.scenes.push(night);
+    await openApp();
+    await gotoAutomations();
+
+    click('Add schedule');
+    click('Target a scene');
+    click('Scene night');
+    type('Time', '22:00');
+    click('Save schedule');
+    await screen.findByLabelText('schedule 22:00 · Scene night');
+    expect(hub.schedules[0]).toMatchObject({ time: '22:00', scene: 'night' });
+
+    click('Timers');
+    click('Add timer');
+    click('Target a scene');
+    click('Scene night');
+    click('Preset 5 minutes');
+    click('Start timer');
+    await screen.findByLabelText('timer Scene night');
+    expect(hub.timersCount()).toBe(1);
+
+    click('Rules');
+    click('Add rule');
+    click('Target a scene');
+    click('Scene night');
+    fireEvent.click(screen.getByLabelText('When attribute')); // pick the trigger
+    fireEvent.click(await screen.findByText('Motion sensor 0x0102 · Presence'));
+    click('Save rule');
+    await screen.findByLabelText('rule 1');
+    expect(hub.rules[0]!.then).toEqual({ scene: 'night' });
+    expect(screen.getByLabelText('rule 1').textContent).toContain('apply scene night');
+  });
+
+  it('a scene that something uses cannot be deleted, and the hub says why', async () => {
+    hub.scenes.push(night);
+    hub.schedules.push({ index: 0, time: '22:00', days: 'daily', scene: 'night' });
+    await openApp();
+    click('Automations');
+    await screen.findByLabelText('scene night');
+    click('Delete scene night');
+    click('Delete scene night');
+    expect(await screen.findByText(/scene is used by a schedule, timer or rule/)).toBeTruthy();
+    expect(hub.scenes).toHaveLength(1);
+  });
+});
+
 describe('Scenes', () => {
   it('saves the chosen devices as they are now, shows the scene, and deletes it after a second tap', async () => {
     await openApp();

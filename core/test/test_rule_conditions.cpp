@@ -341,3 +341,52 @@ TEST_CASE("v2 load rejects bad constraints and leaves the rules untouched") {
   CHECK(b.load(good, n));
   CHECK(b.rule_count() == 1);
 }
+
+namespace {
+struct Hook {
+  int calls = 0;
+  std::uint16_t entity = 0;
+  std::uint8_t attr = 0;
+  bool handle = true;
+};
+bool hook_fn(void* c, std::uint16_t e, std::uint8_t a, const Value&, std::uint32_t) {
+  auto* h = static_cast<Hook*>(c);
+  ++h->calls;
+  h->entity = e;
+  h->attr = a;
+  return h->handle;
+}
+}  // namespace
+
+TEST_CASE("the action hook can take over an action; without one, or when it declines, the engine dispatches") {
+  Fixture f;
+  Hook hook;
+  f.eng.set_action_hook(&hook_fn, &hook);
+  core::Rule r = base_rule();
+  r.action_entity = 0xFFFE;  // a scene target
+  r.action_attr = 3;
+  REQUIRE(f.eng.add_rule(r));
+  trigger(f.eng);
+  CHECK(hook.calls == 1);
+  CHECK(hook.entity == 0xFFFE);
+  CHECK(hook.attr == 3);
+  CHECK(f.disp.sent == 0);  // handled: nothing sent
+
+  hook.handle = false;  // declined: normal dispatch
+  f.env.now_ms += 1000;
+  trigger(f.eng);
+  CHECK(hook.calls == 2);
+  CHECK(f.disp.sent == 1);
+}
+
+TEST_CASE("a handled action still starts the cool-down") {
+  Fixture f;
+  Hook hook;
+  f.eng.set_action_hook(&hook_fn, &hook);
+  core::Rule r = base_rule();
+  r.cooldown_s = 60;
+  REQUIRE(f.eng.add_rule(r));
+  trigger(f.eng);
+  trigger(f.eng);  // inside the cool-down
+  CHECK(hook.calls == 1);
+}

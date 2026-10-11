@@ -186,6 +186,40 @@ bool on_off_target(const Reg& reg, const Reader& r, int args, std::uint16_t& ent
   return false;
 }
 
+// What a schedule or timer does: either {entity, action} (on/off/toggle of a switch) or {scene: "name"}
+// (apply that scene). A scene is stored as the reserved target (kSceneTarget, attr = scene id).
+template <typename Reg, typename Scenes, typename Reader>
+bool action_target(const Reg& reg, const Scenes& scenes, const Reader& r, int args, std::uint16_t& entity,
+                   std::uint8_t& attr, hubproto::Value& value, Outcome& fail) {
+  const int sc = r.find(args, "scene");
+  if (sc < 0) {
+    if (!parse_action(r, args, value)) {
+      fail = Outcome::fail(Err::BadArgs, "action: on, off or toggle (or scene)");
+      return false;
+    }
+    attr = kOnOffAttr;
+    return on_off_target(reg, r, args, entity, fail);
+  }
+  if (r.find(args, "entity") >= 0 || r.find(args, "action") >= 0) {
+    fail = Outcome::fail(Err::BadArgs, "scene excludes entity/action");
+    return false;
+  }
+  char name[kMaxNameChars + 2];
+  if (!r.get_string(sc, name, sizeof(name)) || !core::valid_scene_name(name)) {
+    fail = Outcome::fail(Err::BadArgs, "scene: a scene name");
+    return false;
+  }
+  const auto* found = scenes.find(name);
+  if (found == nullptr) {
+    fail = Outcome::fail(Err::NotFound, "no such scene");
+    return false;
+  }
+  entity = core::kSceneTarget;
+  attr = found->id;
+  value = hubproto::Value::make_bool(true);
+  return true;
+}
+
 }  // namespace detail
 
 // ---- names ---------------------------------------------------------------------------
@@ -220,8 +254,8 @@ Outcome name_clear(Reg& reg, const Reader& r, int args) {
 
 // ---- rules ---------------------------------------------------------------------------
 
-template <typename Reg, typename Engine, typename Reader>
-Outcome rule_add(Reg& reg, Engine& rules, const Reader& r, int args) {
+template <typename Reg, typename Scenes, typename Engine, typename Reader>
+Outcome rule_add(Reg& reg, const Scenes& scenes, Engine& rules, const Reader& r, int args) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   Outcome fail;
   Rule ru{};
@@ -244,12 +278,19 @@ Outcome rule_add(Reg& reg, Engine& rules, const Reader& r, int args) {
     return Outcome::fail(Err::BadArgs, "when.value does not fit the attribute");
   }
 
-  // then: a writable attribute of a real device.
-  const AttrState* ts = nullptr;
-  if (!detail::lookup(reg, r, then, false, ru.action_entity, ru.action_attr, ts, fail, "then")) return fail;
-  if ((ts->flags & hubproto::kFlagWritable) == 0) return Outcome::fail(Err::ReadOnly, "then: attribute is read-only");
-  if (!to_value(read_scalar(r, r.find(then, "value")), ts->value_type, ru.action_value)) {
-    return Outcome::fail(Err::BadArgs, "then.value does not fit the attribute");
+  // then: either {scene: "name"} or a writable attribute of a real device.
+  if (r.find(then, "scene") >= 0) {
+    if (r.find(then, "entity") >= 0 || r.find(then, "attr") >= 0 || r.find(then, "value") >= 0) {
+      return Outcome::fail(Err::BadArgs, "then: scene excludes entity/attr/value");
+    }
+    if (!detail::action_target(reg, scenes, r, then, ru.action_entity, ru.action_attr, ru.action_value, fail)) return fail;
+  } else {
+    const AttrState* ts = nullptr;
+    if (!detail::lookup(reg, r, then, false, ru.action_entity, ru.action_attr, ts, fail, "then")) return fail;
+    if ((ts->flags & hubproto::kFlagWritable) == 0) return Outcome::fail(Err::ReadOnly, "then: attribute is read-only");
+    if (!to_value(read_scalar(r, r.find(then, "value")), ts->value_type, ru.action_value)) {
+      return Outcome::fail(Err::BadArgs, "then.value does not fit the attribute");
+    }
   }
 
   const int between = r.find(args, "between");
@@ -301,8 +342,8 @@ Outcome rule_del(Engine& rules, const Reader& r, int args) {
 
 // ---- schedules -----------------------------------------------------------------------
 
-template <typename Reg, typename Sched, typename Reader>
-Outcome schedule_add(Reg& reg, Sched& sched, const Reader& r, int args) {
+template <typename Reg, typename Scenes, typename Sched, typename Reader>
+Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader& r, int args) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   Outcome fail;
   char t[8];
@@ -313,10 +354,10 @@ Outcome schedule_add(Reg& reg, Sched& sched, const Reader& r, int args) {
   std::uint8_t days = kEveryDay;
   if (!detail::parse_days(r, r.find(args, "days"), days)) return Outcome::fail(Err::BadArgs, "days");
   hubproto::Value action{};
-  if (!detail::parse_action(r, args, action)) return Outcome::fail(Err::BadArgs, "action: on, off or toggle");
   std::uint16_t entity = 0;
-  if (!detail::on_off_target(reg, r, args, entity, fail)) return fail;
-  const int slot = sched.add(entity, kOnOffAttr, action, h, m, days);
+  std::uint8_t attr = 0;
+  if (!detail::action_target(reg, scenes, r, args, entity, attr, action, fail)) return fail;
+  const int slot = sched.add(entity, attr, action, h, m, days);
   if (slot < 0) return Outcome::fail(Err::TableFull, "schedule table is full");
   return Outcome::at(slot);
 }
@@ -333,8 +374,8 @@ Outcome schedule_del(Sched& sched, const Reader& r, int args) {
 
 inline constexpr std::int64_t kMaxTimerDelayS = 7 * 24 * 3600;
 
-template <typename Reg, typename Timers, typename Reader>
-Outcome timer_add(Reg& reg, Timers& timers, const Reader& r, int args, std::uint32_t now_ms,
+template <typename Reg, typename Scenes, typename Timers, typename Reader>
+Outcome timer_add(Reg& reg, const Scenes& scenes, Timers& timers, const Reader& r, int args, std::uint32_t now_ms,
                   std::uint64_t now_epoch_s) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   Outcome fail;
@@ -343,10 +384,10 @@ Outcome timer_add(Reg& reg, Timers& timers, const Reader& r, int args, std::uint
     return Outcome::fail(Err::BadArgs, "delay_s: 1..604800");
   }
   hubproto::Value action{};
-  if (!detail::parse_action(r, args, action)) return Outcome::fail(Err::BadArgs, "action: on, off or toggle");
   std::uint16_t entity = 0;
-  if (!detail::on_off_target(reg, r, args, entity, fail)) return fail;
-  const int slot = timers.schedule(entity, kOnOffAttr, action, static_cast<std::uint32_t>(delay) * 1000u,
+  std::uint8_t attr = 0;
+  if (!detail::action_target(reg, scenes, r, args, entity, attr, action, fail)) return fail;
+  const int slot = timers.schedule(entity, attr, action, static_cast<std::uint32_t>(delay) * 1000u,
                                    now_ms, now_epoch_s);
   if (slot < 0) return Outcome::fail(Err::TableFull, "timer table is full");
   return Outcome::at(slot);
@@ -407,12 +448,17 @@ Outcome scene_put(const Reg& reg, Scenes& scenes, const Reader& r, int args) {
   return Outcome::done();
 }
 
-template <typename Scenes, typename Reader>
-Outcome scene_del(Scenes& scenes, const Reader& r, int args) {
+/** `scene.del {name}`. `in_use(id)` says whether a schedule, timer or rule applies the scene: such a
+ *  scene is kept (deleting it would leave them pointing at nothing). */
+template <typename Scenes, typename Reader, typename InUse>
+Outcome scene_del(Scenes& scenes, const Reader& r, int args, InUse&& in_use) {
   Outcome fail;
   char name[kMaxNameChars + 2];
   if (!detail::scene_name(r, args, name, sizeof(name), fail)) return fail;
-  if (!scenes.remove(name)) return Outcome::fail(Err::NotFound, "no such scene");
+  const auto* sc = scenes.find(name);
+  if (sc == nullptr) return Outcome::fail(Err::NotFound, "no such scene");
+  if (in_use(sc->id)) return Outcome::fail(Err::BadArgs, "scene is used by a schedule, timer or rule");
+  scenes.remove(name);
   return Outcome::done();
 }
 

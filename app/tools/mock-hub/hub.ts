@@ -47,6 +47,7 @@ interface TimerEntry {
   entity: number;
   attr: number;
   action: Action;
+  scene?: string;
   dueAt: number;
   handle: ReturnType<typeof setTimeout>;
 }
@@ -450,6 +451,24 @@ export class MockHub {
       }
       case 'timer.add': {
         if (this.timers.length >= MAX_TIMERS) return no('table_full');
+        if (args.scene !== undefined) {
+          const delay = args.delay_s;
+          if (args.entity !== undefined || args.action !== undefined) return no('bad_args', 'scene excludes entity/action');
+          if (typeof args.scene !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(args.scene)) return no('bad_args', 'scene: a scene name');
+          if (!this.scenes.some((s) => s.name === args.scene)) return no('not_found', 'no such scene');
+          if (typeof delay !== 'number' || !Number.isInteger(delay) || delay < 1 || delay > 86_400 * 7) return no('bad_args', 'delay_s');
+          const entry: TimerEntry = {
+            entity: 0xfffe,
+            attr: 0,
+            action: 'on',
+            scene: args.scene,
+            dueAt: Date.now() + delay * 1000,
+            handle: setTimeout(() => this.fireTimer(entry), delay * 1000),
+          };
+          this.timers.push(entry);
+          this.broadcast({ type: 'timers', timers: this.timerList() });
+          return ok({ index: this.timers.length - 1 });
+        }
         const e = this.entities.find((x) => x.id === args.entity);
         const action = args.action;
         const delay = args.delay_s;
@@ -503,6 +522,11 @@ export class MockHub {
       case 'scene.del': {
         const i = this.scenes.findIndex((x) => x.name === args.name);
         if (i < 0) return no('not_found', 'no such scene');
+        const used =
+          this.schedules.some((s) => s.scene === args.name) ||
+          this.timers.some((t) => t.scene === args.name) ||
+          this.rules.some((r) => 'scene' in r.then && r.then.scene === args.name);
+        if (used) return no('bad_args', 'scene is used by a schedule, timer or rule');
         this.scenes.splice(i, 1);
         this.resync();
         return ok();
@@ -510,20 +534,7 @@ export class MockHub {
       case 'scene.apply': {
         const sc = this.scenes.find((x) => x.name === args.name);
         if (!sc) return no('not_found', 'no such scene');
-        let sent = 0;
-        let skipped = 0;
-        for (const a of sc.actions) {
-          const e = this.entities.find((x) => x.id === a.entity);
-          const at = e?.attrs.find((x) => x.id === a.attr);
-          if (e && at && at.flags.includes('w') && this.chips.find((c) => c.id === e.chip)?.status === 'ready') {
-            this.setValue(e.id, at.id, a.value);
-            sent++;
-          } else {
-            skipped++;
-          }
-        }
-        this.scenesApplied.push(sc.name);
-        return ok({ sent, skipped });
+        return ok(this.applyScene(sc));
       }
       case 'pair': {
         let seconds = 180;
@@ -557,17 +568,20 @@ export class MockHub {
   private fireTimer(t: TimerEntry): void {
     const i = this.timers.indexOf(t);
     if (i >= 0) this.timers.splice(i, 1);
-    const a = this.attrOf(t.entity, t.attr);
-    if (a) this.setValue(t.entity, t.attr, t.action === 'toggle' ? !a.value : t.action === 'on');
+    if (t.scene !== undefined) {
+      const sc = this.scenes.find((s) => s.name === t.scene);
+      if (sc) this.applyScene(sc);
+    } else {
+      const a = this.attrOf(t.entity, t.attr);
+      if (a) this.setValue(t.entity, t.attr, t.action === 'toggle' ? !a.value : t.action === 'on');
+    }
     this.broadcast({ type: 'timers', timers: this.timerList() });
   }
 
   private timerList(): Timer[] {
     return this.timers.map((t, index) => ({
       index,
-      entity: t.entity,
-      attr: t.attr,
-      action: t.action,
+      ...(t.scene !== undefined ? { scene: t.scene } : { entity: t.entity, attr: t.attr, action: t.action }),
       left_s: Math.max(0, Math.ceil((t.dueAt - Date.now()) / 1000)),
     }));
   }
@@ -583,13 +597,22 @@ export class MockHub {
     if (typeof whenAttr === 'string') return bad(whenAttr === 'entity' ? 'not_found' : 'not_found', `when: no such ${whenAttr}`);
     if (typeof when.op !== 'string' || !ops.includes(when.op)) return bad('bad_args', 'when.op');
     if (when.op !== 'any' && !valueFits(whenAttr.vt, when.value)) return bad('bad_args', 'when.value does not fit the attribute');
-    const thenAttr = this.lookupAttr(then);
-    if (typeof thenAttr === 'string') return bad('not_found', `then: no such ${thenAttr}`);
-    if (!thenAttr.flags.includes('w')) return bad('read_only', 'then: attribute is read-only');
-    if (!valueFits(thenAttr.vt, then.value)) return bad('bad_args', 'then.value does not fit the attribute');
+    let thenOut: Rule['then'];
+    if (then.scene !== undefined) {
+      if (then.entity !== undefined || then.attr !== undefined || then.value !== undefined) return bad('bad_args', 'then: scene excludes entity/attr/value');
+      if (typeof then.scene !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(then.scene)) return bad('bad_args', 'scene: a scene name');
+      if (!this.scenes.some((s) => s.name === then.scene)) return bad('not_found', 'no such scene');
+      thenOut = { scene: then.scene };
+    } else {
+      const thenAttr = this.lookupAttr(then);
+      if (typeof thenAttr === 'string') return bad('not_found', `then: no such ${thenAttr}`);
+      if (!thenAttr.flags.includes('w')) return bad('read_only', 'then: attribute is read-only');
+      if (!valueFits(thenAttr.vt, then.value)) return bad('bad_args', 'then.value does not fit the attribute');
+      thenOut = then as unknown as Rule['then'];
+    }
     const rule: Omit<Rule, 'index'> = {
       when: when as unknown as Rule['when'],
-      then: then as unknown as Rule['then'],
+      then: thenOut,
     };
     if (a.between !== undefined) {
       const b = a.between as Record<string, unknown>;
@@ -628,6 +651,12 @@ export class MockHub {
       days === 'daily' || days === 'weekdays' || days === 'weekends' ||
       (Array.isArray(days) && days.length > 0 && days.every((d) => names.includes(d)));
     if (!daysOk) return bad('bad_args', 'days');
+    if (a.scene !== undefined) {
+      if (a.entity !== undefined || a.action !== undefined) return bad('bad_args', 'scene excludes entity/action');
+      if (typeof a.scene !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(a.scene)) return bad('bad_args', 'scene: a scene name');
+      if (!this.scenes.some((s) => s.name === a.scene)) return bad('not_found', 'no such scene');
+      return { time: a.time as string, days: days as Days, scene: a.scene };
+    }
     if (a.action !== 'on' && a.action !== 'off' && a.action !== 'toggle') return bad('bad_args', 'action');
     const e = this.entities.find((x) => x.id === a.entity);
     if (!e) return bad('not_found', 'no such entity');
@@ -637,6 +666,24 @@ export class MockHub {
   }
 
   // ---- helpers ----------------------------------------------------------------
+
+  /** Set every action of the scene; an action whose device is gone or whose chip is silent is skipped. */
+  private applyScene(sc: Scene): { sent: number; skipped: number } {
+    let sent = 0;
+    let skipped = 0;
+    for (const a of sc.actions) {
+      const e = this.entities.find((x) => x.id === a.entity);
+      const at = e?.attrs.find((x) => x.id === a.attr);
+      if (e && at && at.flags.includes('w') && this.chips.find((c) => c.id === e.chip)?.status === 'ready') {
+        this.setValue(e.id, at.id, a.value);
+        sent++;
+      } else {
+        skipped++;
+      }
+    }
+    this.scenesApplied.push(sc.name);
+    return { sent, skipped };
+  }
 
   private attrOf(entity: number, attrId: number): Attr | undefined {
     return this.entities.find((e) => e.id === entity)?.attrs.find((a) => a.id === attrId);
