@@ -4,6 +4,7 @@ import type { Commands } from '../hooks/useCommands';
 import type { HomeState } from '../protocol/store';
 import { DeviceCard } from './DeviceCard';
 import { PairingPanel } from './PairingPanel';
+import { ScenesBar } from './ScenesBar';
 import { useTheme } from './theme';
 
 export function DevicesScreen({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -14,7 +15,14 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
       data={devices}
       keyExtractor={(e) => String(e.id)}
       contentContainerStyle={styles.list}
-      ListHeaderComponent={home.status === 'ready' ? <PairingPanel home={home} commands={commands} /> : null}
+      ListHeaderComponent={
+        home.status === 'ready' ? (
+          <>
+            <ScenesBar home={home} commands={commands} />
+            <PairingPanel home={home} commands={commands} />
+          </>
+        ) : null
+      }
       renderItem={({ item }) => (
         <DeviceCard
           entity={item}

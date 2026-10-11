@@ -6,6 +6,7 @@ import type {
   Entity,
   HubInfo,
   Rule,
+  Scene,
   Schedule,
   ServerMessage,
   Timer,
@@ -32,6 +33,7 @@ export interface HomeState {
   rules: Rule[];
   schedules: Schedule[];
   timers: Timer[];
+  scenes: Scene[];
 }
 
 export const initialState: HomeState = {
@@ -43,6 +45,7 @@ export const initialState: HomeState = {
   rules: [],
   schedules: [],
   timers: [],
+  scenes: [],
 };
 
 export function withStatus(s: HomeState, status: ConnectionStatus, error: string | null = null): HomeState {
@@ -70,6 +73,7 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
         rules: [...base.rules, ...(m.rules ?? [])],
         schedules: [...base.schedules, ...(m.schedules ?? [])],
         timers: [...base.timers, ...(m.timers ?? [])],
+        scenes: [...base.scenes, ...(m.scenes ?? [])],
       };
       return (m.last ?? true) ? { ...next, status: 'ready', error: null } : next;
     }

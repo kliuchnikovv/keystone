@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
-  attrOptions, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
+  attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
   nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
@@ -191,5 +191,37 @@ describe('names', () => {
   it('match the hub rule', () => {
     for (const n of ['lamp', 'kitchen_2', 'a'.repeat(23)]) expect(nameProblem(n)).toBeNull();
     for (const n of ['', 'Lamp', '1lamp', '_lamp', 'my lamp', '0x10', 'a'.repeat(24)]) expect(nameProblem(n)).not.toBeNull();
+  });
+});
+
+describe('scenes', () => {
+  it('captureScene stores the writable settings as they are, skipping read-only and unknown values', () => {
+    expect(captureScene(ents, [0x0100])).toEqual([{ entity: 0x0100, attr: 1, value: true }]); // power/energy are read-only
+    expect(captureScene(ents, [0x0101])).toEqual([
+      { entity: 0x0101, attr: 1, value: false },
+      { entity: 0x0101, attr: 2, value: 128 },
+    ]);
+    expect(captureScene(ents, [0x0102])).toEqual([]); // a sensor has nothing to set
+    expect(captureScene(ents, [0x9999])).toEqual([]);
+    const unknown: Entity[] = [{ id: 7, name: null, chip: 1, device: 'light', attrs: [{ id: 1, name: 'on_off', vt: 'bool', flags: ['r', 'w'], value: null }] }];
+    expect(captureScene(unknown, [7])).toEqual([]); // never saves a value the hub does not know
+  });
+
+  it('describeScene reads like a sentence, even for a device that is gone', () => {
+    const sc = { name: 'evening', actions: [
+      { entity: 0x0100, attr: 1, value: false },
+      { entity: 0x0101, attr: 2, value: 254 },
+      { entity: 0x7777, attr: 1, value: true },
+    ] };
+    expect(describeScene(sc, ents)).toEqual({ title: 'evening', detail: 'plug1 off · lamp brightness 100 % · device 30583 attribute 1 true' });
+  });
+
+  it('sceneRequest checks the name and the number of actions', () => {
+    const a = { entity: 1, attr: 1, value: true as const };
+    expect(sceneRequest('evening', [a])).toEqual({ ok: true, value: { name: 'evening', actions: [a] } });
+    expect(sceneRequest('Evening', [a])).toMatchObject({ ok: false });
+    expect(sceneRequest('evening', [])).toMatchObject({ ok: false, error: expect.stringMatching(/at least one/) });
+    expect(sceneRequest('evening', Array(9).fill(a))).toMatchObject({ ok: false, error: expect.stringMatching(/at most 8/) });
+    expect(sceneRequest('evening', Array(8).fill(a))).toMatchObject({ ok: true });
   });
 });

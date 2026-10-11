@@ -37,8 +37,11 @@ one predicate, one action). To make rules richer:
   within 10 min of its time, last-fired day persisted. Open: conditions that
   combine a time window with a state (`after sunset && motion → light`), sunrise /
   sunset (needs a location), one-shot absolute times.
-- **Scenes** — a named group of desired attribute values applied at once
-  (`scene evening`). Doubly useful with Groups & Scenes on the Zigbee side.
+- ~~**Scenes**~~ ✅ done (`core::SceneTable`, NVS key `scenes`, up to 8 scenes of 8 actions):
+  console `scene`, `scene add <name> <id> <attr> <value> …`, `scene <name>`, `scene del <name>`;
+  app ops `scene.put/del/apply` (protocol doc §5). Applied as ordinary commands, so
+  desired state sees them. Still open: a rule/schedule/timer that applies a scene, Zigbee
+  Groups & Scenes (one radio frame for the whole group), editing a scene in place.
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
   the in-code table (SPEC §7 already flags this as a later option).
 

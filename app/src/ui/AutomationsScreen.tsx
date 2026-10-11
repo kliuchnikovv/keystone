@@ -1,18 +1,18 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { describeRule, describeSchedule, describeTimer } from '../model/automation';
+import { describeRule, describeScene, describeSchedule, describeTimer } from '../model/automation';
 import type { Commands } from '../hooks/useCommands';
 import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
-import { RuleFormView, ScheduleForm, TimerForm } from './AutomationForms';
+import { RuleFormView, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
 import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
 import { useTheme } from './theme';
 
-type Section = 'schedules' | 'timers' | 'rules';
+type Section = 'scenes' | 'schedules' | 'timers' | 'rules';
 
 export function AutomationsScreen({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
-  const [section, setSection] = useState<Section>('schedules');
+  const [section, setSection] = useState<Section>('scenes');
   const [adding, setAdding] = useState(false);
   const left = useCountdown(home.timers);
 
@@ -41,12 +41,30 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
   return (
     <ScrollView contentContainerStyle={styles.page}>
       <ChipRow>
+        <Chip label={`Scenes (${home.scenes.length})`} a11y="Scenes" selected={section === 'scenes'} onPress={() => switchTo('scenes')} />
         <Chip label={`Schedules (${home.schedules.length})`} a11y="Schedules" selected={section === 'schedules'} onPress={() => switchTo('schedules')} />
         <Chip label={`Timers (${home.timers.length})`} a11y="Timers" selected={section === 'timers'} onPress={() => switchTo('timers')} />
         <Chip label={`Rules (${home.rules.length})`} a11y="Rules" selected={section === 'rules'} onPress={() => switchTo('rules')} />
       </ChipRow>
 
       <View style={{ marginTop: 14 }}>
+        {section === 'scenes' && (
+          <>
+            {adding ? (
+              <SceneForm entities={home.entities} busy={commands.busy} onSubmit={add('scene.put')} onCancel={() => setAdding(false)} />
+            ) : (
+              <Button label="Add scene" onPress={() => setAdding(true)} />
+            )}
+            <View style={{ marginTop: 12 }}>
+              {home.scenes.length === 0 && !adding && empty('No scenes. A scene sets several devices at once: "evening" = lamp on, plug off.')}
+              {home.scenes.map((sc) => {
+                const d = describeScene(sc, home.entities);
+                return card(`sc${sc.name}`, d.title, d.detail, () => void commands.request('scene.del', { name: sc.name }), `scene ${sc.name}`);
+              })}
+            </View>
+          </>
+        )}
+
         {section === 'schedules' && (
           <>
             {adding ? (

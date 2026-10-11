@@ -13,6 +13,7 @@
 
 #include "core/app_protocol.hpp"
 #include "core/entity_registry.hpp"  // AttrState
+#include "core/scene_table.hpp"
 
 namespace core::app {
 
@@ -22,6 +23,9 @@ struct Outcome {
   char msg[40] = {};
   bool has_index = false;
   std::int64_t index = 0;
+  bool has_counts = false;  // a scene was applied: sent / skipped
+  std::int64_t sent = 0;
+  std::int64_t skipped = 0;
 
   static Outcome fail(Err e, const char* m) {
     Outcome o;
@@ -31,6 +35,13 @@ struct Outcome {
     return o;
   }
   static Outcome done() { return Outcome{}; }
+  static Outcome counts(std::int64_t sent, std::int64_t skipped) {
+    Outcome o;
+    o.has_counts = true;
+    o.sent = sent;
+    o.skipped = skipped;
+    return o;
+  }
   static Outcome at(std::int64_t i) {
     Outcome o;
     o.has_index = true;
@@ -347,6 +358,91 @@ Outcome timer_cancel(Timers& timers, const Reader& r, int args) {
   if (args < 0 || !detail::get_int(r, args, "index", i) || i < 0) return Outcome::fail(Err::BadArgs, "index");
   if (!timers.cancel(static_cast<std::size_t>(i))) return Outcome::fail(Err::NotFound, "no such timer");
   return Outcome::done();
+}
+
+// ---- scenes -----------------------------------------------------------------------------
+
+namespace detail {
+template <typename Reader>
+bool scene_name(const Reader& r, int args, char* out, std::size_t cap, Outcome& fail) {
+  if (args < 0 || !r.get_string(r.find(args, "name"), out, cap) || !core::valid_scene_name(out)) {
+    fail = Outcome::fail(Err::BadArgs, "name: a-z 0-9 _, starts with a letter, max 23");
+    return false;
+  }
+  return true;
+}
+}  // namespace detail
+
+/** `scene.put {name, actions:[{entity, attr, value}…]}`: create or replace. Every action must name a
+ *  writable attribute of a real device with a value that fits it; one attribute at most once. */
+template <typename Reg, typename Scenes, typename Reader>
+Outcome scene_put(const Reg& reg, Scenes& scenes, const Reader& r, int args) {
+  Outcome fail;
+  char name[kMaxNameChars + 2];
+  if (!detail::scene_name(r, args, name, sizeof(name), fail)) return fail;
+  const int list = r.find(args, "actions");
+  if (list < 0 || !r.is(list, Reader::Type::Array) || r.count(list) < 1 ||
+      static_cast<std::size_t>(r.count(list)) > Scenes::kMaxActions) {
+    return Outcome::fail(Err::BadArgs, "actions: 1..8 items");
+  }
+  typename Scenes::Action acts[Scenes::kMaxActions];
+  const std::size_t n = static_cast<std::size_t>(r.count(list));
+  for (std::size_t i = 0; i < n; ++i) {
+    const int item = r.at(list, static_cast<int>(i));
+    char where[24];
+    std::snprintf(where, sizeof(where), "actions[%u]", static_cast<unsigned>(i));
+    const AttrState* st = nullptr;
+    if (!detail::lookup(reg, r, item, false, acts[i].entity_id, acts[i].attr_id, st, fail, where)) return fail;
+    if ((st->flags & hubproto::kFlagWritable) == 0) return Outcome::fail(Err::ReadOnly, "action: attribute is read-only");
+    if (!to_value(read_scalar(r, r.find(item, "value")), st->value_type, acts[i].value)) {
+      return Outcome::fail(Err::BadArgs, "action value does not fit the attribute");
+    }
+    for (std::size_t k = 0; k < i; ++k) {
+      if (acts[k].entity_id == acts[i].entity_id && acts[k].attr_id == acts[i].attr_id) {
+        return Outcome::fail(Err::BadArgs, "the same attribute twice");
+      }
+    }
+  }
+  if (scenes.put(name, acts, n) < 0) return Outcome::fail(Err::TableFull, "scene table is full");
+  return Outcome::done();
+}
+
+template <typename Scenes, typename Reader>
+Outcome scene_del(Scenes& scenes, const Reader& r, int args) {
+  Outcome fail;
+  char name[kMaxNameChars + 2];
+  if (!detail::scene_name(r, args, name, sizeof(name), fail)) return fail;
+  if (!scenes.remove(name)) return Outcome::fail(Err::NotFound, "no such scene");
+  return Outcome::done();
+}
+
+/** Apply a scene by name (used by the app request and the console): an action whose target has since
+ *  disappeared, become read-only or changed type is skipped. */
+template <typename Reg, typename Scenes, typename Send>
+typename Scenes::Applied apply_scene(const Reg& reg, const Scenes& scenes, const char* name, Send&& send) {
+  return scenes.apply(name, [&](const typename Scenes::Action& a) {
+    const auto* ent = reg.find(a.entity_id);
+    if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) return false;
+    for (std::uint8_t i = 0; i < ent->attr_count; ++i) {
+      const AttrState& st = ent->attrs[i];
+      if (st.attr_id != a.attr_id) continue;
+      if ((st.flags & hubproto::kFlagWritable) == 0 || st.value_type != a.value.type) return false;
+      return send(a.entity_id, a.attr_id, a.value);
+    }
+    return false;
+  });
+}
+
+/** `scene.apply {name}`: send every action through `send(entity, attr, value) -> bool`. An action whose
+ *  target has since disappeared, become read-only or changed type is skipped, not an error. */
+template <typename Reg, typename Scenes, typename Reader, typename Send>
+Outcome scene_apply(const Reg& reg, const Scenes& scenes, const Reader& r, int args, Send&& send) {
+  Outcome fail;
+  char name[kMaxNameChars + 2];
+  if (!detail::scene_name(r, args, name, sizeof(name), fail)) return fail;
+  const auto res = apply_scene(reg, scenes, name, send);
+  if (!res.found) return Outcome::fail(Err::NotFound, "no such scene");
+  return Outcome::counts(static_cast<std::int64_t>(res.sent), static_cast<std::int64_t>(res.skipped));
 }
 
 // ---- Zigbee chip operations: pair, unpair, identify ----------------------------------------

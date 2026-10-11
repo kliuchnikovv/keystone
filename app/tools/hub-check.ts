@@ -303,7 +303,7 @@ if (process.argv.includes('--mutate')) {
     return fn();
   };
   const target = c.getSnapshot().entities.find((e) => e.attrs.some((x) => x.id === 0x01 && x.flags.includes('w')) && e.attrs.some((x) => x.id === 0x13));
-  const before = { rules: c.getSnapshot().rules.length, schedules: c.getSnapshot().schedules.length, timers: c.getSnapshot().timers.length };
+  const before = { rules: c.getSnapshot().rules.length, schedules: c.getSnapshot().schedules.length, timers: c.getSnapshot().timers.length, scenes: c.getSnapshot().scenes.length };
   const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string }) => String(e.code));
   if (!target) {
     console.log('  (--mutate needs a device with a writable on/off and power_w; skipped)');
@@ -414,10 +414,39 @@ if (process.argv.includes('--mutate')) {
       const r2 = await c.req('identify', { entity: ent }).then(() => true, () => false);
       return r1 && r2 ? true : `pair ${r1}, identify ${r2}`;
     });
+    // Scenes. The scene re-sends the switch's current value, so nothing visibly changes.
+    await check('scene.put / apply / replace / del', async () => {
+      const sw = c.getSnapshot().entities.find((e) => e.id === ent)!.attrs.find((a) => a.id === 0x01)!;
+      const action = { entity: ent, attr: 0x01, value: sw.value };
+      await c.req('scene.put', { name: 'chk_scene', actions: [action] });
+      if (!(await waitFor(() => c.getSnapshot().scenes.some((s) => s.name === 'chk_scene')))) return 'scene not listed';
+      const res = await c.req('scene.apply', { name: 'chk_scene' });
+      if (res?.sent !== 1 || res?.skipped !== 0) return `apply counts ${JSON.stringify(res)}`;
+      await c.req('scene.put', { name: 'chk_scene', actions: [action, { entity: ent, attr: 0x13, value: 1 }].slice(0, 1) });
+      if (c.getSnapshot().scenes.filter((s) => s.name === 'chk_scene').length !== 1) return 'replace duplicated it';
+      await c.req('scene.del', { name: 'chk_scene' });
+      return (await waitFor(() => !c.getSnapshot().scenes.some((s) => s.name === 'chk_scene'))) ? true : 'scene not removed';
+    });
+    await check('scene requests validate their arguments', async () => {
+      const ok = { entity: ent, attr: 0x01, value: true };
+      const got = [
+        await code(c.req('scene.put', { actions: [ok] })),
+        await code(c.req('scene.put', { name: 'Bad', actions: [ok] })),
+        await code(c.req('scene.put', { name: 'x', actions: [] })),
+        await code(c.req('scene.put', { name: 'x', actions: [ok, ok] })),
+        await code(c.req('scene.put', { name: 'x', actions: [{ ...ok, value: 5 }] })),
+        await code(c.req('scene.put', { name: 'x', actions: [{ entity: ent, attr: 0x13, value: 1 }] })),
+        await code(c.req('scene.put', { name: 'x', actions: [{ ...ok, entity: 65000 }] })),
+        await code(c.req('scene.apply', { name: 'chk_nope' })),
+        await code(c.req('scene.del', { name: 'chk_nope' })),
+      ];
+      const want = ['bad_args', 'bad_args', 'bad_args', 'bad_args', 'bad_args', 'read_only', 'not_found', 'not_found', 'not_found'];
+      return JSON.stringify(got) === JSON.stringify(want) && c.getSnapshot().scenes.length === before.scenes ? true : got.join(',');
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();
-        return s.rules.length === before.rules && s.schedules.length === before.schedules && s.timers.length === before.timers && nameOf() === orig;
+        return s.rules.length === before.rules && s.schedules.length === before.schedules && s.timers.length === before.timers && s.scenes.length === before.scenes && nameOf() === orig;
       });
       return ok ? true : 'leftovers';
     });

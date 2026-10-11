@@ -64,6 +64,7 @@
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
 #include "core/schedule_table.hpp"
+#include "core/scene_table.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "app_server.hpp"
@@ -425,7 +426,7 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
-               REQ_RULE, REQ_DESIRED };
+               REQ_RULE, REQ_DESIRED, REQ_SCENE };
 
 struct Req {
   ReqKind kind;
@@ -627,6 +628,39 @@ void restore_schedules(Schedules& sched) {
                static_cast<unsigned>(sched.active_count()));
     } else {
       ESP_LOGW(kTag, "stored schedules are corrupt — ignored");
+    }
+  }
+  nvs_close(h);
+}
+
+using Scenes = core::SceneTable<8, 8>;
+constexpr std::size_t kSceneBlobMax =
+    Scenes::kHeaderSize + 8 * (Scenes::kNameWire + 1 + 8 * Scenes::kActionWire);
+
+void persist_scenes(const Scenes& scenes) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  std::uint8_t buf[kSceneBlobMax];
+  const std::size_t written = scenes.save(buf, sizeof(buf));
+  if (scenes.active_count() > 0 && written > 0) {
+    nvs_set_blob(h, "scenes", buf, written);
+  } else {
+    nvs_erase_key(h, "scenes");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_scenes(Scenes& scenes) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::uint8_t buf[kSceneBlobMax];
+  std::size_t sz = sizeof(buf);
+  if (nvs_get_blob(h, "scenes", buf, &sz) == ESP_OK) {
+    if (scenes.load(buf, sz)) {
+      ESP_LOGI(kTag, "restored %u scene(s) from NVS", static_cast<unsigned>(scenes.active_count()));
+    } else {
+      ESP_LOGW(kTag, "stored scenes are corrupt — ignored");
     }
   }
   nvs_close(h);
@@ -1287,6 +1321,22 @@ int cmd_identify(int argc, char** argv) {
   return 0;
 }
 
+// scene                                   list
+// scene <name>                            apply
+// scene add <name> <id> <attr> <value> …  create or replace (one or more triples)
+// scene del <name>
+int cmd_scene(int argc, char** argv) {
+  static char buf[1024];
+  Req r{};
+  r.kind = REQ_SCENE;
+  r.argc = argc;
+  r.argv = argv;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
 int cmd_chips(int /*argc*/, char** /*argv*/) {
   char buf[384];
   Req r{};
@@ -1530,6 +1580,7 @@ void start_console() {
   reg_cmd("toggle", "toggle <id> - flip a switch", &cmd_toggle);
   reg_cmd("in", "in <sec> <on|off> <id> - run a switch action after a delay", &cmd_in);
   reg_cmd("timers", "list pending timers", &cmd_timers);
+  reg_cmd("scene", "scene [<name> | add <name> <id> <attr> <value> ... | del <name>] - named groups of actions", &cmd_scene);
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
   reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
@@ -1688,6 +1739,7 @@ struct AppSource {
   const Rules& rules;
   const Schedules& sched;
   const core::TimerTable<8>& timers;
+  const Scenes& scenes;
   const core::RadioCoordinator<Registry>& coord;
   std::uint32_t now;
   const Registry::Entity* ents[64] = {};
@@ -1698,10 +1750,12 @@ struct AppSource {
   std::size_t n_sched = 0;
   std::uint8_t timer_slots[8] = {};
   std::size_t n_timers = 0;
+  std::uint8_t scene_slots[8] = {};
+  std::size_t n_scenes = 0;
 
   AppSource(const Registry& r, const Rules& ru, const Schedules& sc, const core::TimerTable<8>& tm,
-            const core::RadioCoordinator<Registry>& co, std::uint32_t t)
-      : reg(r), rules(ru), sched(sc), timers(tm), coord(co), now(t) {
+            const Scenes& scn, const core::RadioCoordinator<Registry>& co, std::uint32_t t)
+      : reg(r), rules(ru), sched(sc), timers(tm), scenes(scn), coord(co), now(t) {
     for (std::size_t i = 0; i < reg.size() && n_ents < 64; ++i) {
       const auto* e = reg.entity_at(i);
       // A chip's own entity is reported under `chips`, not as a device.
@@ -1712,6 +1766,7 @@ struct AppSource {
     }
     for (std::uint8_t i = 0; i < 8; ++i) if (sched.get(i) != nullptr) sched_slots[n_sched++] = i;
     for (std::uint8_t i = 0; i < 8; ++i) if (timers.get(i) != nullptr) timer_slots[n_timers++] = i;
+    for (std::uint8_t i = 0; i < 8; ++i) if (scenes.get(i) != nullptr) scene_slots[n_scenes++] = i;
   }
 
   std::size_t count(core::app::Section s) const {
@@ -1721,6 +1776,7 @@ struct AppSource {
       case core::app::Section::Rules: return rules.rule_count();
       case core::app::Section::Schedules: return n_sched;
       case core::app::Section::Timers: return n_timers;
+      case core::app::Section::Scenes: return n_scenes;
     }
     return 0;
   }
@@ -1744,6 +1800,9 @@ struct AppSource {
                                                        tm->value, app_timer_left_s(*tm, now)});
         break;
       }
+      case core::app::Section::Scenes:
+        core::app::write_scene(w, *scenes.get(scene_slots[i]));
+        break;
     }
   }
 
@@ -1780,6 +1839,12 @@ struct AppSource {
       core::JsonWriter w(tmp, sizeof(tmp));
       core::app::write_schedule(w, sched_slots[i], *sched.get(sched_slots[i]));
       mix(tmp, w.size());
+    }
+    char big[1024];
+    for (std::size_t i = 0; i < n_scenes; ++i) {
+      core::JsonWriter w(big, sizeof(big));
+      core::app::write_scene(w, *scenes.get(scene_slots[i]));
+      mix(big, w.size());
     }
     for (std::size_t i = 0; i < n_timers; ++i) {  // no left_s: it changes every second
       const auto* tm = timers.get(timer_slots[i]);
@@ -1866,8 +1931,8 @@ void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::u
   bus.publish(h, payload, sizeof(payload));
 }
 
-void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Registry& reg, Rules& rules, Schedules& sched,
-                    core::TimerTable<8>& timers, std::uint32_t now) {
+void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
+                    Schedules& sched, core::TimerTable<8>& timers, Scenes& scenes, std::uint32_t now) {
   using namespace core::app;
   core::JsonReader reader;
   const ClientMsg m = decode_client(reader, in.text, in.len);
@@ -1904,6 +1969,17 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Registry& reg, Ru
   } else if (!std::strcmp(op, "timer.cancel")) {
     o = timer_cancel(timers, reader, m.args);
     if (o.ok) persist_timers(timers, now);
+  } else if (!std::strcmp(op, "scene.put")) {
+    o = scene_put(reg, scenes, reader, m.args);
+    if (o.ok) persist_scenes(scenes);
+  } else if (!std::strcmp(op, "scene.del")) {
+    o = scene_del(scenes, reader, m.args);
+    if (o.ok) persist_scenes(scenes);
+  } else if (!std::strcmp(op, "scene.apply")) {
+    o = scene_apply(reg, scenes, reader, m.args, [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
+      std::uint16_t seq = 0;
+      return disp.send(e, a, v, now, seq);
+    });
   } else if (!std::strcmp(op, "pair") || !std::strcmp(op, "unpair") || !std::strcmp(op, "identify")) {
     // Zigbee chip operations, fire-and-forget like the console: the result is seen as an entity
     // appearing (pair), going away (unpair) or a device blinking (identify).
@@ -1918,7 +1994,8 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Registry& reg, Ru
   }
 
   if (o.ok) {
-    if (o.has_index) encode_res_ok_index(w, in.id, o.index);
+    if (o.has_counts) encode_res_ok_counts(w, in.id, o.sent, o.skipped);
+    else if (o.has_index) encode_res_ok_index(w, in.id, o.index);
     else encode_res_ok(w, in.id);
     g_app_force_check = true;
   } else {
@@ -2197,6 +2274,10 @@ extern "C" void app_main(void) {
   static Schedules schedule_table;
   restore_schedules(schedule_table);
 
+  // Scenes: named groups of actions (`scene`), applied from the console or the app.
+  static Scenes scene_store;
+  restore_scenes(scene_store);
+
   // App protocol: live events from the UART RX task, CMD_ACK bookkeeping, and the
   // server itself (only when a token has been set with `webtoken`).
   g_app_ev_q = xQueueCreate(32, sizeof(AppEvent));
@@ -2369,7 +2450,7 @@ extern "C" void app_main(void) {
         if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
           app_last_check_ms = t;
           app_expire_pending(t);
-          AppSource src(reg, rules, schedule_table, timer_table, coord, t);
+          AppSource src(reg, rules, schedule_table, timer_table, scene_store, coord, t);
           const std::uint32_t fp = src.fingerprint();
           const bool overflow = g_app_resync.exchange(false);
           if (overflow || fp != app_last_fp) {
@@ -2398,11 +2479,11 @@ extern "C" void app_main(void) {
         appsrv::Inbound in;
         while (appsrv::next(in)) {
           if (in.kind == appsrv::Inbound::Kind::Connected) {
-            AppSource src(reg, rules, schedule_table, timer_table, coord, t);
+            AppSource src(reg, rules, schedule_table, timer_table, scene_store, coord, t);
             app_last_fp = src.fingerprint();
             app_send_snapshot(in.fd, src);
           } else if (in.kind == appsrv::Inbound::Kind::Req) {
-            app_handle_req(in, bus, reg, rules, schedule_table, timer_table, t);
+            app_handle_req(in, bus, disp, reg, rules, schedule_table, timer_table, scene_store, t);
             std::free(in.text);
           } else {
             app_handle_cmd(in, reg, disp, t);
@@ -2802,6 +2883,93 @@ extern "C" void app_main(void) {
         case REQ_RULE:
           handle_rule(r, reg, rules);
           break;
+        case REQ_SCENE: {
+          const int argc = r->argc;
+          char** argv = r->argv;
+          auto say = [&](const char* fmt, auto... a) { std::snprintf(r->out, r->out_cap, fmt, a...); };
+          if (argc == 1) {  // list
+            std::size_t off = 0;
+            for (std::size_t i = 0; i < 8 && off < r->out_cap; ++i) {
+              const auto* sc = scene_store.get(i);
+              if (sc == nullptr) continue;
+              off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, "%s:", sc->name));
+              for (std::size_t k = 0; k < sc->count && off < r->out_cap; ++k) {
+                const auto& a = sc->actions[k];
+                const char* en = reg.name_of(a.entity_id);
+                char vbuf[16];
+                fmt_value(vbuf, sizeof(vbuf), a.value.type, a.value);
+                if (en != nullptr) {
+                  off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, " %s", en));
+                } else {
+                  off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, " 0x%04x",
+                                                                static_cast<unsigned>(a.entity_id)));
+                }
+                off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, ".0x%02x=%s",
+                                                              static_cast<unsigned>(a.attr_id), vbuf));
+              }
+              if (off < r->out_cap) off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, "\n"));
+            }
+            if (off == 0) say("no scenes\n");
+          } else if (std::strcmp(argv[1], "del") == 0) {
+            if (argc != 3) say("usage: scene del <name>\n");
+            else if (!scene_store.remove(argv[2])) say("%s: no such scene\n", argv[2]);
+            else { persist_scenes(scene_store); say("deleted scene %s\n", argv[2]); }
+          } else if (std::strcmp(argv[1], "add") == 0) {
+            const int triples = (argc - 3) / 3;
+            if (argc < 6 || (argc - 3) % 3 != 0 || triples > 8) {
+              say("usage: scene add <name> <id_or_name> <attr> <value> [<id_or_name> <attr> <value> ...]\n");
+              break;
+            }
+            Scenes::Action acts[8];
+            bool good = true;
+            for (int k = 0; k < triples && good; ++k) {
+              const char* ent = argv[3 + 3 * k];
+              std::uint16_t id = 0;
+              std::uint8_t at = 0;
+              const core::AttrState* st = nullptr;
+              if (!reg.resolve(ent, id) || reg.find(id) == nullptr ||
+                  reg.find(id)->device_type == hubproto::DeviceType::Chip) {
+                say("%s: not a device\n", ent);
+                good = false;
+              } else if (!parse_attr(argv[4 + 3 * k], at)) {
+                say("%s: unknown attribute\n", argv[4 + 3 * k]);
+                good = false;
+              } else {
+                const auto* e = reg.find(id);
+                for (std::uint8_t i = 0; i < e->attr_count; ++i) if (e->attrs[i].attr_id == at) st = &e->attrs[i];
+                if (st == nullptr) { say("%s has no attribute %s\n", ent, argv[4 + 3 * k]); good = false; }
+                else if ((st->flags & hubproto::kFlagWritable) == 0) { say("%s.%s is read-only\n", ent, argv[4 + 3 * k]); good = false; }
+                else if (!parse_value(argv[5 + 3 * k], st->value_type, acts[k].value)) { say("%s: bad value for %s\n", argv[5 + 3 * k], argv[4 + 3 * k]); good = false; }
+                else {
+                  acts[k].entity_id = id;
+                  acts[k].attr_id = at;
+                  for (int j = 0; j < k; ++j) {
+                    if (acts[j].entity_id == id && acts[j].attr_id == at) { say("%s.%s given twice\n", ent, argv[4 + 3 * k]); good = false; }
+                  }
+                }
+              }
+            }
+            if (good) {
+              if (scene_store.put(argv[2], acts, static_cast<std::size_t>(triples)) < 0) {
+                say("cannot store scene (bad name %s, or the table is full)\n", argv[2]);
+              } else {
+                persist_scenes(scene_store);
+                say("scene %s stored (%d action%s)\n", argv[2], triples, triples == 1 ? "" : "s");
+              }
+            }
+          } else if (argc == 2) {  // apply
+            const auto res = core::app::apply_scene(
+                reg, scene_store, argv[1], [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
+                  std::uint16_t seq = 0;
+                  return disp.send(e, a, v, now_ms(nullptr), seq);
+                });
+            if (!res.found) say("%s: no such scene\n", argv[1]);
+            else say("scene %s: %u sent, %u skipped\n", argv[1], static_cast<unsigned>(res.sent), static_cast<unsigned>(res.skipped));
+          } else {
+            say("usage: scene [<name> | add ... | del <name>]\n");
+          }
+          break;
+        }
         case REQ_DESIRED: {
           xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
           auto& des = reconciler.desired();

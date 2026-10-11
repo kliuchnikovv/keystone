@@ -8,6 +8,8 @@ import type {
   Days,
   Entity,
   Rule,
+  Scene,
+  SceneAction,
   Schedule,
   Timer,
   Value,
@@ -80,6 +82,16 @@ export function describeSchedule(s: Schedule, entities: Entity[]): { title: stri
 
 export function describeTimer(t: Timer, entities: Entity[], leftSeconds: number): { title: string; detail: string } {
   return { title: `${actionText(t.action)} ${entityName(entities, t.entity)}`, detail: `in ${formatCountdown(leftSeconds)}` };
+}
+
+/** "plug1 off · lamp brightness 50 %": what applying the scene does. */
+export function describeScene(sc: Scene, entities: Entity[]): { title: string; detail: string } {
+  const parts = sc.actions.map((a) => {
+    const target = attrOf(entities, a.entity, a.attr);
+    const who = entityName(entities, a.entity);
+    return target?.name === 'on_off' ? `${who} ${a.value ? 'on' : 'off'}` : `${who} ${attrName(entities, a.entity, a.attr)} ${valueFor(entities, a.entity, a.attr, a.value)}`;
+  });
+  return { title: sc.name, detail: parts.join(' · ') };
 }
 
 export function describeRule(r: Rule, entities: Entity[]): { when: string; then: string; extras: string[] } {
@@ -274,4 +286,32 @@ export function ruleRequest(f: RuleForm): Built {
 export function nameProblem(name: string): string | null {
   if (!/^[a-z][a-z0-9_]{0,22}$/.test(name)) return 'Use a-z, 0-9 and _, start with a letter, at most 23 characters';
   return null;
+}
+
+// ---- scenes ----------------------------------------------------------------------------
+
+export const MAX_SCENE_ACTIONS = 8;
+
+/** The writable settings of these devices as they are right now: what "save this as a scene" stores. */
+export function captureScene(entities: Entity[], ids: number[]): SceneAction[] {
+  const out: SceneAction[] = [];
+  for (const id of ids) {
+    const e = entities.find((x) => x.id === id);
+    if (!e) continue;
+    for (const a of e.attrs) {
+      if (!a.flags.includes('w') || a.vt === 'xy' || a.value === null || a.value === undefined) continue;
+      out.push({ entity: e.id, attr: a.id, value: a.value });
+    }
+  }
+  return out;
+}
+
+export function sceneRequest(name: string, actions: SceneAction[]): Built {
+  const problem = nameProblem(name);
+  if (problem) return { ok: false, error: problem };
+  if (actions.length === 0) return { ok: false, error: 'Choose at least one device that has something to save' };
+  if (actions.length > MAX_SCENE_ACTIONS) {
+    return { ok: false, error: `A scene holds at most ${MAX_SCENE_ACTIONS} settings; choose fewer devices` };
+  }
+  return { ok: true, value: { name, actions } };
 }

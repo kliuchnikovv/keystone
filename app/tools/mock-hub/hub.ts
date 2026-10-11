@@ -15,6 +15,7 @@ import {
   type Entity,
   type ErrorCode,
   type Rule,
+  type Scene,
   type Schedule,
   type ServerMessage,
   type Timer,
@@ -123,6 +124,7 @@ export class MockHub {
   chips: Chip[] = defaultChips();
   rules: Rule[] = [];
   schedules: Schedule[] = [];
+  scenes: Scene[] = [];
   private timers: TimerEntry[] = [];
   private clients = new Set<ClientInfo>();
   private failures = new Map<string, { count: number; until: number }>();
@@ -194,6 +196,7 @@ export class MockHub {
 
   /** What the app asked for with pair / identify / unpair (for tests). */
   readonly pairCalls: number[] = [];
+  readonly scenesApplied: string[] = [];
   readonly identifyCalls: number[] = [];
   readonly unpairCalls: number[] = [];
 
@@ -337,7 +340,7 @@ export class MockHub {
         last: lastEntities,
         entities: this.entities.slice(i, i + n),
         ...(lastEntities
-          ? { chips: this.chips, rules: this.rules, schedules: this.schedules, timers: this.timerList() }
+          ? { chips: this.chips, rules: this.rules, schedules: this.schedules, timers: this.timerList(), scenes: this.scenes }
           : {}),
       });
       if (lastEntities) break;
@@ -473,6 +476,54 @@ export class MockHub {
         this.timers.splice(i, 1);
         this.broadcast({ type: 'timers', timers: this.timerList() });
         return ok();
+      }
+      case 'scene.put': {
+        const name = args.name;
+        if (typeof name !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(name)) return no('bad_args', 'name');
+        const list = args.actions;
+        if (!Array.isArray(list) || list.length < 1 || list.length > 8) return no('bad_args', 'actions: 1..8 items');
+        const actions: Scene['actions'] = [];
+        for (const raw of list as Record<string, unknown>[]) {
+          const e = this.entities.find((x) => x.id === raw?.entity);
+          if (!e) return no('not_found', 'no such entity');
+          const a = e.attrs.find((x) => x.id === raw.attr);
+          if (!a) return no('not_found', 'no such attribute');
+          if (!a.flags.includes('w')) return no('read_only', 'action: attribute is read-only');
+          if (!valueFits(a.vt, raw.value)) return no('bad_args', 'action value does not fit the attribute');
+          if (actions.some((x) => x.entity === e.id && x.attr === a.id)) return no('bad_args', 'the same attribute twice');
+          actions.push({ entity: e.id, attr: a.id, value: raw.value as Value });
+        }
+        const i = this.scenes.findIndex((x) => x.name === name);
+        if (i < 0 && this.scenes.length >= 8) return no('table_full', 'scene table is full');
+        if (i >= 0) this.scenes[i] = { name, actions };
+        else this.scenes.push({ name, actions });
+        this.resync();
+        return ok();
+      }
+      case 'scene.del': {
+        const i = this.scenes.findIndex((x) => x.name === args.name);
+        if (i < 0) return no('not_found', 'no such scene');
+        this.scenes.splice(i, 1);
+        this.resync();
+        return ok();
+      }
+      case 'scene.apply': {
+        const sc = this.scenes.find((x) => x.name === args.name);
+        if (!sc) return no('not_found', 'no such scene');
+        let sent = 0;
+        let skipped = 0;
+        for (const a of sc.actions) {
+          const e = this.entities.find((x) => x.id === a.entity);
+          const at = e?.attrs.find((x) => x.id === a.attr);
+          if (e && at && at.flags.includes('w') && this.chips.find((c) => c.id === e.chip)?.status === 'ready') {
+            this.setValue(e.id, at.id, a.value);
+            sent++;
+          } else {
+            skipped++;
+          }
+        }
+        this.scenesApplied.push(sc.name);
+        return ok({ sent, skipped });
       }
       case 'pair': {
         let seconds = 180;

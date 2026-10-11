@@ -32,6 +32,8 @@ const type = (label: string, value: string) => fireEvent.change(screen.getByLabe
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
 const gotoAutomations = async () => {
   click('Automations');
+  await screen.findByLabelText('Add scene'); // scenes are the first section
+  click('Schedules');
   await screen.findByLabelText('Add schedule');
 };
 
@@ -265,5 +267,80 @@ describe('Rules', () => {
     expect(screen.getByLabelText('Choose lamp · Brightness')).toBeTruthy();
     expect(screen.queryByLabelText('Choose plug1 · Power draw')).toBeNull();
     expect(screen.queryByLabelText('Choose Motion sensor 0x0102 · Presence')).toBeNull();
+  });
+});
+
+describe('Scenes', () => {
+  it('saves the chosen devices as they are now, shows the scene, and deletes it after a second tap', async () => {
+    await openApp();
+    click('Automations');
+    click('Add scene');
+    type('Scene name', 'evening');
+    click('Include plug1');
+    click('Include lamp');
+    // plug1 is on, the lamp is off at 50 % in the mock home.
+    expect(screen.getByLabelText('Scene contents').textContent).toBe('Will save: plug1 on · lamp off · lamp brightness 50 %');
+    click('Save scene');
+    await screen.findByLabelText('scene evening');
+    expect(hub.scenes).toEqual([
+      { name: 'evening', actions: [
+        { entity: 0x0100, attr: 1, value: true },
+        { entity: 0x0101, attr: 1, value: false },
+        { entity: 0x0101, attr: 2, value: 128 },
+      ] },
+    ]);
+    expect(screen.getByLabelText('Scenes').textContent).toContain('(1)');
+
+    click('Delete scene evening');
+    expect(hub.scenes).toHaveLength(1); // the first tap only arms it
+    click('Delete scene evening');
+    await waitFor(() => expect(screen.queryByLabelText('scene evening')).toBeNull());
+    expect(hub.scenes).toHaveLength(0);
+  });
+
+  it('refuses a bad name or no devices without asking the hub', async () => {
+    await openApp();
+    click('Automations');
+    click('Add scene');
+    type('Scene name', 'Evening');
+    click('Include plug1');
+    click('Save scene');
+    expect(await screen.findByText(/Use a-z, 0-9 and _/)).toBeTruthy();
+    type('Scene name', 'evening');
+    click('Include plug1'); // un-pick
+    click('Save scene');
+    expect(await screen.findByText(/Choose at least one device/)).toBeTruthy();
+    expect(hub.scenes).toHaveLength(0);
+  });
+
+  it('a read-only device is not offered (the motion sensor has nothing to set)', async () => {
+    await openApp();
+    click('Automations');
+    click('Add scene');
+    expect(screen.queryByLabelText('Include Motion sensor 0x0102')).toBeNull();
+    expect(screen.getByLabelText('Include plug1')).toBeTruthy();
+  });
+
+  it('applies a scene from the Devices tab: the devices follow and the count is shown', async () => {
+    hub.scenes.push({ name: 'night', actions: [
+      { entity: 0x0100, attr: 1, value: false },
+      { entity: 0x0101, attr: 1, value: true },
+    ] });
+    await openApp();
+    await screen.findByLabelText('Apply scene night');
+    click('Apply scene night');
+    await screen.findByText('night applied');
+    expect(hub.scenesApplied).toEqual(['night']);
+    await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByLabelText('plug1 power') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('says so when part of a scene could not be applied (the chip is silent)', async () => {
+    hub.scenes.push({ name: 'night', actions: [{ entity: 0x0100, attr: 1, value: false }] });
+    await openApp();
+    act(() => hub.setChipStatus(1, 'silent'));
+    await screen.findByLabelText('Apply scene night');
+    click('Apply scene night');
+    await screen.findByText(/night: 0 applied, 1 could not be/);
   });
 });

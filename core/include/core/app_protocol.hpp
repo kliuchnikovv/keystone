@@ -319,6 +319,13 @@ inline void encode_res_ok_index(JsonWriter& w, std::int64_t id, std::int64_t ind
       .key("result").begin_object().kv("index", index).end_object().end_object();
 }
 
+// A scene was applied: how many commands went out and how many actions were skipped (an entity
+// that is gone, read-only now, or a full command queue).
+inline void encode_res_ok_counts(JsonWriter& w, std::int64_t id, std::int64_t sent, std::int64_t skipped) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
+      .key("result").begin_object().kv("sent", sent).kv("skipped", skipped).end_object().end_object();
+}
+
 inline void encode_res_error(JsonWriter& w, std::int64_t id, Err code, const char* message = nullptr) noexcept {
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", false).kv("code", err_name(code));
   if (message != nullptr) w.kv("message", message);
@@ -481,6 +488,20 @@ void write_schedule(JsonWriter& w, std::size_t index, const S& s) noexcept {
       .kv("action", action_name(s.value)).end_object();
 }
 
+// `S` is SceneTable<..>::Scene: {"name":"evening","actions":[{"entity":256,"attr":1,"value":true},…]}
+template <typename S>
+void write_scene(JsonWriter& w, const S& s) noexcept {
+  w.begin_object().kv("name", s.name).key("actions").begin_array();
+  for (std::size_t i = 0; i < s.count; ++i) {
+    const auto& a = s.actions[i];
+    w.begin_object().kv("entity", static_cast<std::int64_t>(a.entity_id))
+        .kv("attr", static_cast<std::int64_t>(a.attr_id)).key("value");
+    write_value(w, a.value);
+    w.end_object();
+  }
+  w.end_array().end_object();
+}
+
 struct TimerView {
   std::size_t index;
   std::uint16_t entity;
@@ -503,8 +524,8 @@ inline void write_timer(JsonWriter& w, const TimerView& t) noexcept {
 // part with "last":true completes it. A Source provides, per section, a count and
 // a writer for item i (the brain adapts its registry, rules, … to this):
 //   size_t count(Section) ; void write(Section, size_t i, JsonWriter&)
-enum class Section : std::uint8_t { Entities, Chips, Rules, Schedules, Timers };
-inline constexpr int kSections = 5;
+enum class Section : std::uint8_t { Entities, Chips, Rules, Schedules, Timers, Scenes };
+inline constexpr int kSections = 6;
 
 inline const char* section_key(Section s) noexcept {
   switch (s) {
@@ -513,6 +534,7 @@ inline const char* section_key(Section s) noexcept {
     case Section::Rules: return "rules";
     case Section::Schedules: return "schedules";
     case Section::Timers: return "timers";
+    case Section::Scenes: return "scenes";
   }
   return "";
 }

@@ -90,7 +90,10 @@ a client must treat part 0 as "start over" at any time:
                   "telemetry": { "heap": 377260, "uptime_s": 4480, "tx_frames": 1880, "crc_errors": 0 } } ],
   "rules":     [ … see §6 … ],
   "schedules": [ … ],
-  "timers":    [ … ] }
+  "timers":    [ … ],
+  "scenes":    [ { "name": "evening",
+                   "actions": [ { "entity": 256, "attr": 1, "value": false },
+                                { "entity": 257, "attr": 2, "value": 100 } ] } ] }
 ```
 
 `value: null` = never reported. Chip self-entities (`device: "chip"`) are **not**
@@ -154,6 +157,9 @@ so they also update the desired state (reconciler).
 | `schedule.del` | `index` | |
 | `timer.add` | `delay_s` (1..604800), `entity`, `action` | `index` is the slot number |
 | `timer.cancel` | `index` | |
+| `scene.put` | `name`, `actions: [{entity, attr, value}…]` | creates or **replaces** a scene (name `[a-z][a-z0-9_]{0,22}`, 1..8 actions, up to 8 scenes). Every action must target a writable attribute of a real device (chips excluded) with a value that fits it, and an attribute may appear once: `bad_args` / `read_only` / `not_found` / `table_full`, nothing stored on error |
+| `scene.del` | `name` | `not_found` if there is no such scene |
+| `scene.apply` | `name` | sends every action as an ordinary command (so desired state and reconciliation see it) and answers `result: {sent, skipped}` once they are queued, not when the devices acked. An action whose entity has since gone, turned read-only or changed type, or that the command queue refused, is `skipped` rather than an error. Scenes change only through these ops, so clients just receive the new snapshot (`scenes` is a snapshot section; there is no scene event) |
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |

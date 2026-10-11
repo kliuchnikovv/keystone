@@ -367,6 +367,52 @@ describe('management requests', () => {
     await expect(c.req('timer.add', { entity: 0x9999, action: 'on', delay_s: 5 })).rejects.toMatchObject({ code: 'not_found' });
   });
 
+  it('scenes: put, list for everyone, apply (counts), replace, delete', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const actions = [{ entity: 0x0100, attr: 1, value: false }, { entity: 0x0101, attr: 1, value: true }];
+    await c.req('scene.put', { name: 'night', actions });
+    await until(() => c.getSnapshot().scenes.length === 1, 'scene listed');
+    expect(c.getSnapshot().scenes[0]).toEqual({ name: 'night', actions });
+
+    expect(await c.req('scene.apply', { name: 'night' })).toEqual({ sent: 2, skipped: 0 });
+    await until(() => attrValue(c.getSnapshot(), 0x0101, 0x01) === true, 'lamp on');
+    expect(attrValue(c.getSnapshot(), 0x0100, 0x01)).toBe(false);
+
+    await c.req('scene.put', { name: 'night', actions: [actions[0]!] }); // same name: replaced
+    await until(() => c.getSnapshot().scenes[0]?.actions.length === 1, 'scene replaced');
+    expect(c.getSnapshot().scenes).toHaveLength(1);
+
+    hub.setChipStatus(1, 'silent');
+    expect(await c.req('scene.apply', { name: 'night' })).toEqual({ sent: 0, skipped: 1 });
+    await c.req('scene.del', { name: 'night' });
+    await until(() => c.getSnapshot().scenes.length === 0, 'scene deleted');
+  });
+
+  it('scenes: bad input gets specific codes and stores nothing', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const ok = { entity: 0x0100, attr: 1, value: true };
+    const cases: [Record<string, unknown>, string][] = [
+      [{ actions: [ok] }, 'bad_args'],
+      [{ name: 'Bad', actions: [ok] }, 'bad_args'],
+      [{ name: 'x', actions: [] }, 'bad_args'],
+      [{ name: 'x', actions: [ok, ok] }, 'bad_args'],
+      [{ name: 'x', actions: [{ ...ok, value: 5 }] }, 'bad_args'],
+      [{ name: 'x', actions: [{ entity: 0x0100, attr: 0x13, value: 5 }] }, 'read_only'],
+      [{ name: 'x', actions: [{ ...ok, entity: 0x9999 }] }, 'not_found'],
+      [{ name: 'x', actions: [{ ...ok, attr: 99 }] }, 'not_found'],
+    ];
+    for (const [args, code] of cases) {
+      await expect(c.req('scene.put', args)).rejects.toMatchObject({ code });
+    }
+    await expect(c.req('scene.apply', { name: 'nope' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(c.req('scene.del', { name: 'nope' })).rejects.toMatchObject({ code: 'not_found' });
+    expect(hub.scenes).toEqual([]);
+  });
+
   it('an unknown operation is reported as unsupported', async () => {
     const c = client();
     c.connect();

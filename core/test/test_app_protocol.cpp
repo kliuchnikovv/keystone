@@ -328,7 +328,7 @@ TEST_CASE("rules, schedules and timers are encoded like the console lists them")
 namespace {
 
 struct FakeSource {
-  std::size_t entities = 0, chips = 0, rules = 0, schedules = 0, timers = 0;
+  std::size_t entities = 0, chips = 0, rules = 0, schedules = 0, timers = 0, scenes = 0;
   std::size_t count(Section s) const {
     switch (s) {
       case Section::Entities: return entities;
@@ -336,6 +336,7 @@ struct FakeSource {
       case Section::Rules: return rules;
       case Section::Schedules: return schedules;
       case Section::Timers: return timers;
+      case Section::Scenes: return scenes;
     }
     return 0;
   }

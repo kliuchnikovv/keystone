@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  COMPARISONS, WEEK, actionText, attrOptions, inputUnit, ruleRequest, scheduleRequest, switchTargets, timerRequest,
+  COMPARISONS, WEEK, actionText, attrOptions, captureScene, describeScene, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption, type ConditionForm, type RuleForm,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
@@ -279,6 +279,51 @@ export function RuleFormView({ entities, busy, onSubmit, onCancel }: { entities:
             <Input label="Cooldown (minutes)" value={cooldown} onChangeText={setCooldown} placeholder="e.g. 5" keyboardType="decimal-pad" />
           </Field>
         </View>
+      )}
+    </FormShell>
+  );
+}
+
+// ---- scene ------------------------------------------------------------------------------
+
+/** A scene is saved from the devices' state right now: set things up, pick the devices, name it. */
+export function SceneForm({ entities, busy, onSubmit, onCancel }: { entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+  const t = useTheme();
+  const [name, setName] = useState('');
+  const [picked, setPicked] = useState<number[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Only devices with something writable and known can be part of a scene.
+  const candidates = entities.filter((e) => captureScene(entities, [e.id]).length > 0);
+  const toggle = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const actions = captureScene(entities, picked);
+  const save = async () => {
+    const r = sceneRequest(name, actions);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    await onSubmit(r.value);
+  };
+
+  return (
+    <FormShell title="New scene" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save scene">
+      <Text style={{ color: t.muted, fontSize: 12, lineHeight: 17 }}>
+        A scene remembers how the chosen devices are set right now (on or off, brightness). Set them up first, then save.
+      </Text>
+      <Field label="Name">
+        <Input label="Scene name" value={name} onChangeText={setName} placeholder="e.g. evening" />
+      </Field>
+      <Field label="Devices">
+        {candidates.length === 0 && <Text style={{ color: t.muted }}>No devices to save yet.</Text>}
+        <ChipRow>
+          {candidates.map((e) => (
+            <Chip key={e.id} label={deviceTitle(e)} a11y={`Include ${deviceTitle(e)}`} selected={picked.includes(e.id)} onPress={() => toggle(e.id)} />
+          ))}
+        </ChipRow>
+      </Field>
+      {actions.length > 0 && (
+        <Text accessibilityLabel="Scene contents" style={{ color: t.text, fontSize: 13, marginTop: 4 }}>
+          Will save: {describeScene({ name, actions }, entities).detail}
+        </Text>
       )}
     </FormShell>
   );

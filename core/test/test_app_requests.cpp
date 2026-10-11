@@ -43,6 +43,8 @@ struct Home {
   Engine rules{disp, nullptr, nullptr};
   Sched sched;
   Timers timers;
+  core::SceneTable<3, 4> scenes;
+  std::vector<std::string> sent;  // what scene.apply dispatched, as "entity:attr"
 
   Home() {
     declare(reg, 1, 0x0100, hubproto::DeviceType::Switch,
@@ -70,6 +72,16 @@ struct Home {
   Outcome sched_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, sched, r, g); }); }
   Outcome sched_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_del(sched, r, g); }); }
   Outcome timer_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::timer_add(reg, timers, r, g, 5000, 1000000); }); }
+  Outcome scene_put(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_put(reg, scenes, r, g); }); }
+  Outcome scene_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_del(scenes, r, g); }); }
+  Outcome scene_apply(const std::string& a, bool accept = true) {
+    return call(a, [&](Reader& r, int g) {
+      return core::app::scene_apply(reg, scenes, r, g, [&](std::uint16_t e, std::uint8_t at, const Value&) {
+        sent.push_back(std::to_string(e) + ":" + std::to_string(at));
+        return accept;
+      });
+    });
+  }
   Outcome timer_cancel(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::timer_cancel(timers, r, g); }); }
 };
 
@@ -389,4 +401,111 @@ TEST_CASE("unpair and identify target a Zigbee device only") {
   const ClientMsg m = decode_client(r, frame.data(), frame.size());
   REQUIRE(m.kind == ClientMsg::Kind::Req);
   CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
+}
+
+// ---- scenes ----------------------------------------------------------------------------
+
+namespace {
+const char* kEvening = R"({"name":"evening","actions":[)"
+                       R"({"entity":257,"attr":1,"value":true},{"entity":257,"attr":2,"value":100},)"
+                       R"({"entity":256,"attr":1,"value":false}]})";
+}
+
+TEST_CASE("scene.put stores a scene, scene.apply sends every action, scene.del removes it") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  const auto* s = h.scenes.find("evening");
+  REQUIRE(s != nullptr);
+  CHECK(s->count == 3);
+  CHECK(s->actions[1].value.type == ValueType::U8);
+
+  const auto o = h.scene_apply(R"({"name":"evening"})");
+  CHECK(o.ok);
+  CHECK(o.has_counts);
+  CHECK(o.sent == 3);
+  CHECK(o.skipped == 0);
+  CHECK(h.sent == std::vector<std::string>{"257:1", "257:2", "256:1"});
+
+  CHECK(h.scene_del(R"({"name":"evening"})").ok);
+  CHECK(h.scene_del(R"({"name":"evening"})").err == Err::NotFound);
+  CHECK(h.scene_apply(R"({"name":"evening"})").err == Err::NotFound);
+}
+
+TEST_CASE("scene.put replaces by name and rejects bad input with specific codes") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  CHECK(h.scene_put(R"({"name":"evening","actions":[{"entity":256,"attr":1,"value":true}]})").ok);
+  CHECK(h.scenes.find("evening")->count == 1);
+  CHECK(h.scenes.active_count() == 1);
+
+  struct Case { const char* args; Err err; };
+  const Case bad[] = {
+      {R"({"actions":[{"entity":256,"attr":1,"value":true}]})", Err::BadArgs},                  // no name
+      {R"({"name":"Evening","actions":[{"entity":256,"attr":1,"value":true}]})", Err::BadArgs},  // bad name
+      {R"({"name":"x"})", Err::BadArgs},                                                          // no actions
+      {R"({"name":"x","actions":[]})", Err::BadArgs},
+      {R"({"name":"x","actions":{"entity":256}})", Err::BadArgs},
+      {R"({"name":"x","actions":[{"entity":256,"attr":1,"value":true},{"entity":256,"attr":1,"value":false}]})", Err::BadArgs},  // twice
+      {R"({"name":"x","actions":[{"entity":256,"attr":1,"value":5}]})", Err::BadArgs},          // wrong type
+      {R"({"name":"x","actions":[{"entity":257,"attr":2,"value":300}]})", Err::BadArgs},        // out of range
+      {R"({"name":"x","actions":[{"entity":256,"attr":19,"value":1}]})", Err::ReadOnly},        // power is read-only
+      {R"({"name":"x","actions":[{"entity":259,"attr":1,"value":true}]})", Err::ReadOnly},      // read-only on/off
+      {R"({"name":"x","actions":[{"entity":4660,"attr":1,"value":true}]})", Err::NotFound},
+      {R"({"name":"x","actions":[{"entity":1,"attr":113,"value":1}]})", Err::NotFound},         // a chip is not a device
+      {R"({"name":"x","actions":[{"entity":256,"attr":99,"value":true}]})", Err::NotFound},
+      {R"({"name":"x","actions":[{"entity":256,"attr":1,"value":true},{"entity":257,"attr":1,"value":true},{"entity":257,"attr":2,"value":1},{"entity":258,"attr":80,"value":true},{"entity":256,"attr":19,"value":1}]})", Err::BadArgs},  // too many (5 > 4)
+  };
+  for (const auto& c : bad) {
+    CAPTURE(c.args);
+    const auto o = h.scene_put(c.args);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == c.err);
+  }
+  CHECK(h.scenes.find("x") == nullptr);        // nothing half-stored
+  CHECK(h.scenes.find("evening")->count == 1); // and the existing one is untouched
+
+  const char* one = R"("actions":[{"entity":256,"attr":1,"value":true}]})";
+  REQUIRE(h.scene_put(std::string(R"({"name":"a",)") + one).ok);
+  REQUIRE(h.scene_put(std::string(R"({"name":"b",)") + one).ok);
+  CHECK(h.scene_put(std::string(R"({"name":"c",)") + one).err == Err::TableFull);
+}
+
+TEST_CASE("scene.apply skips actions whose target went away, and counts what the dispatcher refused") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  h.reg.clear_chip(1);  // every device on chip 1 vanishes
+  auto o = h.scene_apply(R"({"name":"evening"})");
+  CHECK(o.ok);
+  CHECK(o.sent == 0);
+  CHECK(o.skipped == 3);
+  CHECK(h.sent.empty());
+
+  Home g;
+  REQUIRE(g.scene_put(kEvening).ok);
+  o = g.scene_apply(R"({"name":"evening"})", /*accept=*/false);  // the dispatcher queue is full
+  CHECK(o.ok);
+  CHECK(o.sent == 0);
+  CHECK(o.skipped == 3);
+  CHECK(g.sent.size() == 3);  // each was offered
+}
+
+TEST_CASE("scene.apply refuses a missing or malformed name") {
+  Home h;
+  CHECK(h.scene_apply("{}").err == Err::BadArgs);
+  CHECK(h.scene_apply(R"({"name":5})").err == Err::BadArgs);
+  CHECK(h.scene_apply(R"({"name":"nope"})").err == Err::NotFound);
+}
+
+TEST_CASE("write_scene and encode_res_ok_counts") {
+  Home h;
+  REQUIRE(h.scene_put(kEvening).ok);
+  char buf[512];
+  JsonWriter w(buf, sizeof(buf));
+  core::app::write_scene(w, *h.scenes.find("evening"));
+  CHECK(std::string(w.c_str()) ==
+        R"({"name":"evening","actions":[{"entity":257,"attr":1,"value":true},)"
+        R"({"entity":257,"attr":2,"value":100},{"entity":256,"attr":1,"value":false}]})");
+  JsonWriter r(buf, sizeof(buf));
+  core::app::encode_res_ok_counts(r, 4, 2, 1);
+  CHECK(std::string(r.c_str()) == R"({"type":"res","id":4,"ok":true,"result":{"sent":2,"skipped":1}})");
 }

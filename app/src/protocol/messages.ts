@@ -69,6 +69,19 @@ export type Weekday = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
 export type Days = 'daily' | 'weekdays' | 'weekends' | Weekday[];
 export type Action = 'on' | 'off' | 'toggle';
 
+/** One step of a scene: set this attribute to this value. */
+export interface SceneAction {
+  entity: number;
+  attr: number;
+  value: Value;
+}
+
+/** A named group of actions applied together (`scene.apply`). Scenes arrive with the snapshot. */
+export interface Scene {
+  name: string;
+  actions: SceneAction[];
+}
+
 export interface Schedule {
   index: number;
   time: string;
@@ -146,6 +159,7 @@ export interface Snapshot {
   rules?: Rule[];
   schedules?: Schedule[];
   timers?: Timer[];
+  scenes?: Scene[];
 }
 export interface StateEvent {
   type: 'state';
