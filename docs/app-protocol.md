@@ -1,12 +1,13 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for devices, hub, schedules, timers, rules, names; TLS with certificate pinning). mDNS advertising and a Node discovery tool (stage 6). Phone support (pinned socket + mDNS browsing in a native module) is written but unverified: nothing here can build it.** The client library, a
-mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
-handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
-requests for names, rules, schedules and timers) are implemented and verified on
-hardware. Still to come: a build on a phone. The hub serves no UI
-and no static files; it only speaks this protocol. The client is a React Native
-(Expo) app that also builds for the web, in [`app/`](../app/).
+Status: **v1, implemented on the hub, in the Node tools and in the web app; verified on the real
+brain** (handshake, snapshot, live events, commands, and the management requests for names,
+rules, schedules, timers, scenes and pair/unpair/identify; TLS with certificate pinning;
+mDNS). **Not verified on a phone:** the native module that pins the certificate and browses
+mDNS on iOS/Android (`app/modules/keystone-net`) is written but nothing here can build it.
+An actual `unpair` has not been run on a device either (§5). The hub serves no UI and no
+static files; it only speaks this protocol. The client is a React Native (Expo) app that
+also builds for the web, in [`app/`](../app/).
 
 Decisions (maintainer, 2026-10-10): WebSocket + JSON; Expo (iOS, Android, web);
 shared token **and** TLS; code in `app/` of this repo.
@@ -225,6 +226,8 @@ client (§4).
 
 Live brain, Wi-Fi up, both chips ready, before the server: ~230 KB free internal
 heap; app 1.1 MB of a 1.9 MB slot; PSRAM (2 MB) present, not enabled.
+(Latest, 2026-10-11, with TLS, mDNS, scenes and the new ops: the image is 1.24 MB = 63 % of the
+slot; the server off: 215 KB free; the TLS figures below still hold, 3 TLS clients ≈ 153 KB.)
 
 Measured with stage 3 (plain `ws://`), free / lowest since boot / largest block:
 
@@ -313,17 +316,18 @@ re-pinning everywhere.
    3 clients, snapshot in parts, `state`/`chip` events, `cmd`/`accepted`/`ack`
    (a silent chip completes at once as `unreachable`), backpressure (a client with
    24 queued frames is dropped). JSON layer and message layer host-tested (40
-   tests); `app/tools/hub-check.ts` runs 20 conformance checks against a live hub
-   (mock or real) and all pass on the brain; heap measured (§9).
-4. **App screens** — *devices and hub done* (Expo, `app/`): connect screen, device
-   cards with switches / brightness / live values, offline marking when a chip is
-   silent, failure messages, chip health, auto-reconnect with the stale picture
-   cleared; **Automations** tab (schedules, timers with a live countdown, rules
-   with time window / extra condition / cooldown, each readable as a sentence,
-   delete with a second tap) and renaming a device. 111 tests; verified in a real
+   tests); `app/tools/hub-check.ts` runs 19 conformance checks against a live hub
+   (mock or real) and all pass on the brain (36 with `--mutate` over TLS); heap measured (§9).
+4. ✅ **App screens** (Expo, `app/`): connect screen, device cards with switches /
+   brightness / live values, offline marking when a chip is silent, failure messages, chip
+   health, auto-reconnect with the stale picture cleared; **Automations** tab (schedules,
+   timers with a live countdown, rules with time window / extra condition / cooldown, each
+   readable as a sentence, delete with a second tap), renaming a device. Verified in a real
    browser against the real brain: a click toggles the plug in 280–490 ms, and
    schedules, timers, rules and names created in the browser show up on the hub's
-   console and delete cleanly.
+   console and delete cleanly. Added later: **scenes** (a bar of one-tap scenes, a form
+   that saves the devices' current state; schedules, timers and rules can apply a scene)
+   and **add / blink / remove a Zigbee device**.
 5. ✅ **TLS** (hub, tools, web): `scripts/gen-hub-cert.sh`, `wss://:8443`, the console
    shows the fingerprint, `webplain` for development, pinning in the Node client with
    the token withheld until the pin matches, a fingerprint field in the app (refuses

@@ -33,8 +33,10 @@ Matter-over-WiFi.
   payload codecs). Portable C++17, **zero radio/ESP-IDF deps**. Host-testable.
 - `core/` — brain logic: `Bus`/`ByteLink`, `UartTransport`, `EntityRegistry`,
   `RadioCoordinator`, `StateMachine`, `CommandDispatcher`, `RuleEngine`,
-  `ChipMonitor`, `DesiredState`/`Reconciler`, OTA (`OtaSender`/`OtaReceiver`/
-  `OtaVerifier`). Portable C++17, **zero radio deps**. Host-testable.
+  `ChipMonitor`, `DesiredState`/`Reconciler`, `TimerTable`/`ScheduleTable`/
+  `SceneTable`, `EntityNames`, OTA (`OtaSender`/`OtaReceiver`/`OtaVerifier`), and the
+  app-protocol layer (`json.hpp`, `app_protocol.hpp`, `app_requests.hpp`). Portable
+  C++17, **zero radio deps**. Host-testable.
 - `firmware/brain-s3/` — ESP-IDF app: the brain (ESP32-S3-Zero).
 - `firmware/zigbee-c6/` — ESP-IDF app: the Zigbee coordinator (ESP32-C6).
 - `firmware/thread-c6/` — ESP-IDF app: Matter Bridge over on-chip Thread
@@ -46,8 +48,12 @@ Matter-over-WiFi.
   transport; `nvs_boot_id` persists the reboot counter). Apps pick them up via
   `EXTRA_COMPONENT_DIRS=../components`. App `main` is C++ (`app_main` is
   `extern "C"`).
-- `docs/` — per-phase notes (wiring, expected output), `ota.md`, and the
-  backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
+- `app/` — the phone/web client (Expo, TypeScript): protocol library, screens, a mock
+  hub, conformance tools, and the native pinning/mDNS module (`modules/keystone-net`,
+  not yet built on a device). See `app/README.md`.
+- `scripts/` — `matter-build.sh` (esp-matter Docker build), `gen-hub-cert.sh` (TLS identity).
+- `docs/` — per-phase notes (wiring, expected output), `ota.md`, `app-protocol.md`
+  (the app protocol and its status), and the backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
   `matter-backlog.md`).
 
 ## Build & test
@@ -61,14 +67,21 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+**App (TypeScript, Node ≥ 22)** — from `app/`: `npm install`, `npm test` (vitest, includes the
+UI rendered in jsdom), `npm run typecheck`, `npm run mock-hub` (a fake home to point the app
+at). Tools against a real hub: `npm run discover`, `probe`, `hub-check` (see `app/README.md`).
+
 **TLS identity for the brain (optional).** `scripts/gen-hub-cert.sh` creates the hub's own
 certificate and key (gitignored, per device) so the app protocol is served over `wss://`;
 without it the brain builds and serves plain `ws://` only. See docs/app-protocol.md §10.
 
 **Firmware.** Each app is its own ESP-IDF project. Two toolchains are in use:
 
-- `zigbee-c6` builds with **native ESP-IDF 5.5** (installed at `~/esp/esp-idf`),
-  because it needs the Zigbee SDK (managed components `espressif/esp-zigbee-lib`
+- `zigbee-c6` builds with **ESP-IDF 5.5** (native, if `~/esp/esp-idf` is 5.5 — on the Linux
+  dev box it is 5.1, so build in the esp-matter Docker image instead:
+  `docker run --rm -v $PWD:/project espressif/esp-matter:release-v1.6_idf_v5.5.5 bash -lc
+  "cd /project/firmware/zigbee-c6 && idf.py -B build-docker build"`, then flash with
+  esptool), because it needs the Zigbee SDK (managed components `espressif/esp-zigbee-lib`
   + `espressif/esp-zboss-lib`), which PlatformIO's bundled IDF was too old for:
 
   ```bash
@@ -78,19 +91,22 @@ without it the brain builds and serves plain `ws://` only. See docs/app-protocol
   idf.py -p <PORT> build flash
   ```
 
-- `brain-s3` builds with **PlatformIO** (`brew install platformio`):
+- `brain-s3` builds with **PlatformIO** (`brew install platformio` / `pip install platformio`;
+  IDF 6.1, managed components such as `espressif/mdns` are fetched on the first build):
 
   ```bash
   cd firmware/brain-s3
-  pio run -t upload             # port pinned in platformio.ini
+  pio run -t upload             # port pinned in platformio.ini; override: --upload-port /dev/ttyACM1
   ```
+
+- `thread-c6` (Matter) builds in the esp-matter Docker image: `scripts/matter-build.sh thread-c6`.
 
 The CAM needs an external FTDI (SPEC §10); C6 and S3-Zero flash over USB-C.
 Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 
 ## Hardware gotchas
 
-- **Serial ports** enumerate as `/dev/cu.usbmodem*`; the number changes when a
+- **Serial ports** enumerate as `/dev/cu.usbmodem*` (macOS) or `/dev/ttyACM*` (Linux); the number changes when a
   board is re-plugged (e.g. `1101` → `2101`). Identify a board with
   `esptool.py -p <PORT> chip_id`. If a flash says "port is busy or doesn't exist"
   and `ls /dev/cu.usbmodem*` shows nothing, the board de-enumerated — re-plug it.
@@ -98,10 +114,9 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
   periodic prints), so a plain reader that attaches after boot sees nothing. Open
   the port with pyserial and pulse `DTR=False; RTS=True` → `RTS=False` to reset
   the chip, then read from boot.
-- **Zigbee re-pairing:** after a coordinator reboot an already-joined device stays
-  in the network but does not re-announce, so join-triggered discovery won't
-  re-run until the device is factory-reset and re-paired. (Being addressed by
-  persisting the device table in NVS — see CLAUDE.md § Status.)
+- **Zigbee after a coordinator reboot:** an already-joined device stays in the network but
+  does not re-announce, so join-triggered discovery does not re-run. Handled: the device
+  table is persisted in NVS and re-discovered by IEEE address on boot (see CLAUDE.md § Status).
 - **UART link wiring:** C6.TX GPIO5 → S3.RX GPIO6, C6.RX GPIO4 ← S3.TX GPIO7,
   common GND (crossed).
 

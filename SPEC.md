@@ -13,7 +13,9 @@
 A local-first smart-home hub, in C++ on ESP-IDF, running across several ESP32
 chips inside one enclosure. It reimplements the *core* of Home Assistant — an
 event bus, an entity registry with a state machine, and a rule engine — but
-**not** HA's integration ecosystem, history database, template engine, or web UI.
+**not** HA's integration ecosystem, history database, template engine, or web UI. The hub
+serves no UI of its own: a separate phone/web app (`app/`) talks to it over a small
+authenticated WebSocket+JSON protocol ([docs/app-protocol.md](docs/app-protocol.md)).
 
 It is a **centralized hub**, not a distributed mesh. All "brain" chips live in
 one box, wired together. What is distributed is the *end devices* (Zigbee lamps,
@@ -25,7 +27,7 @@ distributed consensus, no lossy-radio sync protocol, rules run in one place).
 - Distributed / no-SPOF core. Rejected in favor of the simpler hub model.
 - ESP-NOW between our own boards. Not needed — boards are wired.
 - Matter **controller** at scale (see section 9). Prototype-tier only on ESP.
-- Thread / Matter-over-Thread. Deferred until Thread devices actually exist here.
+- A Thread border router / Thread controller. (Matter-over-Thread *accessory bridging* exists: chip 0x02, Phase 8.)
 - History DB beyond a simple event log on SD.
 
 ---
@@ -67,7 +69,8 @@ link (UART now, SPI/USB later).
 | ESP32-C6 #1         | **Zigbee coordinator** (`esp-zigbee-sdk`)                   | 802.15.4 (Zigbee)    |
 | ESP32-CAM           | **Recorder**: passive bus listener → event log on SD; camera/motion → events | — (wired) |
 | ESP32-S3-Zero #2    | Spare: BLE bridge, or time/NTP border node                  | WiFi + BLE           |
-| ESP32-C6 #2..#5     | Spare radio (2nd 802.15.4 for Thread later; replacements)   | WiFi/BLE/802.15.4    |
+| ESP32-C6 #2         | **Matter Bridge over on-chip Thread** (chip 0x02, `esp-matter`): mirrors registry entities as Matter accessories | 802.15.4 (Thread) + BLE |
+| ESP32-C6 #3..#5     | Spare radio (replacements)                                  | WiFi/BLE/802.15.4    |
 | nRF24L01+           | Transport for **DIY nodes only** (proprietary, not a standard SH protocol). Attaches via SPI to a chip that bridges its packets to the brain as normal DECLARE/STATE. | 2.4 GHz proprietary |
 
 The recorder is **read-only for the bus**: it only receives, never commands. If
@@ -296,9 +299,25 @@ on host for tests and later on P4/Linux.
 - **CommandDispatcher** — routes COMMAND to the owning chip by `chip_id`; tracks
   `seq` for CMD_ACK; timeouts + retry policy for critical commands.
 
+Added since (all portable and host-tested; the status log in CLAUDE.md has the detail):
+
+- **RuleEngine** is data, not code: comparison + typed operand, optional local-time
+  window, one extra state condition and a cool-down, persisted in NVS; an injected
+  action hook lets the brain run a *scene* as a rule's action.
+- **TimerTable**, **ScheduleTable** (recurring local-time actions), **SceneTable**
+  (named groups of settings, stable ids) — persisted; schedules, timers and rules may
+  target a scene.
+- **EntityNames**, **DesiredState** + **Reconciler** (what the hub last asked for is
+  re-applied after a gap), **ChipMonitor** (liveness, reboot/flapping detection).
+- **OtaSender / OtaReceiver / OtaVerifier** + portable SHA-256: firmware updates of
+  the C6 co-processors over the UART link.
+- **App protocol** (`json.hpp`, `app_protocol.hpp`, `app_requests.hpp`): the
+  allocation-free JSON layer, snapshot/event encoding and request validation behind the
+  WebSocket server that lives in the brain firmware.
+
 ---
 
-## 8. Repository layout (proposed)
+## 8. Repository layout
 
 ```
 /CLAUDE.md              # short: build/flash commands, conventions, pointer to this file
@@ -310,10 +329,14 @@ on host for tests and later on P4/Linux.
 /core/                  # brain: Bus, EntityRegistry, StateMachine, RuleEngine, Dispatcher
   /test/                # host unit tests — no radio deps
 /firmware/
-  /brain-s3/            # ESP-IDF app: core + UART transport + (later) WiFi/Matter
+  /brain-s3/            # ESP-IDF app: core + UART transport, Wi-Fi/SNTP, app-protocol server (TLS), mDNS
   /zigbee-c6/           # ESP-IDF app: esp-zigbee-sdk coordinator + Zigbee→DECLARE translator
-  /recorder-cam/        # ESP-IDF app: passive bus listener → SD event log
-/docs/
+  /thread-c6/           # ESP-IDF app: esp-matter Bridge over on-chip Thread (chip 0x02)
+  /recorder-cam/        # ESP-IDF app: passive bus listener → SD event log (stub)
+  /components/          # shared ESP-IDF wrappers: hubproto, core, esp_uart_link, nvs_boot_id
+/app/                   # Expo (React Native + web) client, mock hub, native pinning module
+/scripts/               # matter-build.sh, gen-hub-cert.sh
+/docs/                  # per-phase notes, backlogs, ota.md, app-protocol.md
 ```
 
 `libhubproto` and `core` must build and unit-test on the host (no hardware) so
@@ -351,7 +374,14 @@ debug one new thing at a time.
   expose registry entities as Matter accessories, generated from the capability
   descriptors. Dev/test certificates only.
 
-MVP = Phases 0–6. Phases 7–8 follow.
+MVP = Phases 0–6. Phase 8 exists as a Matter *bridge* on its own chip (thread-c6, esp-matter
+on the C6, not on the brain). Phase 7 (recorder) is not started.
+
+- **Phase 9 — App protocol and client (added later).** WebSocket+JSON over TLS with a
+  token and a pinned certificate, mDNS discovery, snapshot + live events, commands and
+  management requests (names, rules, schedules, timers, scenes, pair/unpair/identify);
+  an Expo app (devices, automations, scenes, hub health) and a mock hub. Design and
+  status: [docs/app-protocol.md](docs/app-protocol.md). Not verified on a phone yet.
 
 ---
 

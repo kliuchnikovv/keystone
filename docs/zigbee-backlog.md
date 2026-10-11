@@ -82,10 +82,10 @@ regularly ships bulb firmware updates.
 Console commands on the brain, forwarded to the C6, to run the network
 day-to-day:
 
-- `pair [sec]` — reopen the join window for N seconds without a reboot.
-- `unpair <entity>` — send Leave to a device and drop it from the registry
-  and NVS.
-- `identify <entity>` — flash the device's LED so we can find it physically.
+- ~~`pair [sec]`~~ ✅ done — reopen the join window for N seconds without a reboot (console and app).
+- ~~`unpair <entity>`~~ ✅ implemented (Leave + drop from NVS, then a HELLO so the brain forgets it) —
+  **not yet run on a real device**; the Matter mirror of a removed device is not cleaned up.
+- ~~`identify <entity>`~~ ✅ done — blinks the device for ~10 s.
 - `chan <N>` — move the whole PAN to a new channel (needs a coordinated
   channel change or forces a re-join).
 - `dump` — export the routing table / neighbor table / RSSI/LQI to plug
@@ -120,7 +120,7 @@ when a device needs one and there's no standard cluster equivalent.
 2. ✅ Stage 2d (Metering cluster — energy_wh) — done.
 3. First **sensor** (occupancy or contact) — enables the first real rule.
 4. Multi-endpoint — cheap and unlocks many devices.
-5. `pair` / `unpair` / `identify` — makes the coordinator usable day-to-day.
+5. ✅ `pair` / `unpair` / `identify` — console and app (unpair not yet run on hardware).
 6. IAS Zone family — a lot of practical sensors live here.
 7. Level + Color — first real light bulb.
 8. Everything else as devices appear.

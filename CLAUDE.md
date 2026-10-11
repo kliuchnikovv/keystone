@@ -14,6 +14,8 @@ map, build/flash commands, hardware gotchas); this file adds the phase-by-phase
 - `core/` — brain: Bus, EntityRegistry, StateMachine, RuleEngine, CommandDispatcher. Portable C++17, **zero radio deps** (must migrate S3 → P4 → Linux). Host-testable.
 - `firmware/brain-s3/` — ESP-IDF app, brain (ESP32-S3-Zero).
 - `firmware/zigbee-c6/` — ESP-IDF app, Zigbee coordinator (ESP32-C6).
+- `firmware/thread-c6/` — ESP-IDF app, Matter Bridge over on-chip Thread (ESP32-C6, chip 0x02; esp-matter Docker build).
+- `app/` — Expo (React Native + web) client of the hub, mock hub and tools; see `app/README.md` and `docs/app-protocol.md`.
 - `firmware/recorder-cam/` — ESP-IDF app, SD event recorder (ESP32-CAM). Phase 7 stub.
 
 ## Host build & test (libhubproto + core, no hardware)
@@ -42,7 +44,7 @@ idf.py -p <PORT> flash monitor
 C6 and S3-Zero flash over their own USB-C. The CAM needs an external FTDI (SPEC §10).
 Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8 (adjust in `main.c` if your board differs).
 
-**`zigbee-c6` builds with native ESP-IDF 5.5** (installed at `~/esp/esp-idf`;
+**`zigbee-c6` builds with ESP-IDF 5.5** (on the Linux dev box the native `~/esp/esp-idf` is 5.1, so build in the esp-matter Docker image into `build-docker`, see AGENTS.md; on the Mac it is native 5.5 at `~/esp/esp-idf`;
 `source ~/esp/esp-idf/export.sh` then `idf.py -p /dev/cu.usbmodem1101 build flash`).
 It pulls `espressif/esp-zigbee-lib` + `espressif/esp-zboss-lib` (managed
 components) — PlatformIO's bundled IDF was too old for the Zigbee SDK. `brain-s3`

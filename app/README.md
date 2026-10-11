@@ -15,8 +15,9 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `src/settings.ts`, `src/storage.ts` / `storage.web.ts` — remembering the hub
   address and token (OS keychain on a phone, `localStorage` in a browser).
 - `src/hooks/`, `src/ui/`, `App.tsx` — the screens: connect, Devices (switches,
-  brightness, live values, rename), Automations (schedules, timers, rules), Hub
-  (chip health).
+  brightness, live values, rename, scenes bar, add/identify/remove a Zigbee device),
+  Automations (scenes, schedules, timers, rules — each of the last three can apply a
+  scene), Hub (chip health).
 - `tools/mock-hub/` — a software hub speaking the protocol (3 clients max, hello
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.
@@ -44,7 +45,9 @@ npm run hub-check -- --url ws://<hub-ip>:8080/ws --token <token>   # 19 conforma
 # over TLS: pin the certificate (the hub console prints it with `webtoken`); adds 5 TLS checks
 npm run hub-check -- --url wss://<hub-ip>:8443/ws --token <token> --fingerprint <sha256>
 # without --fingerprint, `probe` on a wss:// URL just shows what the hub presents, to compare
-#   --mutate   also create and remove a name, schedule, timer and rule (7 more checks)
+#   --mutate   also create and remove a name, schedule, timer, rule and scene, and try pair/identify
+#              (12 more checks: 31 in all, 36 over TLS). Puts everything back; never unpairs a device
+#   --hold N   keep 3 clients connected for N seconds (read `heap` on the hub meanwhile)
 #   --lockout  also test the failed-login lockout (locks this machine out for a minute)
 ```
 
@@ -56,10 +59,11 @@ enough) and the token.
 - The hub speaks `wss://` (its own self-signed certificate, pinned by fingerprint; protocol
   doc §10). In a **browser** open `https://<hub>:8443/` once and accept the certificate,
   and leave the fingerprint field empty (a page cannot pin). On a **phone** the stock
-  WebSocket can neither pin nor accept a self-signed certificate, so a phone currently
-  needs `webplain on` on the hub (plain `ws://`, trusted network only) and may need
-  cleartext traffic allowed (iOS ATS exception for local networking, Android
-  `usesCleartextTraffic`). Native pinning is open work; none of this is tried on a device.
+  WebSocket can neither pin nor accept a self-signed certificate; the pinned socket comes
+  from the native module below (a development build, written but never run on a device).
+  Until that is checked, a phone can fall back to `webplain on` on the hub (plain `ws://`,
+  trusted network only), which may need cleartext traffic allowed (iOS ATS exception for
+  local networking, Android `usesCleartextTraffic`).
 - **Phones** need a development build, because the pinning module is native code (Expo Go
   cannot load it): `npx expo run:android` / `npx expo run:ios` (needs the Android SDK / Xcode)
   or an EAS build. The module has not been compiled or run by the author: expect to fix

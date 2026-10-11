@@ -8,6 +8,9 @@ Light + EPM (ActivePower W) + EEM (CumulativeEnergyImported Wh) clusters when
 declared. Build path: Docker image `espressif/esp-matter:release-v1.6_idf_v5.5.5`
 (Route 3 below); flash from host esptool.
 
+Known gap: removing a Zigbee device (`unpair`) drops its entity on the brain, but the bridged
+Matter endpoint that mirrors it is not removed from the Matter side.
+
 Matter is a stack of independent pieces. Each has its own effort and its own
 failure mode; put together they let Apple Home / Google Home / Alexa see the
 home's devices as first-class Matter accessories.

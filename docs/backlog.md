@@ -270,6 +270,15 @@ hub, and we can add the flasher any time.
 
 ## Mobile app (iOS + Android)
 
+> **Status (2026-10-11): decided and largely built.** The choice was a separate Expo app
+> (iOS, Android, web) talking to the brain over a WebSocket+JSON protocol with a token and
+> a pinned self-signed certificate — not a PWA served from the brain. See
+> [app-protocol.md](app-protocol.md) and [../app/README.md](../app/README.md). Done: local API
+> with auth, mDNS discovery, entity list/toggle/live values, rule/schedule/timer/scene editor,
+> hub health, pairing. Not done: remote access, push notifications, event history, Wi-Fi
+> provisioning, and the phone build of the native pinning module (never run on a device). The
+> text below is the original option analysis, kept for the parts still open.
+
 The user-facing surface for the home. Console-over-USB is fine for a dev
 hub; a person on the couch wants a phone. Question: **build our own app, or
 lean on someone else's, or both?**

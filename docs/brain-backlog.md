@@ -3,16 +3,17 @@
 State today (`main`): the brain (S3) runs `EntityRegistry` +
 `RadioCoordinator` + `StateMachine` + `CommandDispatcher` + `RuleEngine` +
 `ChipMonitor` + `Reconciler`/`DesiredState` on top of a `ChipRouter` that binds
-UART1↔Zigbee C6 (chip 0x01) and UART2↔Thread C6 (chip 0x02). Interactive
-console over USB-Serial-JTAG: `home`, `get`, `on|off|toggle`, `in`, `timers`,
-`cancel`, `chips`, `log`, `rule`, `desired`, `ota`. Self-heal QUERY +
-heartbeats from both C6s make the hub come up on its own. Brain cross-forwards
-DECLARE+STATE+COMMAND between chips (Zigbee↔Matter), persists rules and desired
-state in NVS, and can OTA both C6s ([ota.md](ota.md)). Host test count: run
-`ctest --test-dir build`.
-Resources on the live brain (`heap` console command, Wi-Fi up, both chips ready):
-~230 KB free internal heap (lowest since boot 226 KB, largest block 184 KB); app
-1.1 MB of a 1.9 MB OTA slot; 2 MB PSRAM present but not enabled.
+UART1↔Zigbee C6 (chip 0x01) and UART2↔Thread C6 (chip 0x02), and adds Wi-Fi + SNTP,
+timers, recurring schedules, scenes, entity names, and the app-protocol server (wss + token,
+mDNS, [app-protocol.md](app-protocol.md)). Interactive console over USB-Serial-JTAG: `home`,
+`get`, `on|off|toggle`, `in`, `at`, `timers`, `schedules`, `unschedule`, `cancel`, `scene`,
+`rule`, `name`, `desired`, `chips`, `log`, `pair|unpair|identify`, `time`, `tz`, `wifi_*`,
+`webtoken`, `webplain`, `heap`, `ota`. Brain cross-forwards DECLARE+STATE+COMMAND between
+chips (Zigbee↔Matter), persists rules, schedules, timers, scenes, names and desired state in
+NVS, and can OTA both C6s ([ota.md](ota.md)). Host test count: run `ctest --test-dir build`.
+Resources on the live brain (`heap` console command, Wi-Fi up, both chips ready, app server
+off): ~215 KB free internal heap (lowest since boot 212 KB, largest block 172 KB; ~153 KB with
+three TLS clients); app 1.24 MB of a 1.9 MB OTA slot; 2 MB PSRAM present but not enabled.
 
 That's a working single-user, single-radio-family dev hub. To be a real home
 hub, the brain needs the following, ordered roughly by how much home wiring
@@ -138,8 +139,8 @@ Once the internals are honest, the outer surface:
 
 ## 9. Multi-user / auth (much later)
 
-Only relevant once there's a web UI or MQTT — then we need at least a shared
-secret and per-source ACLs. Matter's own fabric ACLs cover that half of the
+The app protocol now has a shared token (constant-time compare, lockout) over TLS with a
+pinned certificate. What is still missing is per-user identity and per-source ACLs. Matter's own fabric ACLs cover that half of the
 world, so scope this carefully.
 
 ## 10. Testing
@@ -156,10 +157,14 @@ reconciler, chip monitor, OTA and persistent rules). What's missing:
 ## Order-of-work suggestion
 
 Done: Wi-Fi + SNTP, persistent timers, recurring schedules, rule constraints, entity names, desired-state + reconciler,
-persistent rules + `rule` console command, chip health watchdog, `self` entities.
+persistent rules + `rule` console command, chip health watchdog, `self` entities, scenes (and schedules/timers/rules
+that apply them), the app protocol + client ([app-protocol.md](app-protocol.md)): wss + token + pinning, mDNS,
+management requests, pair/unpair/identify.
 
 1. **Structured event stream** — precondition for the recorder (Phase 7).
-2. **App protocol + client** ([app-protocol.md](app-protocol.md)) — external surface.
+2. **Wi-Fi provisioning** — credentials are still baked into the image (§3).
+3. **Sunrise/sunset** for schedules and rule windows (needs a location).
+4. **Phone build** of the app's native module (not verified on a device) — see app-protocol §10.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).
 Cross-cutting design questions: [../backlog.md](backlog.md).
