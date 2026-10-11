@@ -4,7 +4,7 @@ import { describeRule, describeScene, describeSchedule, describeTimer } from '..
 import type { Commands } from '../hooks/useCommands';
 import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
-import { RuleFormView, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
+import { RuleFormView, SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
 import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
 import { useTheme } from './theme';
 
@@ -14,11 +14,13 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
   const t = useTheme();
   const [section, setSection] = useState<Section>('scenes');
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null); // the name of the scene being edited
   const left = useCountdown(home.timers);
 
   const switchTo = (s: Section) => {
     setSection(s);
     setAdding(false);
+    setEditing(null);
   };
   const add = (op: string) => async (args: Record<string, unknown>) => {
     const ok = (await commands.request(op, args)) !== null;
@@ -28,12 +30,13 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
   const del = (op: string, index: number) => () => void commands.request(op, { index });
 
   const empty = (text: string) => <Text style={{ color: t.muted, paddingVertical: 24, textAlign: 'center' }}>{text}</Text>;
-  const card = (key: string, title: string, detail: string, onDelete: () => void, label: string) => (
+  const card = (key: string, title: string, detail: string, onDelete: () => void, label: string, onEdit?: () => void) => (
     <View key={key} accessibilityLabel={label} style={[styles.item, { backgroundColor: t.card, borderColor: t.border }]}>
       <View style={{ flex: 1 }}>
         <Text style={[styles.itemTitle, { color: t.text }]}>{title}</Text>
         <Text style={{ color: t.muted, marginTop: 2 }}>{detail}</Text>
       </View>
+      {onEdit && <Button kind="plain" label="Edit" a11y={`Edit ${label}`} onPress={onEdit} />}
       <ConfirmDelete a11y={`Delete ${label}`} onConfirm={onDelete} />
     </View>
   );
@@ -58,8 +61,24 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
             <View style={{ marginTop: 12 }}>
               {home.scenes.length === 0 && !adding && empty('No scenes. A scene sets several devices at once: "evening" = lamp on, plug off.')}
               {home.scenes.map((sc) => {
+                if (editing === sc.name) {
+                  return (
+                    <SceneEditor
+                      key={`edit${sc.name}`}
+                      scene={sc}
+                      entities={home.entities}
+                      busy={commands.busy}
+                      onSubmit={async (args) => {
+                        const ok = (await commands.request('scene.put', args)) !== null;
+                        if (ok) setEditing(null);
+                        return ok;
+                      }}
+                      onCancel={() => setEditing(null)}
+                    />
+                  );
+                }
                 const d = describeScene(sc, home.entities);
-                return card(`sc${sc.name}`, d.title, d.detail, () => void commands.request('scene.del', { name: sc.name }), `scene ${sc.name}`);
+                return card(`sc${sc.name}`, d.title, d.detail, () => void commands.request('scene.del', { name: sc.name }), `scene ${sc.name}`, () => { setAdding(false); setEditing(sc.name); });
               })}
             </View>
           </>

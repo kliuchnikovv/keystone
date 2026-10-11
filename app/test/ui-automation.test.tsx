@@ -270,6 +270,81 @@ describe('Rules', () => {
   });
 });
 
+describe('Editing a scene', () => {
+  const evening = () => ({ name: 'evening', actions: [
+    { entity: 0x0100, attr: 1, value: true },
+    { entity: 0x0101, attr: 2, value: 254 },
+  ] });
+
+  it('changes values, removes a setting, adds another, and saves under the same name', async () => {
+    hub.scenes.push(evening());
+    await openApp();
+    click('Automations');
+    click('Edit scene evening');
+    await screen.findByText('Edit scene evening');
+    click('plug1 · Power value Off');                     // flip plug1 to off
+    type('lamp · Brightness value', '40');
+    click('Add setting');
+    fireEvent.click(await screen.findByText('lamp · Power'));
+    click('lamp · Power value On');
+    click('Save changes');
+    await waitFor(() => expect(hub.scenes[0]!.actions).toEqual([
+      { entity: 0x0100, attr: 1, value: false },
+      { entity: 0x0101, attr: 2, value: 102 },            // 40 % of 254
+      { entity: 0x0101, attr: 1, value: true },
+    ]));
+    expect(hub.scenes).toHaveLength(1);                    // replaced, not duplicated
+    await screen.findByLabelText('scene evening');         // back to the list
+    expect(screen.queryByText('Edit scene evening')).toBeNull();
+  });
+
+  it('removing a setting works; a scene must keep at least one', async () => {
+    hub.scenes.push(evening());
+    await openApp();
+    click('Automations');
+    click('Edit scene evening');
+    click('Remove setting lamp · Brightness');
+    click('Save changes');
+    await waitFor(() => expect(hub.scenes[0]!.actions).toHaveLength(1));
+    click('Edit scene evening');
+    click('Remove setting plug1 · Power');
+    click('Save changes');
+    expect(await screen.findByText(/at least one/)).toBeTruthy();
+    expect(hub.scenes[0]!.actions).toHaveLength(1);
+  });
+
+  it('a wrong value is named and nothing is sent; Cancel leaves the scene alone', async () => {
+    hub.scenes.push(evening());
+    await openApp();
+    click('Automations');
+    click('Edit scene evening');
+    type('lamp · Brightness value', '250');
+    click('Save changes');
+    expect(await screen.findByText(/lamp · Brightness: Out of range/)).toBeTruthy();
+    click('Cancel');
+    expect(hub.scenes[0]!.actions[1]!.value).toBe(254);
+    await screen.findByLabelText('scene evening');
+  });
+
+  it('"use what the devices are doing now" refreshes the values, and settings of vanished devices are dropped with a note', async () => {
+    hub.scenes.push({ name: 'evening', actions: [
+      { entity: 0x0100, attr: 1, value: false },
+      { entity: 0x0101, attr: 2, value: 254 },
+      { entity: 0x7777, attr: 1, value: true },
+    ] });
+    await openApp();
+    click('Automations');
+    click('Edit scene evening');
+    expect(await screen.findByText(/1 setting refer to devices that are gone/)).toBeTruthy();
+    click('Use current state');
+    click('Save changes');
+    await waitFor(() => expect(hub.scenes[0]!.actions).toEqual([
+      { entity: 0x0100, attr: 1, value: true },            // plug1 is on right now
+      { entity: 0x0101, attr: 2, value: 128 },             // the lamp is at 128
+    ]));
+  });
+});
+
 describe('Wi-Fi', () => {
   it('scans, picks a network, asks for the password and sends it; the app reconnects by itself', async () => {
     await openApp();

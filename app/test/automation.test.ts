@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
-  describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
+  addableSettings, draftsFromCurrentState, draftsRequest, inputText, sceneDrafts, describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
   nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
@@ -338,5 +338,71 @@ describe('wifi', () => {
     expect(describeWifi({ wifi: null })).toBe('Not connected');
     expect(describeWifi({ wifi: { ssid: 'home', rssi: -61, ip: '192.168.0.202' } })).toBe('home · -61 dBm · 192.168.0.202');
     expect([-40, -55, -56, -70, -71, -82, -83, -95].map(signalText)).toEqual(['strong', 'strong', 'good', 'good', 'weak', 'weak', 'very weak', 'very weak']);
+  });
+});
+
+describe('editing a scene', () => {
+  const scene = { name: 'evening', actions: [
+    { entity: 0x0100, attr: 1, value: true },      // plug1 on
+    { entity: 0x0101, attr: 2, value: 254 },       // lamp brightness 100 %
+    { entity: 0x7777, attr: 1, value: true },      // a device that is gone
+    { entity: 0x0100, attr: 0x13, value: 5 },      // power_w: read-only, cannot be set
+  ] };
+
+  it('inputText is the inverse of parseInput, in the units a person types', () => {
+    expect(inputText('on_off', 'bool', true)).toBe('on');
+    expect(inputText('on_off', 'bool', false)).toBe('off');
+    expect(inputText('brightness', 'u8', 254)).toBe('100');
+    expect(inputText('brightness', 'u8', 127)).toBe('50');
+    expect(inputText('temperature', 'i16', 215)).toBe('21.5');
+    expect(inputText('something', 'u8', 7)).toBe('7');
+    for (const [name, vt, v] of [['brightness', 'u8', 76], ['on_off', 'bool', true], ['temperature', 'i16', -30]] as const) {
+      const text = inputText(name, vt, v);
+      expect(parseInput(name, vt, text)).toEqual({ ok: true, value: v });
+    }
+  });
+
+  it('sceneDrafts: what can be edited, and what is gone', () => {
+    const { drafts, gone } = sceneDrafts(scene, ents);
+    expect(drafts.map((d) => [d.option.label, d.value])).toEqual([['plug1 · Power', 'on'], ['lamp · Brightness', '100']]);
+    expect(gone.map((a) => a.entity)).toEqual([0x7777, 0x0100]);
+  });
+
+  it('addableSettings leaves out what the scene already sets, and read-only attributes', () => {
+    const { drafts } = sceneDrafts(scene, ents);
+    const labels = addableSettings(ents, drafts).map((o) => o.label);
+    expect(labels).toContain('lamp · Power');
+    expect(labels).not.toContain('lamp · Brightness');
+    expect(labels).not.toContain('plug1 · Power');
+    expect(labels.some((l) => l.includes('Presence'))).toBe(false); // a sensor: nothing writable
+  });
+
+  it('draftsRequest parses every value and says which setting is wrong', () => {
+    const { drafts } = sceneDrafts(scene, ents);
+    expect(draftsRequest('evening', drafts)).toEqual({ ok: true, value: { name: 'evening', actions: [
+      { entity: 0x0100, attr: 1, value: true }, { entity: 0x0101, attr: 2, value: 254 } ] } });
+    const bad = drafts.map((d) => (d.option.name === 'brightness' ? { ...d, value: '250' } : d));
+    expect(draftsRequest('evening', bad)).toMatchObject({ ok: false, error: expect.stringContaining('lamp · Brightness') });
+    expect(draftsRequest('evening', [])).toMatchObject({ ok: false, error: expect.stringMatching(/at least one/) });
+    expect(draftsRequest('Bad Name', drafts)).toMatchObject({ ok: false });
+    const blank = drafts.map((d) => ({ ...d, value: '' }));
+    expect(draftsRequest('evening', blank)).toMatchObject({ ok: false });
+  });
+
+  it('a setting the person did not touch keeps its exact value, though percent cannot show every step', () => {
+    const odd = { name: 'x', actions: [{ entity: 0x0101, attr: 2, value: 77 }] };   // 77/254 = 30.3 %
+    const { drafts } = sceneDrafts(odd, ents);
+    expect(drafts[0]!.value).toBe('30');
+    expect(draftsRequest('x', drafts)).toMatchObject({ ok: true, value: { actions: [{ value: 77 }] } });         // untouched: 77, not 76
+    expect(draftsRequest('x', [{ ...drafts[0]!, value: '31' }])).toMatchObject({ ok: true, value: { actions: [{ value: 79 }] } }); // changed: parsed
+    expect(draftsRequest('x', [{ ...drafts[0]!, value: '30 ' }])).toMatchObject({ ok: true, value: { actions: [{ value: 76 }] } }); // retyped (even the same digits): parsed
+  });
+
+  it('draftsFromCurrentState reads the devices now and leaves unknown ones as they were', () => {
+    const { drafts } = sceneDrafts(scene, ents);
+    const now = draftsFromCurrentState(drafts, ents);
+    expect(now.map((d) => d.value)).toEqual(['on', '50']);   // mock home: plug1 on, lamp at 128/254
+    const unknown: Entity[] = ents.map((e) => ({ ...e, attrs: e.attrs.map((a) => ({ ...a, value: null })) }));
+    expect(draftsFromCurrentState(drafts, unknown).map((d) => d.value)).toEqual(['on', '100']);
   });
 });

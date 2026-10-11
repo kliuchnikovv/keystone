@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  COMPARISONS, WEEK, actionText, attrOptions, captureScene, describeScene, describeTimePoint, isSunPoint, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
+  COMPARISONS, WEEK, actionText, attrOptions, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption, type ConditionForm, type RuleForm,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
@@ -362,6 +362,57 @@ export function RuleFormView({ entities, scenes, hasLocation, busy, onSubmit, on
   );
 }
 
+// ---- editing a scene -------------------------------------------------------------------------
+
+/** Change the values of an existing scene, drop settings, add others, or take everything from the devices' state right now. Saves under the same name. */
+export function SceneEditor({ scene, entities, busy, onSubmit, onCancel }: { scene: Scene; entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+  const t = useTheme();
+  const initial = sceneDrafts(scene, entities);
+  const [drafts, setDrafts] = useState<SceneDraft[]>(initial.drafts);
+  const [error, setError] = useState<string | null>(null);
+  const addable = addableSettings(entities, drafts);
+
+  const save = async () => {
+    const r = draftsRequest(scene.name, drafts);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    await onSubmit(r.value);
+  };
+  const setValue = (i: number, value: string) => setDrafts((ds) => ds.map((d, k) => (k === i ? { ...d, value } : d)));
+
+  return (
+    <FormShell title={`Edit scene ${scene.name}`} error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save changes">
+      {initial.gone.length > 0 && (
+        <Text style={{ color: t.warn, fontSize: 12 }}>
+          {initial.gone.length} setting{initial.gone.length === 1 ? '' : 's'} refer to devices that are gone or cannot be set any more; saving removes them.
+        </Text>
+      )}
+      {drafts.map((d, i) => (
+        <View key={`${d.option.entity}:${d.option.attr}`} accessibilityLabel={`Setting ${d.option.label}`} style={styles.setting}>
+          <Text style={{ color: t.text, fontWeight: '600' }}>{d.option.label}</Text>
+          <ValueField scope={d.option.label} option={d.option} value={d.value} onChange={(v) => setValue(i, v)} />
+          <Button kind="danger" label="Remove" a11y={`Remove setting ${d.option.label}`} onPress={() => setDrafts((ds) => ds.filter((_, k) => k !== i))} />
+        </View>
+      ))}
+      {drafts.length === 0 && <Text style={{ color: t.muted }}>No settings. Add one below.</Text>}
+      <Field label="Add a setting">
+        <Picker
+          label="Add setting"
+          placeholder={addable.length === 0 ? 'Nothing left to add' : 'Choose a device and what to set'}
+          options={addable}
+          selected={null}
+          onSelect={(o) => setDrafts((ds) => [...ds, { option: o, value: '' }])}
+          keyOf={(o) => `${o.entity}:${o.attr}`}
+          textOf={(o) => o.label}
+        />
+      </Field>
+      <View style={{ marginTop: 6 }}>
+        <Button kind="plain" label="Use what the devices are doing now" a11y="Use current state" onPress={() => setDrafts((ds) => draftsFromCurrentState(ds, entities))} />
+      </View>
+    </FormShell>
+  );
+}
+
 // ---- scene ------------------------------------------------------------------------------
 
 /** A scene is saved from the devices' state right now: set things up, pick the devices, name it. */
@@ -412,4 +463,5 @@ const styles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '700' },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 16 },
   pair: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  setting: { marginTop: 10, gap: 6 },
 });

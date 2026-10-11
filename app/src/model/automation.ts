@@ -423,3 +423,73 @@ export function describeWifi(hub: { wifi?: { ssid: string; rssi: number; ip: str
 export function signalText(rssi: number): string {
   return rssi >= -55 ? 'strong' : rssi >= -70 ? 'good' : rssi >= -82 ? 'weak' : 'very weak';
 }
+
+// ---- editing a scene -----------------------------------------------------------------------------
+
+/** One setting of a scene being edited: the attribute and the value as it is typed (on/off, or a number in the user's units). */
+export interface SceneDraft {
+  option: AttrOption;
+  value: string;
+  /**
+   * The exact value this setting had when it was loaded, and the text it was shown as. Brightness is typed in percent
+   * (254 steps → 100), which cannot hold every step, so a setting the person did not touch keeps its exact value.
+   */
+  keep?: { text: string; wire: Value };
+}
+
+/** The inverse of parseInput: a wire value as the text a person would type. */
+export function inputText(name: string, vt: ValueType, v: Value): string {
+  if (vt === 'bool') return v === true ? 'on' : 'off';
+  if (typeof v !== 'number') return '';
+  const scale = SCALES[name];
+  return String(scale ? scale.fromWire(v) : v);
+}
+
+/**
+ * The settings of a scene as editable drafts. Settings whose device or attribute no longer exists (or can no longer
+ * be written) come back in `gone`: the hub would refuse them, so saving the edit drops them.
+ */
+export function sceneDrafts(scene: Scene, entities: Entity[]): { drafts: SceneDraft[]; gone: SceneAction[] } {
+  const writable = attrOptions(entities, { writable: true });
+  const drafts: SceneDraft[] = [];
+  const gone: SceneAction[] = [];
+  for (const a of scene.actions) {
+    const option = writable.find((o) => o.entity === a.entity && o.attr === a.attr);
+    if (option) {
+      const text = inputText(option.name, option.vt, a.value);
+      drafts.push({ option, value: text, keep: { text, wire: a.value } });
+    }
+    else gone.push(a);
+  }
+  return { drafts, gone };
+}
+
+/** The writable settings that could still be added to a scene. */
+export function addableSettings(entities: Entity[], drafts: SceneDraft[]): AttrOption[] {
+  return attrOptions(entities, { writable: true }).filter((o) => !drafts.some((d) => d.option.entity === o.entity && d.option.attr === o.attr));
+}
+
+/** Every setting set to what its device is doing right now (a device that is gone, or whose value is unknown, is left as it was). */
+export function draftsFromCurrentState(drafts: SceneDraft[], entities: Entity[]): SceneDraft[] {
+  return drafts.map((d) => {
+    const a = entities.find((e) => e.id === d.option.entity)?.attrs.find((x) => x.id === d.option.attr);
+    if (!a || a.value === null || a.value === undefined) return d;
+    const text = inputText(d.option.name, d.option.vt, a.value);
+    return { option: d.option, value: text, keep: { text, wire: a.value } };
+  });
+}
+
+/** `scene.put` arguments for the edited scene: every value parsed and range-checked, an attribute at most once. */
+export function draftsRequest(name: string, drafts: SceneDraft[]): Built {
+  const actions: SceneAction[] = [];
+  for (const d of drafts) {
+    if (d.keep && d.value === d.keep.text) {
+      actions.push({ entity: d.option.entity, attr: d.option.attr, value: d.keep.wire });
+      continue;
+    }
+    const v = parseInput(d.option.name, d.option.vt, d.value);
+    if (!v.ok) return { ok: false, error: `${d.option.label}: ${v.error}` };
+    actions.push({ entity: d.option.entity, attr: d.option.attr, value: v.value });
+  }
+  return sceneRequest(name, actions);
+}
