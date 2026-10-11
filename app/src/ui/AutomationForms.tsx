@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  COMPARISONS, WEEK, actionText, attrOptions, captureScene, describeScene, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
+  COMPARISONS, WEEK, actionText, attrOptions, captureScene, describeScene, describeTimePoint, isSunPoint, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption, type ConditionForm, type RuleForm,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
@@ -61,6 +61,30 @@ function SceneChoice({ scenes, value, onChange }: { scenes: Scene[]; value: stri
   );
 }
 
+/** "07:30", or sunrise / sunset with an offset: a text field plus quick chips that fill in the sun words. */
+function TimePointInput({ label, value, onChange, placeholder, hasLocation }: {
+  label: string; value: string; onChange(v: string): void; placeholder: string; hasLocation: boolean;
+}) {
+  const t = useTheme();
+  return (
+    <View>
+      <Input label={label} value={value} onChangeText={onChange} placeholder={placeholder} maxLength={14} />
+      <View style={{ marginTop: 6 }}>
+        <ChipRow>
+          <Chip label="Sunrise" a11y={`${label}: sunrise`} selected={/^sunrise/.test(value)} onPress={() => onChange('sunrise')} />
+          <Chip label="Sunset" a11y={`${label}: sunset`} selected={/^sunset/.test(value)} onPress={() => onChange('sunset')} />
+        </ChipRow>
+      </View>
+      {isSunPoint(value) && (
+        <Text style={{ color: hasLocation ? t.muted : t.warn, fontSize: 12, marginTop: 6 }}>
+          {describeTimePoint(value)}
+          {hasLocation ? '. Add +30 or -15 for minutes after or before.' : ". The hub needs its location first (Hub tab); until then this waits."}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }: {
   title: string; children: React.ReactNode; error: string | null; onCancel(): void; onSave(): void; busy: boolean; saveLabel: string;
 }) {
@@ -80,7 +104,7 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
 
 // ---- schedule ---------------------------------------------------------------------------
 
-export function ScheduleForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const [time, setTime] = useState('');
   const [days, setDays] = useState<Days>('daily');
   const [entity, setEntity] = useState<number | null>(null);
@@ -104,8 +128,8 @@ export function ScheduleForm({ entities, scenes, busy, onSubmit, onCancel }: { e
 
   return (
     <FormShell title="New schedule" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save schedule">
-      <Field label="Time (24 h, hub's time zone)">
-        <Input label="Time" value={time} onChangeText={setTime} placeholder="07:30" keyboardType="numbers-and-punctuation" maxLength={5} />
+      <Field label="Time (24 h, hub's time zone — or at the sun)">
+        <TimePointInput label="Time" value={time} onChange={setTime} placeholder="07:30 or sunset+30" hasLocation={hasLocation} />
       </Field>
       <Field label="Days">
         <ChipRow>
@@ -242,7 +266,7 @@ function ConditionEditor({ name, options, value, onChange, allowAny }: { name: s
 
 const EMPTY: ConditionForm = { option: null, op: '==', value: '' };
 
-export function RuleFormView({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+export function RuleFormView({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const t = useTheme();
   const all = attrOptions(entities);
   const writable = attrOptions(entities, { writable: true });
@@ -311,10 +335,10 @@ export function RuleFormView({ entities, scenes, busy, onSubmit, onCancel }: { e
               <Chip label="Between times" selected={useWindow} onPress={() => setUseWindow(true)} />
             </ChipRow>
             {useWindow && (
-              <View style={styles.pair}>
-                <View style={{ flex: 1 }}><Input label="From" value={from} onChangeText={setFrom} placeholder="18:00" maxLength={5} /></View>
-                <Text style={{ color: t.muted }}>to</Text>
-                <View style={{ flex: 1 }}><Input label="To" value={to} onChangeText={setTo} placeholder="23:00" maxLength={5} /></View>
+              <View>
+                <TimePointInput label="From" value={from} onChange={setFrom} placeholder="18:00 or sunset" hasLocation={hasLocation} />
+                <View style={{ height: 8 }} />
+                <TimePointInput label="To" value={to} onChange={setTo} placeholder="23:00 or sunrise-15" hasLocation={hasLocation} />
               </View>
             )}
           </Field>

@@ -609,3 +609,72 @@ TEST_CASE("schedules, timers and rules that apply a scene are written with the s
   core::app::write_rule(gone, 0, *h.rules.rule_at(0), nullptr);
   CHECK(std::string(gone.c_str()).find(R"("then":{"scene":"?"})") != std::string::npos);
 }
+
+// ---- sun-relative times ---------------------------------------------------------------------
+
+TEST_CASE("schedule.add accepts sunrise/sunset times with an offset, and writes them back the same way") {
+  Home h;
+  for (const char* t : {"sunset", "sunset+30", "sunrise-15", "sunrise+180"}) {
+    CAPTURE(t);
+    const auto o = h.sched_add(std::string(R"({"time":")") + t + R"(","days":"daily","entity":256,"action":"on"})");
+    REQUIRE(o.ok);
+    char buf[160];
+    JsonWriter w(buf, sizeof(buf));
+    core::app::write_schedule(w, 0, *h.sched.get(static_cast<std::size_t>(o.index)));
+    CHECK(std::string(w.c_str()).find(std::string(R"("time":")") + t + "\"") != std::string::npos);
+    CHECK(h.sched_del(std::string(R"({"index":)") + std::to_string(o.index) + "}").ok);
+  }
+  for (const char* bad : {"sunset+181", "sunrise-181", "sunset+", "Sunset", "noon", "25:00", "sunset 30"}) {
+    CAPTURE(bad);
+    const auto o = h.sched_add(std::string(R"({"time":")") + bad + R"(","entity":256,"action":"on"})");
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+  CHECK(h.sched.active_count() == 0);
+}
+
+TEST_CASE("a rule window can start or end at the sun") {
+  Home h;
+  const std::string base = R"({"when":{"entity":258,"attr":80,"op":"any"},"then":{"entity":257,"attr":1,"value":true},"between":)";
+  auto o = h.rule_add(base + R"({"from":"sunset","to":"23:00"}})");
+  REQUIRE(o.ok);
+  const auto* r = h.rules.rule_at(static_cast<std::size_t>(o.index));
+  CHECK(r->window_start == core::solar_point(true, 0));
+  CHECK(r->window_end == 23 * 60);
+  char buf[512];
+  JsonWriter w(buf, sizeof(buf));
+  core::app::write_rule(w, 0, *r);
+  CHECK(std::string(w.c_str()).find(R"("between":{"from":"sunset","to":"23:00"})") != std::string::npos);
+
+  CHECK(h.rule_add(base + R"({"from":"sunset+30","to":"sunrise-15"}})").ok);
+  for (const char* bad : {R"({"from":"sunset","to":"sunset"}})", R"({"from":"sunset+999","to":"23:00"}})",
+                          R"({"from":"dusk","to":"23:00"}})", R"({"from":"sunset"}})"}) {
+    CAPTURE(bad);
+    CHECK_FALSE(h.rule_add(base + bad).ok);
+  }
+  CHECK(h.rules.rule_count() == 2);
+}
+
+TEST_CASE("location.set takes numeric lat/lon in range and nothing else") {
+  auto parse = [](const std::string& args, double& lat, double& lon) {
+    const std::string frame = R"({"type":"req","id":1,"op":"location.set","args":)" + args + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return core::app::location_parse(r, m.args, lat, lon);
+  };
+  double lat = 0, lon = 0;
+  CHECK(parse(R"({"lat":50.08,"lon":14.43})", lat, lon).ok);
+  CHECK(lat == doctest::Approx(50.08));
+  CHECK(lon == doctest::Approx(14.43));
+  CHECK(parse(R"({"lat":-90,"lon":180})", lat, lon).ok);   // the limits themselves
+  CHECK(parse(R"({"lat":90,"lon":-180})", lat, lon).ok);
+  for (const char* bad : {R"({})", R"({"lat":50})", R"({"lon":14})", R"({"lat":"50","lon":14})", R"({"lat":null,"lon":14})",
+                          R"({"lat":90.1,"lon":0})", R"({"lat":-91,"lon":0})", R"({"lat":0,"lon":180.5})", R"({"lat":0,"lon":-181})",
+                          R"({"lat":true,"lon":1})", R"({"lat":1e999,"lon":1})"}) {
+    CAPTURE(bad);
+    const auto o = parse(bad, lat, lon);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}

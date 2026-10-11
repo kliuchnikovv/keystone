@@ -14,6 +14,7 @@ import {
   type Days,
   type Entity,
   type ErrorCode,
+  type HubInfo,
   type Rule,
   type Scene,
   type Schedule,
@@ -324,7 +325,7 @@ export class MockHub {
     this.sendTo(c.ws, {
       type: 'welcome',
       v: PROTOCOL_VERSION,
-      hub: { name: this.opts.name, fw: 'mock', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true },
+      hub: this.hubInfo(),
     });
     this.sendSnapshot(c.ws);
   }
@@ -536,6 +537,19 @@ export class MockHub {
         if (!sc) return no('not_found', 'no such scene');
         return ok(this.applyScene(sc));
       }
+      case 'location.set': {
+        const { lat, lon } = args;
+        if (typeof lat !== 'number' || typeof lon !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lon)) return no('bad_args', 'lat and lon: numbers');
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return no('bad_args', 'lat -90..90, lon -180..180');
+        this.location = { lat, lon };
+        this.broadcast({ type: 'hub', hub: this.hubInfo() });
+        return ok();
+      }
+      case 'location.clear': {
+        this.location = null;
+        this.broadcast({ type: 'hub', hub: this.hubInfo() });
+        return ok();
+      }
       case 'pair': {
         let seconds = 180;
         if (args.seconds !== undefined) {
@@ -616,7 +630,7 @@ export class MockHub {
     };
     if (a.between !== undefined) {
       const b = a.between as Record<string, unknown>;
-      if (!isHHMM(b.from) || !isHHMM(b.to) || b.from === b.to) return bad('bad_args', 'between');
+      if (!isTimePoint(b.from) || !isTimePoint(b.to) || b.from === b.to) return bad('bad_args', 'between');
       rule.between = { from: b.from as string, to: b.to as string };
     }
     if (a.and !== undefined) {
@@ -644,7 +658,7 @@ export class MockHub {
 
   private parseSchedule(a: Record<string, unknown>): Omit<Schedule, 'index'> | { code: ErrorCode; message: string } {
     const bad = (code: ErrorCode, message: string) => ({ code, message });
-    if (!isHHMM(a.time)) return bad('bad_args', 'time');
+    if (!isTimePoint(a.time)) return bad('bad_args', 'time');
     const days = a.days as Days | undefined;
     const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     const daysOk =
@@ -666,6 +680,16 @@ export class MockHub {
   }
 
   // ---- helpers ----------------------------------------------------------------
+
+  /** Where the hub is, set with location.set; the mock's "sun" is a fixed 06:00-18:00 once it is known. */
+  location: { lat: number; lon: number } | null = null;
+  private hubInfo(): HubInfo {
+    return {
+      name: this.opts.name, fw: 'mock', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true,
+      location: this.location,
+      sun: this.location ? { rise: '06:00', set: '18:00' } : null,
+    };
+  }
 
   /** Set every action of the scene; an action whose device is gone or whose chip is silent is skipped. */
   private applyScene(sc: Scene): { sent: number; skipped: number } {
@@ -700,8 +724,11 @@ export class MockHub {
   }
 }
 
-function isHHMM(v: unknown): boolean {
-  return typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+function isTimePoint(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return true;
+  const m = /^(?:sunrise|sunset)(?:[+-](\d{1,3}))?$/.exec(v);
+  return m !== null && (m[1] === undefined || Number(m[1]) <= 180);
 }
 
 function valueFits(vt: Attr['vt'], v: unknown): boolean {

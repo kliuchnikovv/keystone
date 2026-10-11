@@ -116,6 +116,8 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       return { ...s, schedules: m.schedules };
     case 'timers':
       return { ...s, timers: m.timers };
+    case 'hub':
+      return { ...s, hub: m.hub };
     case 'time':
       return s.hub ? { ...s, hub: { ...s.hub, time: m.time, tz: m.tz, synced: m.synced } } : s;
     default:

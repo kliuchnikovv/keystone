@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
-  attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
+  describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
   nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
@@ -250,5 +250,70 @@ describe('scenes', () => {
     expect(sceneRequest('evening', [])).toMatchObject({ ok: false, error: expect.stringMatching(/at least one/) });
     expect(sceneRequest('evening', Array(9).fill(a))).toMatchObject({ ok: false, error: expect.stringMatching(/at most 8/) });
     expect(sceneRequest('evening', Array(8).fill(a))).toMatchObject({ ok: true });
+  });
+});
+
+describe('sun-relative times', () => {
+  it('validTimePoint accepts clock times and sunrise/sunset with an offset up to 180 minutes', () => {
+    for (const ok of ['00:00', '23:59', 'sunrise', 'sunset', 'sunset+30', 'sunrise-15', 'sunset+180', 'sunrise-180', 'sunset+0']) {
+      expect(validTimePoint(ok), ok).toBe(true);
+    }
+    for (const bad of ['24:00', '7:30', 'sunset+181', 'sunrise-999', 'sunset+', 'Sunset', 'noon', 'sunset 30', 'sunset+1x', '', 'sunrise+-5']) {
+      expect(validTimePoint(bad), bad).toBe(false);
+    }
+    expect(isSunPoint('sunset+30')).toBe(true);
+    expect(isSunPoint('22:00')).toBe(false);
+    expect(isSunPoint('noon')).toBe(false);
+  });
+
+  it('describes them in words', () => {
+    expect(describeTimePoint('sunset')).toBe('at sunset');
+    expect(describeTimePoint('sunset+0')).toBe('at sunset');
+    expect(describeTimePoint('sunset+30')).toBe('30 min after sunset');
+    expect(describeTimePoint('sunrise-15')).toBe('15 min before sunrise');
+    expect(describeTimePoint('22:00')).toBe('22:00');
+  });
+
+  it('a schedule at the sun reads in words, and says it is waiting while the hub has no location', () => {
+    const s: Schedule = { index: 0, time: 'sunset+30', days: 'daily', entity: 256, attr: 1, action: 'on' };
+    expect(describeSchedule(s, ents)).toEqual({ title: '30 min after sunset · On plug1', detail: 'Every day' });
+    expect(describeSchedule(s, ents, { hasLocation: true }).detail).toBe('Every day');
+    expect(describeSchedule(s, ents, { hasLocation: false }).detail).toBe("Every day · waiting for the hub's location");
+    const fixed: Schedule = { ...s, time: '22:00' };
+    expect(describeSchedule(fixed, ents, { hasLocation: false }).detail).toBe('Every day'); // a clock time never waits
+  });
+
+  it('rule windows at the sun read in words; the request builders pass them on', () => {
+    const rule: Rule = { index: 0, when: { entity: 258, attr: 0x50, op: 'any' }, then: { entity: 257, attr: 1, value: true }, between: { from: 'sunset', to: '23:00' } };
+    expect(describeRule(rule, ents).extras).toEqual(['between at sunset and 23:00']);
+    expect(scheduleRequest({ time: 'sunset+30', days: 'daily', entity: 256, action: 'on' }))
+      .toEqual({ ok: true, value: { time: 'sunset+30', days: 'daily', entity: 256, action: 'on' } });
+    expect(scheduleRequest({ time: 'dusk', days: 'daily', entity: 256, action: 'on' })).toMatchObject({ ok: false });
+    const when = { option: opt('Motion sensor 0x0102 · Presence'), op: 'any' as const, value: '' };
+    const then = { option: opt('lamp · Power'), value: 'on' };
+    const r = ruleRequest({ when, then, between: { from: 'sunset+30', to: 'sunrise-15' }, and: null, cooldown: '' });
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { value: Record<string, unknown> }).value.between).toEqual({ from: 'sunset+30', to: 'sunrise-15' });
+    expect(ruleRequest({ when, then, between: { from: 'sunset+500', to: '23:00' }, and: null, cooldown: '' })).toMatchObject({ ok: false });
+  });
+});
+
+describe('location', () => {
+  it('locationRequest accepts numbers in range (a comma decimal too) and explains the rest', () => {
+    expect(locationRequest('50.08', '14.43')).toEqual({ ok: true, value: { lat: 50.08, lon: 14.43 } });
+    expect(locationRequest(' 50,08 ', '-14,43')).toEqual({ ok: true, value: { lat: 50.08, lon: -14.43 } });
+    expect(locationRequest('90', '180')).toMatchObject({ ok: true });
+    expect(locationRequest('-90', '-180')).toMatchObject({ ok: true });
+    for (const [la, lo] of [['', '1'], ['1', ''], ['abc', '1'], ['91', '0'], ['-91', '0'], ['0', '181'], ['0', '-181'], ['NaN', '1'], ['Infinity', '1']]) {
+      expect(locationRequest(la!, lo!), `${la},${lo}`).toMatchObject({ ok: false });
+    }
+  });
+
+  it('describeLocation', () => {
+    expect(describeLocation(null)).toMatch(/Not set/);
+    expect(describeLocation({ location: null })).toMatch(/Not set/);
+    expect(describeLocation({ location: { lat: 50.08, lon: 14.43 }, sun: { rise: '06:12', set: '20:01' } })).toBe('50.0800, 14.4300 · sunrise 06:12, sunset 20:01');
+    expect(describeLocation({ location: { lat: 50.08, lon: 14.43 }, sun: null, synced: false })).toMatch(/waiting for the clock/);
+    expect(describeLocation({ location: { lat: 69.6, lon: 18.9 }, sun: null, synced: true })).toMatch(/does not rise and set today/);
   });
 });

@@ -68,14 +68,14 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'schedules' && (
           <>
             {adding ? (
-              <ScheduleForm entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('schedule.add')} onCancel={() => setAdding(false)} />
+              <ScheduleForm entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('schedule.add')} onCancel={() => setAdding(false)} />
             ) : (
               <Button label="Add schedule" onPress={() => setAdding(true)} />
             )}
             <View style={{ marginTop: 12 }}>
               {home.schedules.length === 0 && !adding && empty('No schedules. A schedule runs every day (or on chosen days) at a set time.')}
               {home.schedules.map((s) => {
-                const d = describeSchedule(s, home.entities);
+                const d = describeSchedule(s, home.entities, { hasLocation: !!home.hub?.location });
                 return card(`s${s.index}`, d.title, d.detail, del('schedule.del', s.index), `schedule ${d.title}`);
               })}
             </View>
@@ -102,7 +102,7 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'rules' && (
           <>
             {adding ? (
-              <RuleFormView entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('rule.add')} onCancel={() => setAdding(false)} />
+              <RuleFormView entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('rule.add')} onCancel={() => setAdding(false)} />
             ) : (
               <Button label="Add rule" onPress={() => setAdding(true)} />
             )}

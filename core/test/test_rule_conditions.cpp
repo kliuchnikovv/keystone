@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <utility>
 
 #include "core/rule_engine.hpp"
 #include "core/endian.hpp"
@@ -389,4 +390,122 @@ TEST_CASE("a handled action still starts the cool-down") {
   trigger(f.eng);
   trigger(f.eng);  // inside the cool-down
   CHECK(hook.calls == 1);
+}
+
+// ---- sun-relative windows -------------------------------------------------------------------
+
+namespace {
+struct SunEnv {
+  bool known = true;
+  core::SunTimes sun;
+};
+bool sun_fn(void* c, core::SunTimes& out) {
+  auto* e = static_cast<SunEnv*>(c);
+  if (!e->known) return false;
+  out = e->sun;
+  return true;
+}
+std::uint16_t point(const char* t) {
+  std::uint16_t p = 0;
+  REQUIRE(core::parse_time_point(t, p));
+  return p;
+}
+}  // namespace
+
+TEST_CASE("a window from sunset to a fixed time follows the sun") {
+  Fixture f;
+  SunEnv se;
+  se.sun.valid = true;
+  se.sun.rise = 6 * 60;
+  se.sun.set = 20 * 60;
+  f.eng.set_sun(&sun_fn, &se);
+  core::Rule r = base_rule();
+  r.window_start = point("sunset");
+  r.window_end = point("23:00");
+  REQUIRE(f.eng.add_rule(r));
+
+  f.env.minute = 19 * 60 + 59;
+  trigger(f.eng);
+  CHECK(f.disp.sent == 0);
+  f.env.minute = 20 * 60;
+  trigger(f.eng);
+  CHECK(f.disp.sent == 1);
+  f.env.minute = 23 * 60;  // end exclusive
+  trigger(f.eng);
+  CHECK(f.disp.sent == 1);
+
+  se.sun.set = 17 * 60;  // winter: the window opens earlier
+  f.env.minute = 17 * 60 + 30;
+  trigger(f.eng);
+  CHECK(f.disp.sent == 2);
+}
+
+TEST_CASE("a window from sunset to sunrise wraps midnight; offsets shift the ends") {
+  Fixture f;
+  SunEnv se;
+  se.sun.valid = true;
+  se.sun.rise = 6 * 60;
+  se.sun.set = 20 * 60;
+  f.eng.set_sun(&sun_fn, &se);
+  core::Rule r = base_rule();
+  r.window_start = point("sunset+30");  // 20:30
+  r.window_end = point("sunrise-15");   // 05:45
+  REQUIRE(f.eng.add_rule(r));
+  for (auto [minute, expect] : {std::pair{20 * 60 + 29, 0}, std::pair{20 * 60 + 30, 1}, std::pair{2 * 60, 1},
+                                std::pair{5 * 60 + 44, 1}, std::pair{5 * 60 + 45, 0}, std::pair{12 * 60, 0}}) {
+    f.disp.sent = 0;
+    f.env.minute = minute;
+    f.env.now_ms += 1000;
+    trigger(f.eng);
+    CAPTURE(minute);
+    CHECK(f.disp.sent == expect);
+  }
+}
+
+TEST_CASE("a sun-relative window keeps the rule quiet without the sun (no location, polar day, no provider)") {
+  core::Rule r = base_rule();
+  r.window_start = point("sunset");
+  r.window_end = point("23:00");
+  {
+    Fixture f;  // no sun provider at all
+    REQUIRE(f.eng.add_rule(r));
+    f.env.minute = 21 * 60;
+    trigger(f.eng);
+    CHECK(f.disp.sent == 0);
+  }
+  {
+    Fixture f;
+    SunEnv se;
+    se.known = false;  // no location
+    f.eng.set_sun(&sun_fn, &se);
+    REQUIRE(f.eng.add_rule(r));
+    f.env.minute = 21 * 60;
+    trigger(f.eng);
+    CHECK(f.disp.sent == 0);
+    se.known = true;  // polar day: provider answers but the sun does not set
+    se.sun.valid = false;
+    trigger(f.eng);
+    CHECK(f.disp.sent == 0);
+  }
+}
+
+TEST_CASE("sun-relative windows persist; a malformed stored window is corruption") {
+  Fixture f;
+  core::Rule r = base_rule();
+  r.window_start = point("sunset+30");
+  r.window_end = point("sunrise-15");
+  REQUIRE(f.eng.add_rule(r));
+  std::uint8_t buf[128];
+  const std::size_t n = f.eng.save(buf, sizeof(buf));
+  REQUIRE(n > 0);
+  Fixture g;
+  REQUIRE(g.eng.load(buf, n));
+  CHECK(g.eng.rule_at(0)->window_start == point("sunset+30"));
+  CHECK(g.eng.rule_at(0)->window_end == point("sunrise-15"));
+  core::detail::put_u16_le(buf + 6 + 19, static_cast<std::uint16_t>(core::solar_point(true, 0) + 181));
+  Fixture h;
+  CHECK_FALSE(h.eng.load(buf, n));
+  core::detail::put_u16_le(buf + 6 + 19, point("sunset"));
+  core::detail::put_u16_le(buf + 6 + 21, point("sunset"));  // equal ends
+  CHECK_FALSE(h.eng.load(buf, n));
 }

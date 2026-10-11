@@ -84,7 +84,7 @@ describe('Schedules', () => {
 
     click('Add schedule');
     click('Save schedule'); // nothing filled in
-    expect(await screen.findByText('Time must look like 07:30')).toBeTruthy();
+    expect(await screen.findByText(/Time must look like 07:30/)).toBeTruthy();
     type('Time', '22:00');
     click('Save schedule');
     expect(await screen.findByText('Pick a device')).toBeTruthy();
@@ -267,6 +267,62 @@ describe('Rules', () => {
     expect(screen.getByLabelText('Choose lamp · Brightness')).toBeTruthy();
     expect(screen.queryByLabelText('Choose plug1 · Power draw')).toBeNull();
     expect(screen.queryByLabelText('Choose Motion sensor 0x0102 · Presence')).toBeNull();
+  });
+});
+
+describe('The sun', () => {
+  it('the Hub tab sets and clears the location; the sun times show up', async () => {
+    await openApp();
+    click('Hub');
+    await screen.findByText(/Not set/);
+    click('Set location');
+    type('Latitude', '50.08');
+    type('Longitude', '14.43');
+    click('Save location');
+    await screen.findByText(/50\.0800, 14\.4300 · sunrise 06:00, sunset 18:00/);
+    expect(hub.location).toEqual({ lat: 50.08, lon: 14.43 });
+    click('Clear location');
+    await screen.findByText(/Not set/);
+    expect(hub.location).toBeNull();
+  });
+
+  it('a bad location is explained without asking the hub', async () => {
+    await openApp();
+    click('Hub');
+    click('Set location');
+    type('Latitude', '95');
+    type('Longitude', '14');
+    click('Save location');
+    expect(await screen.findByText(/Latitude is between -90 and 90/)).toBeTruthy();
+    expect(hub.location).toBeNull();
+  });
+
+  it('a schedule can be set at sunset; without a location the card says it waits, with one it does not', async () => {
+    await openApp();
+    await gotoAutomations();
+    click('Add schedule');
+    click('Time: sunset');
+    expect((screen.getByLabelText('Time') as HTMLInputElement).value).toBe('sunset');
+    expect(screen.getByText(/needs its location first/)).toBeTruthy();
+    type('Time', 'sunset+30');
+    expect(screen.getByText(/30 min after sunset/)).toBeTruthy();
+    click('Device');
+    fireEvent.click(await screen.findByText('plug1'));
+    click('Save schedule');
+    await screen.findByLabelText('schedule 30 min after sunset · Off plug1');
+    expect(hub.schedules[0]).toMatchObject({ time: 'sunset+30', entity: 0x0100 });
+    expect(screen.getByText(/waiting for the hub's location/)).toBeTruthy();
+
+    click('Hub');
+    click('Set location');
+    type('Latitude', '50');
+    type('Longitude', '14');
+    click('Save location');
+    await screen.findByText(/sunrise 06:00/);
+    click('Automations');
+    click('Schedules');
+    await screen.findByLabelText('schedule 30 min after sunset · Off plug1');
+    expect(screen.queryByText(/waiting for the hub's location/)).toBeNull();
   });
 });
 

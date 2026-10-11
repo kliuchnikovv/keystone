@@ -82,8 +82,17 @@ function doText(x: { entity?: number; action?: Action; scene?: string }, entitie
   return `${actionText(x.action ?? 'toggle')} ${entityName(entities, x.entity ?? 0)}`;
 }
 
-export function describeSchedule(s: Schedule, entities: Entity[]): { title: string; detail: string } {
-  return { title: `${s.time} · ${doText(s, entities)}`, detail: describeDays(s.days) };
+/** What the app knows about the hub that changes how times read: sun-relative ones need its location. */
+export interface TimeContext {
+  hasLocation: boolean;
+}
+
+export function describeSchedule(s: Schedule, entities: Entity[], ctx?: TimeContext): { title: string; detail: string } {
+  const waiting = isSunPoint(s.time) && ctx !== undefined && !ctx.hasLocation;
+  return {
+    title: `${describeTimePoint(s.time)} · ${doText(s, entities)}`,
+    detail: waiting ? `${describeDays(s.days)} · waiting for the hub's location` : describeDays(s.days),
+  };
 }
 
 export function describeTimer(t: Timer, entities: Entity[], leftSeconds: number): { title: string; detail: string } {
@@ -119,7 +128,7 @@ export function describeRule(r: Rule, entities: Entity[]): { when: string; then:
         : `set ${entityName(entities, r.then.entity)} ${attrName(entities, r.then.entity, r.then.attr)} to ${to}`;
   }
   const extras: string[] = [];
-  if (r.between) extras.push(`between ${r.between.from} and ${r.between.to}`);
+  if (r.between) extras.push(`between ${describeTimePoint(r.between.from)} and ${describeTimePoint(r.between.to)}`);
   if (r.and) {
     extras.push(
       `only while ${entityName(entities, r.and.entity)} ${attrName(entities, r.and.entity, r.and.attr)} ${opText(r.and.op)} ${valueFor(entities, r.and.entity, r.and.attr, r.and.value)}`,
@@ -210,6 +219,31 @@ export function validTime(t: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 }
 
+// ---- sun-relative times ("sunset+30") -----------------------------------------------------------
+
+export const MAX_SUN_OFFSET_MIN = 180;
+const SUN_RE = /^(sunrise|sunset)(?:([+-])(\d{1,3}))?$/;
+
+/** A time the hub accepts: "HH:MM", or sunrise / sunset with an optional signed offset in minutes. */
+export function validTimePoint(t: string): boolean {
+  if (validTime(t)) return true;
+  const m = SUN_RE.exec(t);
+  return m !== null && (m[3] === undefined || Number(m[3]) <= MAX_SUN_OFFSET_MIN);
+}
+
+export function isSunPoint(t: string): boolean {
+  return validTimePoint(t) && !validTime(t);
+}
+
+/** "sunset+30" → "30 min after sunset"; "22:00" stays "22:00". */
+export function describeTimePoint(t: string): string {
+  const m = SUN_RE.exec(t);
+  if (!m) return t;
+  const [, sun, sign, n] = m;
+  if (n === undefined || Number(n) === 0) return `at ${sun}`;
+  return `${Number(n)} min ${sign === '-' ? 'before' : 'after'} ${sun}`;
+}
+
 export type Built = Parsed<Record<string, unknown>>;
 
 export interface ScheduleForm {
@@ -221,7 +255,7 @@ export interface ScheduleForm {
   scene?: string | null;
 }
 export function scheduleRequest(f: ScheduleForm): Built {
-  if (!validTime(f.time)) return { ok: false, error: 'Time must look like 07:30' };
+  if (!validTimePoint(f.time)) return { ok: false, error: 'Time must look like 07:30, sunset or sunset+30' };
   if (Array.isArray(f.days) && f.days.length === 0) return { ok: false, error: 'Pick at least one day' };
   if (f.scene) return { ok: true, value: { time: f.time, days: f.days, scene: f.scene } };
   if (f.entity === null) return { ok: false, error: 'Pick a device' };
@@ -281,7 +315,9 @@ export function ruleRequest(f: RuleForm): Built {
   }
   const args: Record<string, unknown> = { when: when.value, then: thenArgs };
   if (f.between) {
-    if (!validTime(f.between.from) || !validTime(f.between.to)) return { ok: false, error: 'Between: times must look like 18:00' };
+    if (!validTimePoint(f.between.from) || !validTimePoint(f.between.to)) {
+      return { ok: false, error: 'Between: times must look like 18:00, sunset or sunset+30' };
+    }
     if (f.between.from === f.between.to) return { ok: false, error: 'Between: start and end must differ' };
     args.between = { from: f.between.from, to: f.between.to };
   }
@@ -333,4 +369,25 @@ export function sceneRequest(name: string, actions: SceneAction[]): Built {
     return { ok: false, error: `A scene holds at most ${MAX_SCENE_ACTIONS} settings; choose fewer devices` };
   }
   return { ok: true, value: { name, actions } };
+}
+
+// ---- the hub's location ------------------------------------------------------------------------
+
+export function locationRequest(lat: string, lon: string): Built {
+  const la = Number(lat.trim().replace(',', '.'));
+  const lo = Number(lon.trim().replace(',', '.'));
+  if (lat.trim() === '' || lon.trim() === '' || !Number.isFinite(la) || !Number.isFinite(lo)) {
+    return { ok: false, error: 'Enter latitude and longitude as numbers, e.g. 50.08 and 14.43' };
+  }
+  if (la < -90 || la > 90) return { ok: false, error: 'Latitude is between -90 and 90 (north is positive)' };
+  if (lo < -180 || lo > 180) return { ok: false, error: 'Longitude is between -180 and 180 (east is positive)' };
+  return { ok: true, value: { lat: la, lon: lo } };
+}
+
+/** One line for the Hub screen. */
+export function describeLocation(hub: { location?: { lat: number; lon: number } | null; sun?: { rise: string; set: string } | null; synced?: boolean } | null): string {
+  if (!hub?.location) return 'Not set. Sunrise and sunset times wait until it is.';
+  const where = `${hub.location.lat.toFixed(4)}, ${hub.location.lon.toFixed(4)}`;
+  if (hub.sun) return `${where} · sunrise ${hub.sun.rise}, sunset ${hub.sun.set}`;
+  return hub.synced === false ? `${where} · waiting for the clock` : `${where} · the sun does not rise and set today`;
 }

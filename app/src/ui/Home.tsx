@@ -43,7 +43,7 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
         ) : tab === 'automations' ? (
           <AutomationsScreen home={home} commands={commands} />
         ) : (
-          <HubScreen home={home} url={settings.url} onChangeHub={onChangeHub} />
+          <HubScreen home={home} url={settings.url} onChangeHub={onChangeHub} commands={commands} />
         )}
       </View>
       {commands.message && (

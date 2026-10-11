@@ -16,6 +16,7 @@ add_executable(core_tests
   test_timer_table.cpp
   test_schedule_table.cpp
   test_scene_table.cpp
+  test_sun.cpp
   test_json.cpp
   test_app_protocol.cpp
   test_app_requests.cpp

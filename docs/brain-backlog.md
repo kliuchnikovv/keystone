@@ -36,8 +36,11 @@ one predicate, one action). To make rules richer:
   `schedules`): `at 22:00 off plug1 [daily|weekdays|weekends|mon,tue,..]`,
   `schedules`, `unschedule <n>`; local time (see `tz`), once per day, caught up
   within 10 min of its time, last-fired day persisted. Open: conditions that
-  combine a time window with a state (`after sunset && motion → light`), sunrise /
-  sunset (needs a location), one-shot absolute times.
+  combine a time window with a state — done by `between` + `and` — ~~sunrise / sunset~~
+  ✅ done (see below), one-shot absolute times.
+- ~~**Sunrise / sunset**~~ ✅ done: console `loc <lat> <lon>` (NVS `location`), `sun`, `at sunset+30 on plug1`,
+  `rule add … between sunset 23:00`; app op `location.set`/`clear` and a Location card on the Hub tab;
+  `core/sun.hpp` (NOAA algorithm, verified against `astral`) — details in app-protocol.md.
 - ~~**Scenes**~~ ✅ done (`core::SceneTable`, NVS key `scenes`, up to 8 scenes of 8 actions):
   console `scene`, `scene add <name> <id> <attr> <value> …`, `scene <name>`, `scene del <name>`;
   app ops `scene.put/del/apply` (protocol doc §5). Applied as ordinary commands, so
@@ -163,8 +166,7 @@ management requests, pair/unpair/identify.
 
 1. **Structured event stream** — precondition for the recorder (Phase 7).
 2. **Wi-Fi provisioning** — credentials are still baked into the image (§3).
-3. **Sunrise/sunset** for schedules and rule windows (needs a location).
-4. **Phone build** of the app's native module (not verified on a device) — see app-protocol §10.
+3. **Phone build** of the app's native module (not verified on a device) — see app-protocol §10.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).
 Cross-cutting design questions: [../backlog.md](backlog.md).

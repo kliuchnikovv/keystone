@@ -474,6 +474,36 @@ if (process.argv.includes('--mutate')) {
         await c.req('scene.del', { name: 'chk_scene' }).catch(() => undefined);
       }
     });
+    // The location and sun-relative times. The previous location is put back.
+    await check('location.set / clear reach every client; sun times can be used in schedules and rule windows', async () => {
+      const prev = c.getSnapshot().hub?.location ?? null;
+      let idx: number | null = null;
+      let ridx: number | null = null;
+      try {
+        await c.req('location.set', { lat: 50.08, lon: 14.43 });
+        if (!(await waitFor(() => c.getSnapshot().hub?.location?.lat === 50.08))) return 'location not pushed';
+        const sun = c.getSnapshot().hub?.sun;
+        if (c.getSnapshot().hub?.synced && !sun) return 'no sun times although the clock is synced';
+        if (sun && !(/^\d\d:\d\d$/.test(sun.rise) && /^\d\d:\d\d$/.test(sun.set))) return `odd sun times ${JSON.stringify(sun)}`;
+        idx = Number((await c.req('schedule.add', { time: 'sunset+30', days: 'daily', entity: ent, action: 'on' }))?.index);
+        ridx = Number((await c.req('rule.add', { when: { entity: ent, attr: 0x13, op: '>', value: 65000 }, then: { entity: ent, attr: 0x01, value: true }, between: { from: 'sunset', to: '23:00' } }))?.index);
+        const listed = await waitFor(() => c.getSnapshot().schedules.some((s) => s.time === 'sunset+30') && c.getSnapshot().rules.some((r) => r.between?.from === 'sunset'));
+        if (!listed) return 'sun-relative entries not listed as written';
+        const bad = [
+          await code(c.req('location.set', { lat: 91, lon: 0 })),
+          await code(c.req('location.set', { lat: 0 })),
+          await code(c.req('schedule.add', { time: 'sunset+181', days: 'daily', entity: ent, action: 'on' })),
+          await code(c.req('schedule.add', { time: 'Sunset', days: 'daily', entity: ent, action: 'on' })),
+          await code(c.req('rule.add', { when: { entity: ent, attr: 0x13, op: 'any' }, then: { entity: ent, attr: 0x01, value: true }, between: { from: 'sunset', to: 'sunset' } })),
+        ];
+        return bad.every((x) => x === 'bad_args') ? true : bad.join(',');
+      } finally {
+        if (ridx !== null) await c.req('rule.del', { index: ridx }).catch(() => undefined);
+        if (idx !== null) await c.req('schedule.del', { index: idx }).catch(() => undefined);
+        if (prev) await c.req('location.set', prev).catch(() => undefined);
+        else await c.req('location.clear').catch(() => undefined);
+      }
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();

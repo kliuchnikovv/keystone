@@ -455,6 +455,45 @@ describe('management requests', () => {
     expect(hub.scenes).toEqual([]);
   });
 
+  it('the hub location: set, pushed to every client with today\'s sun, cleared; bad input refused', async () => {
+    const a = client();
+    const b = client();
+    a.connect();
+    b.connect();
+    await ready(a);
+    await ready(b);
+    expect(a.getSnapshot().hub?.location).toBeNull();
+    await a.req('location.set', { lat: 50.08, lon: 14.43 });
+    await until(() => b.getSnapshot().hub?.location?.lat === 50.08, 'b sees the location');
+    expect(b.getSnapshot().hub).toMatchObject({ location: { lat: 50.08, lon: 14.43 }, sun: { rise: '06:00', set: '18:00' } });
+    const c = client();
+    c.connect();
+    await ready(c);
+    expect(c.getSnapshot().hub?.location).toEqual({ lat: 50.08, lon: 14.43 }); // a newcomer gets it in the welcome
+    await a.req('location.clear');
+    await until(() => b.getSnapshot().hub?.location === null && b.getSnapshot().hub?.sun === null, 'cleared');
+    for (const bad of [{}, { lat: 91, lon: 0 }, { lat: 0, lon: 181 }, { lat: '1', lon: 2 }, { lat: 1 }]) {
+      await expect(a.req('location.set', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    expect(hub.location).toBeNull();
+  });
+
+  it('schedules and rule windows can be relative to the sun', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.req('schedule.add', { time: 'sunset+30', days: 'daily', entity: 0x0100, action: 'on' });
+    await c.req('rule.add', { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { entity: 0x0101, attr: 1, value: true }, between: { from: 'sunset', to: '23:00' } });
+    await until(() => c.getSnapshot().schedules.length === 1 && c.getSnapshot().rules.length === 1, 'listed');
+    expect(c.getSnapshot().schedules[0]!.time).toBe('sunset+30');
+    expect(c.getSnapshot().rules[0]!.between).toEqual({ from: 'sunset', to: '23:00' });
+    for (const time of ['sunset+181', 'dusk', 'Sunset']) {
+      await expect(c.req('schedule.add', { time, days: 'daily', entity: 0x0100, action: 'on' })).rejects.toMatchObject({ code: 'bad_args' });
+    }
+    await expect(c.req('rule.add', { when: { entity: 0x0102, attr: 0x50, op: 'any' }, then: { entity: 0x0101, attr: 1, value: true }, between: { from: 'sunset', to: 'sunset' } }))
+      .rejects.toMatchObject({ code: 'bad_args' });
+  });
+
   it('an unknown operation is reported as unsupported', async () => {
     const c = client();
     c.connect();

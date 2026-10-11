@@ -58,7 +58,9 @@ given once in the snapshot, so the client knows how to render and edit it.
 2. Hub answers `welcome` and then a full `snapshot`:
    ```json
    { "type": "welcome", "v": 1,
-     "hub": { "name": "home", "fw": "7843023", "time": 1781000000, "tz": "UTC", "synced": true } }
+     "hub": { "name": "home", "fw": "7843023", "time": 1781000000, "tz": "UTC", "synced": true,
+              "location": { "lat": 50.08, "lon": 14.43 },        // null until set
+              "sun": { "rise": "06:12", "set": "20:01" } } }       // today, local; null if unknown
    ```
    or `{ "type": "error", "code": "unauthorized" }` and closes. A different major
    `v` gets `error: "version"`.
@@ -109,6 +111,7 @@ Incremental events (no `id`, pushed as they happen):
 | `chip` | `id`, `status` (`ready`/`silent`/`seen`), `boot_id`, `reboots`, `telemetry` |
 | `rules` / `schedules` / `timers` | the new full list, after any change (also by another client or the console) |
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
+| `hub` | `hub`: the whole hub object as in `welcome` — when the location changes or the clock becomes known (today's `sun`) |
 
 **What the real hub does today.** Live attribute changes are pushed as `state`
 events and chip health as `chip` events (on change, and every 10 s for telemetry).
@@ -154,10 +157,11 @@ so they also update the desired state (reconciler).
 | `name.set` / `name.clear` | `entity`, `name` | names `[a-z][a-z0-9_]{0,22}` (start with a letter, so never mistaken for a numeric id), unique; chips cannot be named |
 | `rule.add` | rule (§6) | `res.result.index`. `then` must be writable (`read_only` otherwise); `when` and `and` may be any attribute, a chip's telemetry included; values are checked against the attribute's type and range |
 | `rule.del` | `index` | later rules shift down |
-| `schedule.add` | `time` `"HH:MM"`, `days` (default daily), `entity`, `action` — or `scene` instead of the last two | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
+| `schedule.add` | `time` `"HH:MM"` or `"sunrise"`/`"sunset"` with an optional offset `"sunset+30"` (±180 min, see below), `days` (default daily), `entity`, `action` — or `scene` instead of the last two | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
 | `schedule.del` | `index` | |
 | `timer.add` | `delay_s` (1..604800), `entity`, `action` — or `scene` instead of the last two | `index` is the slot number |
 | `timer.cancel` | `index` | |
+| `location.set` / `location.clear` | `lat`, `lon` (degrees, north/east positive; −90..90, −180..180) / — | the hub's position, for sunrise/sunset; kept in NVS; every client gets a `hub` event with the new `location` and today's `sun` |
 | `scene.put` | `name`, `actions: [{entity, attr, value}…]` | creates or **replaces** a scene (name `[a-z][a-z0-9_]{0,22}`, 1..8 actions, up to 8 scenes). Every action must target a writable attribute of a real device (chips excluded) with a value that fits it, and an attribute may appear once: `bad_args` / `read_only` / `not_found` / `table_full`, nothing stored on error |
 | `scene.del` | `name` | `not_found` if there is no such scene |
 | `scene.apply` | `name` | sends every action as an ordinary command (so desired state and reconciliation see it) and answers `result: {sent, skipped}` once they are queued, not when the devices acked. An action whose entity has since gone, turned read-only or changed type, or that the command queue refused, is `skipped` rather than an error. Scenes change only through these ops, so clients just receive the new snapshot (`scenes` is a snapshot section; there is no scene event) |
@@ -198,6 +202,17 @@ Mirror the console grammar and `core::Rule`, with numeric ids:
 { "index": 0, "entity": 256, "attr": 1, "action": "on", "left_s": 42 }   // a pending timer
 { "index": 1, "scene": "evening", "left_s": 600 }                         // …that applies a scene
 ```
+
+**Times at the sun.** A schedule's `time` and a rule's `between.from`/`between.to` are *time points*:
+`"HH:MM"` (local) or `"sunrise"`/`"sunset"` with an optional signed offset in minutes, `"sunset+30"`,
+`"sunrise-15"` (−180..+180; anything else is `bad_args`). The hub computes today's sunrise and
+sunset from its location (NOAA algorithm, within about a minute of an independent implementation
+on 42 place-and-date combinations worldwide, polar day and night aside) and the clock's zone, with DST.
+Without a location, before the clock is synced, or on a day the sun does not rise or set, a sun-relative
+schedule does not fire and a rule with a sun-relative window stays quiet (like an unknown clock).
+A schedule whose offset time falls outside the day (`sunset+30` when the sun sets at 23:50) is
+skipped that day; a rule window that ends past midnight wraps. `between` ends must differ. Times
+are echoed in the snapshot exactly as canonical text (`"sunset"`, not `"sunset+0"`).
 
 A schedule, timer or rule may apply a **scene** instead of switching one device: `schedule.add`
 and `timer.add` take `scene: "<name>"` in place of `entity`/`action` (giving both is `bad_args`,

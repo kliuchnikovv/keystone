@@ -5,6 +5,7 @@
 
 #include "core/schedule_table.hpp"
 #include "hubproto/payload.hpp"
+#include <utility>
 
 namespace {
 
@@ -172,4 +173,102 @@ TEST_CASE("ScheduleTable save needs room; load is all-or-nothing") {
 
   CHECK(b.load(buf, n));
   CHECK(b.get(0)->entity_id == 0x0100);
+}
+
+// ---- sun-relative schedules ---------------------------------------------------------------
+
+using hubproto::Value;
+
+namespace {
+core::SunTimes sun_today(int rise, int set) {
+  core::SunTimes s;
+  s.valid = true;
+  s.rise = rise;
+  s.set = set;
+  return s;
+}
+std::uint16_t pt(const char* text) {
+  std::uint16_t p = 0;
+  REQUIRE(core::parse_time_point(text, p));
+  return p;
+}
+}  // namespace
+
+TEST_CASE("a sunset schedule fires at sunset plus its offset, once, and follows the sun day by day") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add_point(0x100, 1, Value::make_bool(true), pt("sunset+30")) >= 0);
+  Fired f;
+  const auto sun = sun_today(6 * 60, 20 * 60);  // sunset 20:00 -> due 20:30
+  CHECK(t.poll(mon(20, 29), &on_fire, &f, 10, &sun) == 0);
+  CHECK(t.poll(mon(20, 30), &on_fire, &f, 10, &sun) == 1);
+  CHECK(t.poll(mon(20, 31), &on_fire, &f, 10, &sun) == 0);  // once per day
+
+  // Next day the sun sets earlier: the schedule moves with it.
+  const core::LocalTime tue{2026, 10, 13, 20, 10, 2};
+  const auto sun2 = sun_today(6 * 60 + 2, 19 * 60 + 40);  // due 20:10
+  CHECK(t.poll(tue, &on_fire, &f, 10, &sun2) == 1);
+  CHECK(f.count == 2);
+}
+
+TEST_CASE("a sunrise schedule with a negative offset") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add_point(0x100, 1, Value::make_bool(false), pt("sunrise-15")) >= 0);
+  Fired f;
+  const auto sun = sun_today(6 * 60 + 40, 18 * 60);  // due 06:25
+  CHECK(t.poll(mon(6, 24), &on_fire, &f, 10, &sun) == 0);
+  CHECK(t.poll(mon(6, 25), &on_fire, &f, 10, &sun) == 1);
+  CHECK_FALSE(f.on);
+}
+
+TEST_CASE("a sun-relative schedule never fires without the sun: no location, polar day, or an offset that leaves the day") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add_point(0x100, 1, Value::make_bool(true), pt("sunset+30")) >= 0);
+  Fired f;
+  CHECK(t.poll(mon(20, 30), &on_fire, &f, 10, nullptr) == 0);    // no location
+  const core::SunTimes none;
+  CHECK(t.poll(mon(20, 30), &on_fire, &f, 10, &none) == 0);      // sun does not set today
+  const auto late = sun_today(5 * 60, 23 * 60 + 50);             // sunset+30 = 24:20, outside the day
+  CHECK(t.poll(mon(23, 59), &on_fire, &f, 10, &late) == 0);
+  CHECK(t.poll(mon(0, 20), &on_fire, &f, 10, &late) == 0);
+  CHECK(f.count == 0);
+  // A skipped day does not use up the schedule: tomorrow with a normal sunset it fires.
+  const core::LocalTime tue{2026, 10, 13, 20, 30, 2};
+  const auto ok = sun_today(6 * 60, 20 * 60);
+  CHECK(t.poll(tue, &on_fire, &f, 10, &ok) == 1);
+}
+
+TEST_CASE("fixed schedules ignore the sun entirely") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add(0x100, 1, Value::make_bool(true), 7, 30) >= 0);
+  Fired f;
+  CHECK(t.poll(mon(7, 30), &on_fire, &f, 10, nullptr) == 1);
+}
+
+TEST_CASE("sun-relative schedules are stored as they are, and a bad stored point is corruption") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add_point(0x100, 1, Value::make_bool(true), pt("sunset+30")) >= 0);
+  REQUIRE(t.add_point(0x101, 1, Value::make_bool(false), pt("sunrise-180"), core::kWeekdays) >= 0);
+  REQUIRE(t.add(0x102, 1, Value::make_bool(true), 22, 0) >= 0);
+  std::uint8_t buf[128];
+  const std::size_t n = t.save(buf, sizeof(buf));
+  REQUIRE(n > 0);
+  core::ScheduleTable<4> u;
+  REQUIRE(u.load(buf, n));
+  CHECK(u.get(0)->minute_of_day == pt("sunset+30"));
+  CHECK(u.get(1)->minute_of_day == pt("sunrise-180"));
+  CHECK(u.get(2)->minute_of_day == 22 * 60);
+
+  // Corrupt the first schedule's time point: offset +181 / reserved bits / 1440 / 0xFFFF.
+  for (std::uint16_t bad : {static_cast<std::uint16_t>(core::solar_point(true, 0) + 181), static_cast<std::uint16_t>(core::solar_point(true, 0) | 0x1000),
+                            static_cast<std::uint16_t>(1440), static_cast<std::uint16_t>(0xFFFF)}) {
+    std::uint8_t copy[128];
+    std::memcpy(copy, buf, n);
+    core::detail::put_u16_le(copy + 6 + 9, bad);  // header(6) + entity(2) attr(1) value(6)
+    core::ScheduleTable<4> v;
+    CAPTURE(bad);
+    CHECK_FALSE(v.load(copy, n));
+    CHECK(v.active_count() == 0);
+  }
+  CHECK(t.add_point(0x103, 1, Value::make_bool(true), 1440) == -1);
+  CHECK(t.add_point(0x103, 1, Value::make_bool(true), core::solar_point(true, 200)) == -1);
 }

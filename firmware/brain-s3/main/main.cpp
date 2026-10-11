@@ -64,7 +64,9 @@
 #include "core/rule_engine.hpp"
 #include "core/timer_table.hpp"
 #include "core/schedule_table.hpp"
+#include <cmath>
 #include "core/scene_table.hpp"
+#include "core/sun.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "app_server.hpp"
@@ -637,6 +639,103 @@ using Scenes = core::SceneTable<8, 8>;
 constexpr std::size_t kSceneBlobMax =
     Scenes::kHeaderSize + 8 * (Scenes::kNameWire + 1 + 8 * Scenes::kActionWire);
 
+// ---- location + sunrise/sunset ------------------------------------------------------------
+// The hub's position (for `sunrise`/`sunset` times in schedules and rule windows), in micro-degrees.
+// Set from the console (`loc`) or the app (`location.set`), kept in NVS. Read from several tasks, so
+// plain atomics; `g_hub_dirty` asks the main loop to tell the connected apps.
+std::atomic<std::int32_t> g_loc_lat_e6{0};
+std::atomic<std::int32_t> g_loc_lon_e6{0};
+std::atomic<bool> g_loc_set{false};
+std::atomic<bool> g_hub_dirty{false};
+
+void persist_location() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  if (g_loc_set) {
+    const std::int32_t v[2] = {g_loc_lat_e6, g_loc_lon_e6};
+    nvs_set_blob(h, "location", v, sizeof(v));
+  } else {
+    nvs_erase_key(h, "location");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_location() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::int32_t v[2] = {};
+  std::size_t sz = sizeof(v);
+  if (nvs_get_blob(h, "location", v, &sz) == ESP_OK && sz == sizeof(v) && v[0] >= -90000000 && v[0] <= 90000000 &&
+      v[1] >= -180000000 && v[1] <= 180000000) {
+    g_loc_lat_e6 = v[0];
+    g_loc_lon_e6 = v[1];
+    g_loc_set = true;
+    ESP_LOGI(kTag, "location restored: %.4f, %.4f", v[0] / 1e6, v[1] / 1e6);
+  }
+  nvs_close(h);
+}
+
+void set_location(double lat, double lon) {
+  g_loc_lat_e6 = static_cast<std::int32_t>(std::lround(lat * 1e6));
+  g_loc_lon_e6 = static_cast<std::int32_t>(std::lround(lon * 1e6));
+  g_loc_set = true;
+  persist_location();
+  g_hub_dirty = true;
+}
+
+void clear_location() {
+  g_loc_set = false;
+  persist_location();
+  g_hub_dirty = true;
+}
+
+// The wall clock's local date and its UTC offset (DST included), without relying on tm_gmtoff.
+bool local_date(int& y, int& m, int& d, int& utc_offset_min) {
+  if (!s_time_synced) return false;
+  const time_t now = time(nullptr);
+  struct tm lt{}, gt{};
+  localtime_r(&now, &lt);
+  gmtime_r(&now, &gt);
+  const long l = static_cast<long>(core::civil_day_number(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday)) * 1440 +
+                 lt.tm_hour * 60 + lt.tm_min;
+  const long g = static_cast<long>(core::civil_day_number(gt.tm_year + 1900, gt.tm_mon + 1, gt.tm_mday)) * 1440 +
+                 gt.tm_hour * 60 + gt.tm_min;
+  y = lt.tm_year + 1900;
+  m = lt.tm_mon + 1;
+  d = lt.tm_mday;
+  utc_offset_min = static_cast<int>(l - g);
+  return true;
+}
+
+// Today's sunrise and sunset in local minutes. False while the location is unset, the clock is not
+// synced, or the sun does not rise/set today. Cached per (day, offset, location): the schedule poll
+// and the rules call it often, the answer changes once a day.
+bool sun_today(core::SunTimes& out) {
+  static SemaphoreHandle_t mu = xSemaphoreCreateMutex();
+  static int c_day = -1, c_off = 0;
+  static std::int32_t c_lat = 0, c_lon = 0;
+  static core::SunTimes c_sun;
+  if (!g_loc_set) return false;
+  int y = 0, m = 0, d = 0, off = 0;
+  if (!local_date(y, m, d, off)) return false;
+  const int day = core::civil_day_number(y, m, d);
+  const std::int32_t lat = g_loc_lat_e6, lon = g_loc_lon_e6;
+  xSemaphoreTake(mu, portMAX_DELAY);
+  if (c_day != day || c_off != off || c_lat != lat || c_lon != lon) {
+    c_sun = core::sun_times_local(y, m, d, lat / 1e6, lon / 1e6, off);
+    c_day = day;
+    c_off = off;
+    c_lat = lat;
+    c_lon = lon;
+  }
+  out = c_sun;
+  xSemaphoreGive(mu);
+  return out.valid;
+}
+
+bool sun_cb(void* /*ctx*/, core::SunTimes& out) { return sun_today(out); }
+
 // The scene store is edited and read only by the main loop (console, app requests, schedules, timers).
 // Rules fire in the UART task, so they only queue the scene id (g_scene_q) and the main loop applies it.
 Scenes* g_scenes = nullptr;
@@ -880,6 +979,7 @@ const char* kRuleUsage =
     "  rule del <n>\n"
     "  optional, after the action (any order):\n"
     "    between HH:MM-HH:MM      local time window (may wrap midnight)\n"
+    "    between <from> <to>      each HH:MM or sunrise/sunset[+-min], e.g. between sunset 23:00\n"
     "    and <entity> <attr> <op> <value>   extra condition on another entity's current value\n"
     "    cooldown <sec>           at most once per <sec> seconds\n"
     "  <op>: == != < <= > >=   <attr>: on_off power_w energy_wh or a number\n"
@@ -918,10 +1018,10 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
           out + off, cap - off, ru->action_entity == core::kSceneTarget ? "  #%u  %s %s %s  ->  %s%s" : "  #%u  %s %s %s  ->  %s = %s",
           static_cast<unsigned>(i), t, op_str(ru->op), ov, a, av));
       if (ru->window_start != core::kNoWindow && off < cap) {
-        off += static_cast<std::size_t>(std::snprintf(
-            out + off, cap - off, "  between %02u:%02u-%02u:%02u",
-            static_cast<unsigned>(ru->window_start / 60), static_cast<unsigned>(ru->window_start % 60),
-            static_cast<unsigned>(ru->window_end / 60), static_cast<unsigned>(ru->window_end % 60)));
+        char w1[24], w2[24];
+        core::format_time_point(ru->window_start, w1, sizeof(w1));
+        core::format_time_point(ru->window_end, w2, sizeof(w2));
+        off += static_cast<std::size_t>(std::snprintf(out + off, cap - off, "  between %s %s", w1, w2));
       }
       if (ru->has_cond && off < cap) {
         char ct[48], cv[24];
@@ -1012,11 +1112,15 @@ void handle_rule(Req* r, const Registry& reg, Rules& rules) {
     // Optional constraints after the action, in any order.
     for (int k = tail_from; k < argc;) {
       if (std::strcmp(argv[k], "between") == 0 && k + 1 < argc) {
-        if (!parse_window(argv[k + 1], ru.window_start, ru.window_end)) {
-          std::snprintf(out, cap, "%s: bad window (use HH:MM-HH:MM, start != end)\n", argv[k + 1]);
+        if (parse_window(argv[k + 1], ru.window_start, ru.window_end)) {  // between 18:00-23:00
+          k += 2;
+        } else if (k + 2 < argc && core::parse_time_point(argv[k + 1], ru.window_start) &&
+                   core::parse_time_point(argv[k + 2], ru.window_end) && ru.window_start != ru.window_end) {
+          k += 3;  // between sunset+30 23:00
+        } else {
+          std::snprintf(out, cap, "%s: bad window (HH:MM-HH:MM, or two times: HH:MM or sunrise/sunset[+-min], different)\n", argv[k + 1]);
           return;
         }
-        k += 2;
       } else if (std::strcmp(argv[k], "cooldown") == 0 && k + 1 < argc) {
         char* end = nullptr;
         const long sec = std::strtol(argv[k + 1], &end, 10);
@@ -1211,14 +1315,12 @@ const char* days_text(std::uint8_t mask, char* buf, std::size_t cap) {
 // at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,...]
 int cmd_at(int argc, char** argv) {
   static const char* kUsage =
-      "usage: at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n"
-      "       at <HH:MM> scene <name> [days]\n";
+      "usage: at <HH:MM|sunrise|sunset[+-min]> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n"
+      "       at <time> scene <name> [days]      (e.g. at sunset+30 scene evening)\n";
   if (argc < 4 || argc > 5) { printf("%s", kUsage); return 1; }
-  int hh = 0, mm = 0;
-  char tail = 0;
-  if (std::sscanf(argv[1], "%d:%d%c", &hh, &mm, &tail) != 2 || hh < 0 || hh > 23 ||
-      mm < 0 || mm > 59) {
-    printf("bad time '%s' (use HH:MM, 24 h, local time — see `tz`)\n", argv[1]);
+  std::uint16_t point = 0;
+  if (!core::parse_time_point(argv[1], point)) {
+    printf("bad time '%s' (use HH:MM in local time — see `tz` — or sunrise/sunset with an optional +-minutes, e.g. sunset+30)\n", argv[1]);
     return 1;
   }
   const bool is_scene = std::strcmp(argv[2], "scene") == 0;
@@ -1238,7 +1340,7 @@ int cmd_at(int argc, char** argv) {
   r.target = argv[3];
   r.val = std::strcmp(argv[2], "on") == 0;
   r.idx = is_scene ? 2 : toggle ? 1 : 0;  // REQ_AT: 2 = apply the scene named by `target`
-  r.delay_ms = static_cast<std::uint32_t>(hh * 60 + mm);  // minute of day
+  r.delay_ms = point;  // a time point: a local minute of the day, or relative to the sun
   r.id = days;                                           // weekday mask
   r.out = buf;
   r.out_cap = sizeof(buf);
@@ -1399,6 +1501,48 @@ int cmd_scene(int argc, char** argv) {
   r.out = buf;
   r.out_cap = sizeof(buf);
   printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
+// loc                  show the location
+// loc <lat> <lon>      degrees, north and east positive (e.g. loc 50.08 14.43)
+// loc clear
+int cmd_loc(int argc, char** argv) {
+  if (argc == 2 && std::strcmp(argv[1], "clear") == 0) {
+    clear_location();
+    printf("location cleared (sunrise/sunset schedules will not fire)\n");
+    return 0;
+  }
+  if (argc == 3) {
+    char *e1 = nullptr, *e2 = nullptr;
+    const double lat = std::strtod(argv[1], &e1);
+    const double lon = std::strtod(argv[2], &e2);
+    if (*argv[1] == '\0' || *e1 != '\0' || *argv[2] == '\0' || *e2 != '\0' || !(lat >= -90.0 && lat <= 90.0) ||
+        !(lon >= -180.0 && lon <= 180.0)) {
+      printf("usage: loc <lat -90..90> <lon -180..180>   (degrees; north and east positive)\n");
+      return 1;
+    }
+    set_location(lat, lon);
+    printf("location set: %.4f, %.4f\n", lat, lon);
+    return 0;
+  }
+  if (argc != 1) {
+    printf("usage: loc [<lat> <lon> | clear]\n");
+    return 1;
+  }
+  if (g_loc_set) printf("location: %.4f, %.4f\n", g_loc_lat_e6 / 1e6, g_loc_lon_e6 / 1e6);
+  else printf("no location set (loc <lat> <lon>)\n");
+  return 0;
+}
+
+// sun: today's sunrise and sunset in local time.
+int cmd_sun(int /*argc*/, char** /*argv*/) {
+  if (!g_loc_set) { printf("no location set (loc <lat> <lon>)\n"); return 1; }
+  if (!s_time_synced) { printf("clock not synced yet\n"); return 1; }
+  core::SunTimes sun;
+  if (!sun_today(sun)) { printf("the sun does not rise and set at this location today (polar day/night)\n"); return 0; }
+  printf("sunrise %02d:%02d, sunset %02d:%02d (local time, see `tz`)\n", sun.rise / 60, sun.rise % 60, sun.set / 60,
+         sun.set % 60);
   return 0;
 }
 
@@ -1645,6 +1789,8 @@ void start_console() {
   reg_cmd("toggle", "toggle <id> - flip a switch", &cmd_toggle);
   reg_cmd("in", "in <sec> <on|off> <id> - run a switch action after a delay", &cmd_in);
   reg_cmd("timers", "list pending timers", &cmd_timers);
+  reg_cmd("loc", "loc [<lat> <lon> | clear] - the hub's location, for sunrise/sunset", &cmd_loc);
+  reg_cmd("sun", "today's sunrise and sunset", &cmd_sun);
   reg_cmd("scene", "scene [<name> | add <name> <id> <attr> <value> ... | del <name>] - named groups of actions", &cmd_scene);
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
   reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
@@ -2040,6 +2186,12 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "timer.cancel")) {
     o = timer_cancel(timers, reader, m.args);
     if (o.ok) persist_timers(timers, now);
+  } else if (!std::strcmp(op, "location.set")) {
+    double lat = 0, lon = 0;
+    o = location_parse(reader, m.args, lat, lon);
+    if (o.ok) set_location(lat, lon);
+  } else if (!std::strcmp(op, "location.clear")) {
+    clear_location();
   } else if (!std::strcmp(op, "scene.put")) {
     o = scene_put(reg, scenes, reader, m.args);
     if (o.ok) persist_scenes(scenes);
@@ -2095,6 +2247,17 @@ void app_hub_info(core::app::HubInfo& h) {
   h.time = s_time_synced ? static_cast<std::int64_t>(time(nullptr)) : 0;
   h.tz = tz != nullptr ? tz : "UTC";
   h.synced = s_time_synced;
+  if (g_loc_set) {
+    h.has_location = true;
+    h.lat = g_loc_lat_e6 / 1e6;
+    h.lon = g_loc_lon_e6 / 1e6;
+    core::SunTimes sun;
+    if (sun_today(sun)) {
+      h.has_sun = true;
+      h.sun_rise = sun.rise;
+      h.sun_set = sun.set;
+    }
+  }
 }
 
 // mDNS: advertise `_keystone._tcp` on the port the app server actually listens on. Called
@@ -2363,6 +2526,8 @@ extern "C" void app_main(void) {
   g_scenes = &scene_store;
   g_scene_q = xQueueCreate(8, sizeof(std::uint8_t));
   rules.set_action_hook(&rule_action_hook, nullptr);
+  rules.set_sun(&sun_cb, nullptr);
+  restore_location();
 
   // App protocol: live events from the UART RX task, CMD_ACK bookkeeping, and the
   // server itself (only when a token has been set with `webtoken`).
@@ -2429,6 +2594,15 @@ extern "C" void app_main(void) {
         core::app::encode_time(w, static_cast<std::int64_t>(now), tz != nullptr ? tz : "UTC", true);
         if (w.ok()) appsrv::broadcast(b, w.size());
       }
+      g_hub_dirty = true;  // today's sun becomes known with the clock
+    }
+    if (g_hub_dirty.exchange(false) && appsrv::client_count() > 0) {
+      char b[320];
+      core::JsonWriter w(b, sizeof(b));
+      core::app::HubInfo info{};
+      app_hub_info(info);
+      core::app::encode_hub(w, info);
+      if (w.ok()) appsrv::broadcast(b, w.size());
     }
 
     if (!announced_zb && coord.chip_ready(kZigbeeChipId)) {
@@ -2507,6 +2681,8 @@ extern "C" void app_main(void) {
       localtime_r(&wall, &lt);
       const core::LocalTime local{lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday,
                                   lt.tm_hour, lt.tm_min, lt.tm_wday};
+      core::SunTimes sun;
+      const bool have_sun = sun_today(sun);
       const std::size_t n = schedule_table.poll(
           local,
           [](void* ctx, std::size_t slot, const Schedules::Schedule& s) {
@@ -2514,7 +2690,7 @@ extern "C" void app_main(void) {
             run_action(*c->disp, *c->reg, c->now_ms, "schedule", slot, s.entity_id,
                        s.attr_id, s.value);
           },
-          &fc);
+          &fc, core::ScheduleTable<8>::kDefaultMaxLateMin, have_sun ? &sun : nullptr);
       if (n > 0) persist_schedules(schedule_table);  // keeps last_fired_day across reboots
     }
 
@@ -2786,26 +2962,25 @@ extern "C" void app_main(void) {
           const hubproto::Value action =
               r->idx == 2 ? hubproto::Value::make_bool(true)
               : r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
-          const int minute = static_cast<int>(r->delay_ms);
-          const int slot = schedule_table.add(id, sattr, action, minute / 60, minute % 60,
-                                              static_cast<std::uint8_t>(r->id));
+          const auto point = static_cast<std::uint16_t>(r->delay_ms);
+          const int slot = schedule_table.add_point(id, sattr, action, point, static_cast<std::uint8_t>(r->id));
           if (slot < 0) {
             std::snprintf(r->out, r->out_cap, "no free schedule slot\n");
             break;
           }
           persist_schedules(schedule_table);
-          char dbuf[40];
+          char dbuf[40], tbuf[24];
+          core::format_time_point(point, tbuf, sizeof(tbuf));
+          const char* hint = s_time_synced ? "" : " (clock not synced yet — paused until it is)";
+          if (core::is_solar_point(point) && !g_loc_set) hint = " (no location yet — set one with `loc <lat> <lon>`; it will not fire until then)";
           if (id == core::kSceneTarget) {
-            std::snprintf(r->out, r->out_cap, "schedule #%d: %02d:%02d %s scene %s%s\n", slot, minute / 60,
-                          minute % 60, days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)), r->target,
-                          s_time_synced ? "" : " (clock not synced yet — paused until it is)");
+            std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s scene %s%s\n", slot, tbuf,
+                          days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)), r->target, hint);
             break;
           }
-          std::snprintf(r->out, r->out_cap, "schedule #%d: %02d:%02d %s 0x%04x -> %s%s\n", slot,
-                        minute / 60, minute % 60,
+          std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s 0x%04x -> %s%s\n", slot, tbuf,
                         days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)),
-                        static_cast<unsigned>(id), timer_action_text(action),
-                        s_time_synced ? "" : " (clock not synced yet — paused until it is)");
+                        static_cast<unsigned>(id), timer_action_text(action), hint);
           break;
         }
         case REQ_SCHEDULES: {
@@ -2815,20 +2990,19 @@ extern "C" void app_main(void) {
             const auto* s = schedule_table.get(i);
             if (s == nullptr) continue;
             any = true;
-            char dbuf[40];
+            char dbuf[40], tbuf[24];
+            core::format_time_point(s->minute_of_day, tbuf, sizeof(tbuf));
             if (s->entity_id == core::kSceneTarget) {
               const char* sn = scene_name_for(s->entity_id, s->attr_id);
               off += static_cast<std::size_t>(std::snprintf(
-                  r->out + off, r->out_cap - off, "#%u: %02u:%02u %s  scene %s\n", static_cast<unsigned>(i),
-                  static_cast<unsigned>(s->minute_of_day / 60), static_cast<unsigned>(s->minute_of_day % 60),
+                  r->out + off, r->out_cap - off, "#%u: %s %s  scene %s\n", static_cast<unsigned>(i), tbuf,
                   days_text(s->weekdays, dbuf, sizeof(dbuf)), sn != nullptr ? sn : "?"));
               continue;
             }
             const char* name = reg.name_of(s->entity_id);
             off += static_cast<std::size_t>(std::snprintf(
-                r->out + off, r->out_cap - off, "#%u: %02u:%02u %s  0x%04x%s%s%s -> %s\n",
-                static_cast<unsigned>(i), static_cast<unsigned>(s->minute_of_day / 60),
-                static_cast<unsigned>(s->minute_of_day % 60),
+                r->out + off, r->out_cap - off, "#%u: %s %s  0x%04x%s%s%s -> %s\n",
+                static_cast<unsigned>(i), tbuf,
                 days_text(s->weekdays, dbuf, sizeof(dbuf)),
                 static_cast<unsigned>(s->entity_id), name != nullptr ? " (" : "",
                 name != nullptr ? name : "", name != nullptr ? ")" : "",

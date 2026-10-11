@@ -15,30 +15,12 @@
 #include <cstdint>
 #include <cstring>
 
+#include "core/civil_time.hpp"
 #include "core/endian.hpp"
+#include "core/sun.hpp"
 #include "hubproto/payload.hpp"
 
 namespace core {
-
-// Local wall-clock time. weekday: 0 = Sunday … 6 = Saturday (struct tm tm_wday).
-struct LocalTime {
-  int year;     // e.g. 2026
-  int month;    // 1..12
-  int day;      // 1..31
-  int hour;     // 0..23
-  int minute;   // 0..59
-  int weekday;  // 0..6
-};
-
-// Days since 1970-01-01 for a civil date (proleptic Gregorian, H. Hinnant).
-inline std::int32_t civil_day_number(int year, int month, int day) noexcept {
-  year -= month <= 2 ? 1 : 0;
-  const int era = (year >= 0 ? year : year - 399) / 400;
-  const int yoe = year - era * 400;
-  const int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
-  const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return static_cast<std::int32_t>(era * 146097 + doe - 719468);
-}
 
 // Weekday bitmask: bit n = weekday n (0 = Sunday).
 inline constexpr std::uint8_t kEveryDay = 0x7F;
@@ -60,7 +42,7 @@ class ScheduleTable {
     std::uint16_t   entity_id = 0;
     std::uint8_t    attr_id = 0;
     hubproto::Value value{};
-    std::uint16_t   minute_of_day = 0;  // 0..1439, local time
+    std::uint16_t   minute_of_day = 0;  // a time point (core/sun.hpp): a local minute 0..1439, or sun-relative
     std::uint8_t    weekdays = kEveryDay;
     std::int32_t    last_fired_day = kNeverFired;  // civil_day_number
   };
@@ -88,6 +70,27 @@ class ScheduleTable {
     return -1;
   }
 
+  // Add a schedule at a time point: a fixed minute or relative to sunrise/sunset ("sunset+30").
+  // A sun-relative schedule fires only on days the sun's time is known (a location is set, and the
+  // sun rises and sets that day) and the offset time falls inside the day.
+  int add_point(std::uint16_t entity_id, std::uint8_t attr_id, const hubproto::Value& value,
+                std::uint16_t point, std::uint8_t weekdays = kEveryDay) noexcept {
+    if (!valid_point(point) || (weekdays & kEveryDay) == 0) return -1;
+    for (std::size_t i = 0; i < MaxSchedules; ++i) {
+      if (items_[i].active) continue;
+      Schedule& s = items_[i];
+      s = Schedule{};
+      s.active = true;
+      s.entity_id = entity_id;
+      s.attr_id = attr_id;
+      s.value = value;
+      s.minute_of_day = point;
+      s.weekdays = static_cast<std::uint8_t>(weekdays & kEveryDay);
+      return static_cast<int>(i);
+    }
+    return -1;
+  }
+
   bool remove(std::size_t slot) noexcept {
     if (slot >= MaxSchedules || !items_[slot].active) return false;
     items_[slot].active = false;
@@ -108,9 +111,10 @@ class ScheduleTable {
     return n;
   }
 
-  // Fire every schedule that is due at `now`. Returns how many fired.
+  // Fire every schedule that is due at `now`. Returns how many fired. `sun` is today's sunrise and
+  // sunset (nullptr if unknown): sun-relative schedules wait for it and never fire without it.
   std::size_t poll(const LocalTime& now, FireCallback cb, void* ctx,
-                   int max_late_min = kDefaultMaxLateMin) noexcept {
+                   int max_late_min = kDefaultMaxLateMin, const SunTimes* sun = nullptr) noexcept {
     if (now.weekday < 0 || now.weekday > 6) return 0;
     const std::int32_t today = civil_day_number(now.year, now.month, now.day);
     const int minute_now = now.hour * 60 + now.minute;
@@ -120,7 +124,10 @@ class ScheduleTable {
       if (!s.active) continue;
       if ((s.weekdays & (1u << now.weekday)) == 0) continue;
       if (s.last_fired_day == today) continue;
-      const int late = minute_now - static_cast<int>(s.minute_of_day);
+      int due = 0;
+      if (!point_minute(s.minute_of_day, sun, due)) continue;
+      if (due < 0 || due >= 24 * 60) continue;  // a sun offset that leaves the day: skipped today
+      const int late = minute_now - due;
       if (late < 0 || late > max_late_min) continue;
       s.last_fired_day = today;
       ++fired;
@@ -176,7 +183,7 @@ class ScheduleTable {
       const auto vt = static_cast<hubproto::ValueType>(e[3]);
       if (hubproto::value_size(vt) == 0 || e[4] != hubproto::value_size(vt)) return false;
       const std::uint16_t minute = detail::get_u16_le(e + 9);
-      if (minute >= 24 * 60 || (e[11] & kEveryDay) == 0) return false;
+      if (!valid_point(minute) || (e[11] & kEveryDay) == 0) return false;
       s.active = true;
       s.entity_id = detail::get_u16_le(e);
       s.attr_id = e[2];

@@ -295,15 +295,14 @@ Outcome rule_add(Reg& reg, const Scenes& scenes, Engine& rules, const Reader& r,
 
   const int between = r.find(args, "between");
   if (between >= 0) {
-    char from[8], to[8];
-    int h1 = 0, m1 = 0, h2 = 0, m2 = 0;
-    if (!r.get_string(r.find(between, "from"), from, sizeof(from)) || !detail::parse_hhmm(from, h1, m1) ||
-        !r.get_string(r.find(between, "to"), to, sizeof(to)) || !detail::parse_hhmm(to, h2, m2) ||
-        h1 * 60 + m1 == h2 * 60 + m2) {
-      return Outcome::fail(Err::BadArgs, "between: HH:MM to HH:MM, different");
+    char from[16], to[16];
+    std::uint16_t p1 = 0, p2 = 0;
+    if (!r.get_string(r.find(between, "from"), from, sizeof(from)) || !parse_time_point(from, p1) ||
+        !r.get_string(r.find(between, "to"), to, sizeof(to)) || !parse_time_point(to, p2) || p1 == p2) {
+      return Outcome::fail(Err::BadArgs, "between: HH:MM or sunrise/sunset[+-min], two different times");
     }
-    ru.window_start = static_cast<std::uint16_t>(h1 * 60 + m1);
-    ru.window_end = static_cast<std::uint16_t>(h2 * 60 + m2);
+    ru.window_start = p1;
+    ru.window_end = p2;
   }
 
   const int cond = r.find(args, "and");
@@ -346,10 +345,10 @@ template <typename Reg, typename Scenes, typename Sched, typename Reader>
 Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader& r, int args) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   Outcome fail;
-  char t[8];
-  int h = 0, m = 0;
-  if (!r.get_string(r.find(args, "time"), t, sizeof(t)) || !detail::parse_hhmm(t, h, m)) {
-    return Outcome::fail(Err::BadArgs, "time: HH:MM");
+  char t[16];
+  std::uint16_t point = 0;
+  if (!r.get_string(r.find(args, "time"), t, sizeof(t)) || !parse_time_point(t, point)) {
+    return Outcome::fail(Err::BadArgs, "time: HH:MM or sunrise/sunset[+-min]");
   }
   std::uint8_t days = kEveryDay;
   if (!detail::parse_days(r, r.find(args, "days"), days)) return Outcome::fail(Err::BadArgs, "days");
@@ -357,7 +356,7 @@ Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader&
   std::uint16_t entity = 0;
   std::uint8_t attr = 0;
   if (!detail::action_target(reg, scenes, r, args, entity, attr, action, fail)) return fail;
-  const int slot = sched.add(entity, attr, action, h, m, days);
+  const int slot = sched.add_point(entity, attr, action, point, days);
   if (slot < 0) return Outcome::fail(Err::TableFull, "schedule table is full");
   return Outcome::at(slot);
 }
@@ -489,6 +488,20 @@ Outcome scene_apply(const Reg& reg, const Scenes& scenes, const Reader& r, int a
   const auto res = apply_scene(reg, scenes, name, send);
   if (!res.found) return Outcome::fail(Err::NotFound, "no such scene");
   return Outcome::counts(static_cast<std::int64_t>(res.sent), static_cast<std::int64_t>(res.skipped));
+}
+
+// ---- location --------------------------------------------------------------------------------
+
+/** `location.set {lat, lon}` (degrees, north/east positive). The caller stores it. */
+template <typename Reader>
+Outcome location_parse(const Reader& r, int args, double& lat, double& lon) {
+  if (args < 0 || !r.get_double(r.find(args, "lat"), lat) || !r.get_double(r.find(args, "lon"), lon)) {
+    return Outcome::fail(Err::BadArgs, "lat and lon: numbers");
+  }
+  if (!(lat >= -90.0 && lat <= 90.0) || !(lon >= -180.0 && lon <= 180.0)) {
+    return Outcome::fail(Err::BadArgs, "lat -90..90, lon -180..180");
+  }
+  return Outcome::done();
 }
 
 // ---- Zigbee chip operations: pair, unpair, identify ----------------------------------------

@@ -11,6 +11,7 @@
 #include "core/json.hpp"
 #include "core/rule_engine.hpp"
 #include "core/scene_table.hpp"
+#include "core/sun.hpp"
 #include "core/schedule_table.hpp"
 #include "hubproto/payload.hpp"
 
@@ -284,13 +285,45 @@ struct HubInfo {
   std::int64_t time;  // unix seconds, 0 if unknown
   const char* tz;
   bool synced;
+  // Where the hub is (for sunrise/sunset), if set; and today's sun, if it can be known.
+  bool has_location = false;
+  double lat = 0.0;
+  double lon = 0.0;
+  bool has_sun = false;
+  int sun_rise = 0;  // local minutes of the day
+  int sun_set = 0;
 };
 
+inline void write_hub_info(JsonWriter& w, const HubInfo& h) noexcept {
+  w.begin_object().kv("name", h.name).kv("fw", h.fw).kv("time", h.time).kv("tz", h.tz).kv("synced", h.synced);
+  w.key("location");
+  if (h.has_location) w.begin_object().key("lat").f64(h.lat).key("lon").f64(h.lon).end_object();
+  else w.null();
+  w.key("sun");
+  if (h.has_sun) {
+    char t[8];
+    w.begin_object().key("rise");
+    format_time_point(static_cast<std::uint16_t>(h.sun_rise), t, sizeof(t));
+    w.str(t).key("set");
+    format_time_point(static_cast<std::uint16_t>(h.sun_set), t, sizeof(t));
+    w.str(t).end_object();
+  } else {
+    w.null();
+  }
+  w.end_object();
+}
+
 inline void encode_welcome(JsonWriter& w, const HubInfo& h) noexcept {
-  w.begin_object().kv("type", "welcome").kv("v", kProtocolVersion)
-      .key("hub").begin_object()
-      .kv("name", h.name).kv("fw", h.fw).kv("time", h.time).kv("tz", h.tz).kv("synced", h.synced)
-      .end_object().end_object();
+  w.begin_object().kv("type", "welcome").kv("v", kProtocolVersion).key("hub");
+  write_hub_info(w, h);
+  w.end_object();
+}
+
+// The hub's own facts changed (its location, the clock became known): the whole object again.
+inline void encode_hub(JsonWriter& w, const HubInfo& h) noexcept {
+  w.begin_object().kv("type", "hub").key("hub");
+  write_hub_info(w, h);
+  w.end_object();
 }
 
 // `id` < 0 = not tied to a request.
@@ -425,9 +458,10 @@ inline void encode_chip_event(JsonWriter& w, const ChipView& c) noexcept {
   w.end_object();
 }
 
-inline void write_hhmm(JsonWriter& w, unsigned minute_of_day) noexcept {
-  char t[8];
-  std::snprintf(t, sizeof(t), "%02u:%02u", (minute_of_day / 60) % 24, minute_of_day % 60);
+// A time point as text: "22:30", "sunset", "sunset+30", "sunrise-15" (core/sun.hpp).
+inline void write_hhmm(JsonWriter& w, unsigned point) noexcept {
+  char t[24];
+  format_time_point(static_cast<std::uint16_t>(point), t, sizeof(t));
   w.str(t);
 }
 

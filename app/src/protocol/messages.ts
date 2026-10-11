@@ -52,6 +52,10 @@ export interface HubInfo {
   time: number;
   tz: string;
   synced: boolean;
+  /** Where the hub is (degrees), for sunrise/sunset; null until set. */
+  location?: { lat: number; lon: number } | null;
+  /** Today's sunrise and sunset, local "HH:MM"; null when unknown (no location, clock not synced, polar day/night). */
+  sun?: { rise: string; set: string } | null;
 }
 
 export type CmpOp = 'any' | '==' | '!=' | '<' | '<=' | '>' | '>=';
@@ -190,6 +194,11 @@ export interface TimersEvent {
   type: 'timers';
   timers: Timer[];
 }
+/** The hub's own facts changed (location, today's sun): the whole object again. */
+export interface HubEvent {
+  type: 'hub';
+  hub: HubInfo;
+}
 export interface TimeEvent {
   type: 'time';
   time: number;
@@ -226,6 +235,7 @@ export type ServerMessage =
   | SchedulesEvent
   | TimersEvent
   | TimeEvent
+  | HubEvent
   | Accepted
   | Ack
   | Res

@@ -167,7 +167,23 @@ TEST_CASE("single-frame encoders produce the documented JSON") {
   {
     JsonWriter w(buf, sizeof(buf));
     encode_welcome(w, HubInfo{"home", "7843023", 1781000000, "UTC", true});
-    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true}})");
+    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":null,"sun":null}})");
+  }
+  {
+    HubInfo h{"home", "7843023", 1781000000, "UTC", true};
+    h.has_location = true;
+    h.lat = 50.08;
+    h.lon = -14.43;
+    h.has_sun = true;
+    h.sun_rise = 6 * 60 + 12;
+    h.sun_set = 20 * 60 + 1;
+    JsonWriter w(buf, sizeof(buf));
+    encode_welcome(w, h);
+    CHECK(std::string(w.c_str()) == R"({"type":"welcome","v":1,"hub":{"name":"home","fw":"7843023","time":1781000000,"tz":"UTC","synced":true,"location":{"lat":50.08,"lon":-14.43},"sun":{"rise":"06:12","set":"20:01"}}})");
+    JsonWriter e(buf, sizeof(buf));
+    encode_hub(e, h);
+    CHECK(std::string(e.c_str()).rfind(R"({"type":"hub","hub":{"name":"home")", 0) == 0);
+    CHECK(std::string(e.c_str()).find(R"("location":{"lat":50.08,"lon":-14.43})") != std::string::npos);
   }
   {
     JsonWriter w(buf, sizeof(buf));

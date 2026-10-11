@@ -22,6 +22,7 @@
 #include <cstring>
 
 #include "core/endian.hpp"
+#include "core/sun.hpp"
 #include "hubproto/payload.hpp"
 
 namespace core {
@@ -102,8 +103,9 @@ struct Rule {
   hubproto::Value operand{};
 
   // Optional constraints (defaults = none). Persisted with the rule.
-  // Local time-of-day window [start, end) in minutes; start > end wraps midnight
-  // (22:00-06:00). start == kNoWindow disables it; start == end is invalid.
+  // Local time-of-day window [start, end); start > end wraps midnight (22:00-06:00).
+  // Each end is a time point (core/sun.hpp): a fixed minute, or relative to sunrise/sunset
+  // ("sunset+30"). start == kNoWindow disables the window; equal ends are invalid.
   std::uint16_t   window_start = kNoWindow;
   std::uint16_t   window_end = 0;
   std::uint16_t   cooldown_s = 0;  // min seconds between firings (0 = none)
@@ -134,16 +136,26 @@ class RuleEngine {
   RuleEngine(Dispatcher& dispatcher, NowFn now_fn, void* now_ctx) noexcept
       : disp_(dispatcher), now_fn_(now_fn), now_ctx_(now_ctx) {}
 
+  // Today's sunrise/sunset in local minutes; false while the location or the date is unknown.
+  using SunFn = bool (*)(void* ctx, SunTimes& out);
+
   void set_clock(MinuteFn fn, void* ctx) noexcept { clock_fn_ = fn; clock_ctx_ = ctx; }
+  void set_sun(SunFn fn, void* ctx) noexcept { sun_fn_ = fn; sun_ctx_ = ctx; }
   void set_action_hook(ActionFn fn, void* ctx) noexcept { action_fn_ = fn; action_ctx_ = ctx; }
   void set_state_reader(ReadFn fn, void* ctx) noexcept { read_fn_ = fn; read_ctx_ = ctx; }
 
   // Is `minute` inside the rule's time window? No window = always; window set but
-  // minute unknown (-1) = never.
-  static bool in_window(const Rule& r, int minute) noexcept {
+  // minute unknown (-1) = never. A sun-relative end needs `sun`; without it (no location, polar
+  // day/night) the answer is "never", like an unknown clock. A sun-relative end that lands outside
+  // the day wraps (sunset+300 is 01:xx).
+  static bool in_window(const Rule& r, int minute, const SunTimes* sun = nullptr) noexcept {
     if (r.window_start == kNoWindow) return true;
     if (minute < 0) return false;
-    const int s = r.window_start, e = r.window_end;
+    int s = 0, e = 0;
+    if (!point_minute(r.window_start, sun, s) || !point_minute(r.window_end, sun, e)) return false;
+    s = ((s % 1440) + 1440) % 1440;
+    e = ((e % 1440) + 1440) % 1440;
+    if (s == e) return false;
     return s < e ? (minute >= s && minute < e) : (minute >= s || minute < e);
   }
 
@@ -258,7 +270,7 @@ class RuleEngine {
         r.window_start = detail::get_u16_le(e + 19);
         r.window_end = detail::get_u16_le(e + 21);
         if (r.window_start != kNoWindow &&
-            (r.window_start >= 1440 || r.window_end >= 1440 || r.window_start == r.window_end)) {
+            (!valid_point(r.window_start) || !valid_point(r.window_end) || r.window_start == r.window_end)) {
           return false;
         }
         r.cooldown_s = detail::get_u16_le(e + 23);
@@ -305,6 +317,8 @@ class RuleEngine {
   void* clock_ctx_ = nullptr;
   ReadFn read_fn_ = nullptr;
   void* read_ctx_ = nullptr;
+  SunFn sun_fn_ = nullptr;
+  void* sun_ctx_ = nullptr;
   ActionFn action_fn_ = nullptr;
   void* action_ctx_ = nullptr;
   Rule rules_[MaxRules];
@@ -339,7 +353,9 @@ void RuleEngine<Dispatcher, MaxRules>::evaluate(
     // Optional constraints. Unknown clock / state = the rule stays quiet.
     if (r.window_start != kNoWindow) {
       const int minute = (clock_fn_ != nullptr) ? clock_fn_(clock_ctx_) : -1;
-      if (!in_window(r, minute)) continue;
+      SunTimes sun;
+      const bool have_sun = sun_fn_ != nullptr && sun_fn_(sun_ctx_, sun);
+      if (!in_window(r, minute, have_sun ? &sun : nullptr)) continue;
     }
     if (r.has_cond) {
       hubproto::Value cur{};
