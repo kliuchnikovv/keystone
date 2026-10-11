@@ -192,6 +192,20 @@ export class MockHub {
     }
   }
 
+  /** What the app asked for with pair / identify / unpair (for tests). */
+  readonly pairCalls: number[] = [];
+  readonly identifyCalls: number[] = [];
+  readonly unpairCalls: number[] = [];
+
+  /** A device joining while the network is open: it appears in every client's list. */
+  simulateJoin(id: number, name: string | null = null): void {
+    this.entities.push({
+      id, name, chip: 1, device: 'switch',
+      attrs: [attr(0x01, 'on_off', 'bool', ['r', 'w', 'rep'], false)],
+    });
+    this.resync();
+  }
+
   /** How many timers are pending (for tests). */
   timersCount(): number {
     return this.timers.length;
@@ -458,6 +472,30 @@ export class MockHub {
         clearTimeout(this.timers[i]!.handle);
         this.timers.splice(i, 1);
         this.broadcast({ type: 'timers', timers: this.timerList() });
+        return ok();
+      }
+      case 'pair': {
+        let seconds = 180;
+        if (args.seconds !== undefined) {
+          if (typeof args.seconds !== 'number' || !Number.isInteger(args.seconds) || args.seconds < 1 || args.seconds > 254) return no('bad_args', 'seconds: 1..254');
+          seconds = args.seconds;
+        }
+        this.pairCalls.push(seconds);
+        return ok();
+      }
+      case 'identify':
+      case 'unpair': {
+        if (typeof args.entity !== 'number' || !Number.isInteger(args.entity)) return no('bad_args', 'entity');
+        const e = this.entities.find((x) => x.id === args.entity);
+        if (!e) return no('not_found', 'no such entity');
+        if (e.chip !== 1) return no('bad_args', 'not a Zigbee device');
+        if (msg.op === 'identify') {
+          this.identifyCalls.push(e.id);
+        } else {
+          this.entities = this.entities.filter((x) => x.id !== e.id);
+          this.unpairCalls.push(e.id);
+          this.resync(); // the real hub re-sends the snapshot when a device goes away
+        }
         return ok();
       }
       default:

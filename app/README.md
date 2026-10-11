@@ -21,6 +21,7 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.
 - `src/protocol/mdns.ts`, `tools/discover.ts` — find hubs on the LAN (mDNS `_keystone._tcp`).
+- `src/ui/PairingPanel.tsx` — "Add a device" (opens the Zigbee network); Blink / Remove device live in a Zigbee device's pencil menu.
 - `modules/keystone-net/` — the native Expo module (Kotlin + Swift): certificate-pinned WebSocket
   and mDNS browsing for phones; `src/native/` is its TypeScript side. **Never built on a device.**
 

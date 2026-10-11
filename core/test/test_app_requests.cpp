@@ -325,3 +325,68 @@ TEST_CASE("encode_res_ok_index carries the new index") {
   encode_res_ok_index(w, 8, 3);
   CHECK(std::string(w.c_str()) == R"({"type":"res","id":8,"ok":true,"result":{"index":3}})");
 }
+
+TEST_CASE("pair opens the Zigbee network for 1..254 seconds, 180 by default") {
+  Home h;
+  auto pair = [&](const std::string& a) {
+    const std::string frame = R"({"type":"req","id":1,"op":"pair","args":)" + a + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return pair_meta(r, m.args, 1);
+  };
+  auto m = pair("{}");
+  CHECK(m.out.ok);
+  CHECK(m.chip == 1);
+  CHECK(m.attr == kMetaPair);
+  CHECK(m.arg == 180);
+  m = pair(R"({"seconds":60})");
+  CHECK((m.out.ok && m.arg == 60));
+  CHECK(pair(R"({"seconds":1})").arg == 1);
+  CHECK(pair(R"({"seconds":254})").arg == 254);
+  for (const char* bad : {R"({"seconds":0})", R"({"seconds":255})", R"({"seconds":-3})", R"({"seconds":2.5})",
+                          R"({"seconds":"60"})", R"({"seconds":true})", R"({"seconds":null})"}) {
+    CAPTURE(bad);
+    const auto o = pair(bad);
+    CHECK_FALSE(o.out.ok);
+    CHECK(o.out.err == Err::BadArgs);
+  }
+  // No args object at all is also "default".
+  Reader r;
+  const std::string frame = R"({"type":"req","id":1,"op":"pair"})";
+  const ClientMsg msg = decode_client(r, frame.data(), frame.size());
+  REQUIRE(msg.kind == ClientMsg::Kind::Req);
+  CHECK(pair_meta(r, msg.args, 1).arg == 180);
+}
+
+TEST_CASE("unpair and identify target a Zigbee device only") {
+  Home h;
+  declare(h.reg, 2, 0x0200, hubproto::DeviceType::Switch, {{0x01, ValueType::Bool, 0x07}});  // a Matter-side mirror
+  auto meta = [&](const std::string& a, std::uint8_t attr) {
+    const std::string frame = R"({"type":"req","id":1,"op":"x","args":)" + a + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return device_meta(h.reg, r, m.args, attr, 1);
+  };
+  auto u = meta(R"({"entity":256})", kMetaUnpair);
+  CHECK(u.out.ok);
+  CHECK((u.chip == 1 && u.attr == kMetaUnpair && u.arg == 0x0100));
+  auto i = meta(R"({"entity":257})", kMetaIdentify);
+  CHECK((i.out.ok && i.attr == kMetaIdentify && i.arg == 0x0101));
+  CHECK(meta(R"({"entity":4660})", kMetaUnpair).out.err == Err::NotFound);   // unknown
+  CHECK(meta(R"({"entity":1})", kMetaIdentify).out.err == Err::NotFound);    // a chip is not a device
+  CHECK(meta(R"({"entity":512})", kMetaUnpair).out.err == Err::BadArgs);     // lives on the Matter chip
+  for (const char* bad : {"{}", R"({"entity":-1})", R"({"entity":65536})", R"({"entity":"256"})", R"({"entity":1.5})"}) {
+    CAPTURE(bad);
+    const auto o = meta(bad, kMetaUnpair);
+    CHECK_FALSE(o.out.ok);
+    CHECK(o.out.err == Err::BadArgs);
+  }
+  // No args object at all.
+  Reader r;
+  const std::string frame = R"({"type":"req","id":1,"op":"unpair"})";
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
+}

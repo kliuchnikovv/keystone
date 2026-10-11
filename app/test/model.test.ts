@@ -3,7 +3,7 @@ import { HubError } from '../src/protocol/client';
 import type { Chip, Entity } from '../src/protocol/messages';
 import { initialState, reduce } from '../src/protocol/store';
 import { attrLabel, brightnessPercent, describeAck, describeError, formatEnergy, formatUptime, formatValue } from '../src/model/format';
-import { deviceTitle, hexId, isReachable, primarySwitch, sortedDevices, stepped, stepperFor } from '../src/model/devices';
+import { canManageDevice, deviceTitle, hexId, isReachable, primarySwitch, sortedDevices, stepped, stepperFor } from '../src/model/devices';
 import { chipSummary } from '../src/model/health';
 import { defaultChips, defaultEntities } from '../tools/mock-hub/hub';
 
@@ -130,5 +130,15 @@ describe('chipSummary', () => {
   });
   it('missing telemetry is simply not shown', () => {
     expect(chipSummary(chip({ telemetry: {} })).details).toEqual([]);
+  });
+});
+
+describe('canManageDevice', () => {
+  it('only devices on the Zigbee chip can be identified or removed', () => {
+    const state = reduce(initialState, { type: 'snapshot', entities: defaultEntities(), chips: defaultChips(), rules: [], schedules: [], timers: [] });
+    const zb = state.entities[0]!;
+    expect(canManageDevice(state, zb)).toBe(true);
+    expect(canManageDevice(state, { ...zb, chip: 2 })).toBe(false); // a Matter-side mirror
+    expect(canManageDevice(state, { ...zb, chip: 9 })).toBe(false); // unknown chip
   });
 });

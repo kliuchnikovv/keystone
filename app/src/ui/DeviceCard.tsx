@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { nameProblem } from '../model/automation';
-import { Button, ErrorText, Input } from './controls';
+import { Button, ConfirmDelete, ErrorText, Input } from './controls';
 import { attrLabel, brightnessPercent, formatValue } from '../model/format';
 import { deviceIcon, deviceLabel, deviceTitle, primarySwitch, stepped, stepperFor } from '../model/devices';
 import type { Attr, Entity, Value } from '../protocol/messages';
@@ -14,9 +14,12 @@ export interface DeviceCardProps {
   onSet(attr: number, value: Value): void;
   /** Give the device a name, or remove it (null). Resolves true when the hub accepted. */
   onRename(name: string | null): Promise<boolean>;
+  /** Zigbee devices only: blink the device so it can be found / take it off the network. */
+  onIdentify?(): Promise<boolean>;
+  onRemove?(): Promise<boolean>;
 }
 
-export function DeviceCard({ entity, reachable, isPending, onSet, onRename }: DeviceCardProps) {
+export function DeviceCard({ entity, reachable, isPending, onSet, onRename, onIdentify, onRemove }: DeviceCardProps) {
   const t = useTheme();
   const [renaming, setRenaming] = useState(false);
   const sw = primarySwitch(entity);
@@ -64,6 +67,9 @@ export function DeviceCard({ entity, reachable, isPending, onSet, onRename }: De
           onSave={onRename}
         />
       )}
+      {renaming && (onIdentify || onRemove) && (
+        <DeviceActions title={title} onIdentify={onIdentify} onRemove={onRemove} />
+      )}
       {rows.length > 0 && (
         <View style={[styles.rows, { borderTopColor: t.border }]}>
           {rows.map((a) => (
@@ -94,6 +100,27 @@ function RenameBox({ current, onSave, onDone }: { current: string | null; onSave
         <Button kind="plain" label="Cancel" onPress={onDone} />
         <Button label="Save name" onPress={save} />
       </View>
+    </View>
+  );
+}
+
+function DeviceActions({ title, onIdentify, onRemove }: { title: string; onIdentify?(): Promise<boolean>; onRemove?(): Promise<boolean> }) {
+  const t = useTheme();
+  const [note, setNote] = useState<string | null>(null);
+  return (
+    <View style={styles.actions}>
+      <View style={styles.renameButtons}>
+        {onIdentify && (
+          <Button
+            kind="plain"
+            label="Blink"
+            a11y={`Identify ${title}`}
+            onPress={async () => setNote((await onIdentify()) ? 'The device should blink for about 10 seconds.' : null)}
+          />
+        )}
+        {onRemove && <ConfirmDelete label="Remove device" a11y={`Remove ${title}`} onConfirm={() => void onRemove()} />}
+      </View>
+      {note && <Text style={{ color: t.muted, fontSize: 12, textAlign: 'right' }}>{note}</Text>}
     </View>
   );
 }
@@ -153,6 +180,7 @@ const styles = StyleSheet.create({
   offline: { opacity: 0.6 },
   edit: { paddingHorizontal: 10, paddingVertical: 6 },
   rename: { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  actions: { marginTop: 4 },
   renameButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   step: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },

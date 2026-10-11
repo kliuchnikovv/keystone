@@ -349,4 +349,52 @@ Outcome timer_cancel(Timers& timers, const Reader& r, int args) {
   return Outcome::done();
 }
 
+// ---- Zigbee chip operations: pair, unpair, identify ----------------------------------------
+//
+// These do not change anything on the brain: they validate the request and say which
+// chip-meta command to send (a COMMAND to the chip's self entity, attr = the op, u16 = the
+// argument; mirrored in zigbee-c6 handle_meta). The caller publishes it, exactly as the
+// console does. Fire-and-forget: the answer says "sent", the result shows up as an entity
+// appearing (pair) or going away (unpair), or a device blinking (identify).
+
+inline constexpr std::uint8_t kMetaPair = 0x01;
+inline constexpr std::uint8_t kMetaUnpair = 0x02;
+inline constexpr std::uint8_t kMetaIdentify = 0x03;
+inline constexpr std::int64_t kDefaultPairSeconds = 180;
+inline constexpr std::int64_t kMaxPairSeconds = 254;  // ZigBee permit-join is one byte, 255 = forever
+
+struct ChipMeta {
+  Outcome out;
+  std::uint8_t chip = 0;
+  std::uint8_t attr = 0;
+  std::uint16_t arg = 0;
+};
+
+/** `pair {seconds?}`: open the Zigbee network for joining (1..254 s, default 180). */
+template <typename Reader>
+ChipMeta pair_meta(const Reader& r, int args, std::uint8_t zigbee_chip) {
+  std::int64_t sec = kDefaultPairSeconds;
+  if (args >= 0 && r.find(args, "seconds") >= 0) {
+    if (!detail::get_int(r, args, "seconds", sec) || sec < 1 || sec > kMaxPairSeconds) {
+      return {Outcome::fail(Err::BadArgs, "seconds: 1..254"), 0, 0, 0};
+    }
+  }
+  return {Outcome::done(), zigbee_chip, kMetaPair, static_cast<std::uint16_t>(sec)};
+}
+
+/** `unpair {entity}` / `identify {entity}`: a device on the Zigbee chip (not a chip, not a Matter mirror). */
+template <typename Reg, typename Reader>
+ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t attr, std::uint8_t zigbee_chip) {
+  std::int64_t e = 0;
+  if (args < 0 || !detail::get_int(r, args, "entity", e) || e < 0 || e > 0xFFFF) {
+    return {Outcome::fail(Err::BadArgs, "entity"), 0, 0, 0};
+  }
+  const auto* ent = reg.find(static_cast<std::uint16_t>(e));
+  if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) {
+    return {Outcome::fail(Err::NotFound, "no such entity"), 0, 0, 0};
+  }
+  if (ent->chip_id != zigbee_chip) return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, 0, 0};
+  return {Outcome::done(), zigbee_chip, attr, static_cast<std::uint16_t>(e)};
+}
+
 }  // namespace core::app

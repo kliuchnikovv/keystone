@@ -1853,7 +1853,20 @@ std::atomic<bool> g_app_force_check{false};  // a mutation just happened: look f
 
 // A management request (docs/app-protocol.md §5), run in the main loop. The same
 // containers the console edits, so both surfaces see each other's changes.
-void app_handle_req(const appsrv::Inbound& in, Registry& reg, Rules& rules, Schedules& sched,
+// A chip-meta COMMAND: entity = the chip's self entity, attr = the op (core::app::kMeta*), the
+// u16 value its argument. Mirrored in zigbee-c6 handle_meta.
+void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::uint16_t arg) {
+  const std::uint8_t payload[5] = {0, 0, attr, static_cast<std::uint8_t>(arg & 0xFF),
+                                   static_cast<std::uint8_t>((arg >> 8) & 0xFF)};
+  hubproto::Header h{};
+  h.version = hubproto::kProtocolVersion;
+  h.type = hubproto::MsgType::Command;
+  h.chip_id = chip;
+  h.entity_id = hubproto::kSelfEntityId;
+  bus.publish(h, payload, sizeof(payload));
+}
+
+void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Registry& reg, Rules& rules, Schedules& sched,
                     core::TimerTable<8>& timers, std::uint32_t now) {
   using namespace core::app;
   core::JsonReader reader;
@@ -1891,6 +1904,17 @@ void app_handle_req(const appsrv::Inbound& in, Registry& reg, Rules& rules, Sche
   } else if (!std::strcmp(op, "timer.cancel")) {
     o = timer_cancel(timers, reader, m.args);
     if (o.ok) persist_timers(timers, now);
+  } else if (!std::strcmp(op, "pair") || !std::strcmp(op, "unpair") || !std::strcmp(op, "identify")) {
+    // Zigbee chip operations, fire-and-forget like the console: the result is seen as an entity
+    // appearing (pair), going away (unpair) or a device blinking (identify).
+    const core::app::ChipMeta cm =
+        !std::strcmp(op, "pair")
+            ? core::app::pair_meta(reader, m.args, kZigbeeChipId)
+            : core::app::device_meta(reg, reader, m.args,
+                                     !std::strcmp(op, "unpair") ? core::app::kMetaUnpair : core::app::kMetaIdentify,
+                                     kZigbeeChipId);
+    o = cm.out;
+    if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
   }
 
   if (o.ok) {
@@ -2378,7 +2402,7 @@ extern "C" void app_main(void) {
             app_last_fp = src.fingerprint();
             app_send_snapshot(in.fd, src);
           } else if (in.kind == appsrv::Inbound::Kind::Req) {
-            app_handle_req(in, reg, rules, schedule_table, timer_table, t);
+            app_handle_req(in, bus, reg, rules, schedule_table, timer_table, t);
             std::free(in.text);
           } else {
             app_handle_cmd(in, reg, disp, t);
@@ -2671,15 +2695,7 @@ extern "C" void app_main(void) {
         case REQ_PAIR: {
           // No entity to look up — pair always targets the Zigbee coordinator.
           const std::uint16_t sec = r->id;
-          std::uint8_t payload[5] = {0, 0, 0x01,
-                                     static_cast<std::uint8_t>(sec & 0xFF),
-                                     static_cast<std::uint8_t>((sec >> 8) & 0xFF)};
-          hubproto::Header h{};
-          h.version = hubproto::kProtocolVersion;
-          h.type = hubproto::MsgType::Command;
-          h.chip_id = kZigbeeChipId;
-          h.entity_id = hubproto::kSelfEntityId;
-          bus.publish(h, payload, sizeof(payload));
+          send_chip_meta(bus, kZigbeeChipId, core::app::kMetaPair, sec);
           std::snprintf(r->out, r->out_cap,
                         "pair -> chip 0x%02x for %us (sent)\n",
                         kZigbeeChipId, static_cast<unsigned>(sec));
@@ -2698,16 +2714,7 @@ extern "C" void app_main(void) {
                           static_cast<unsigned>(id));
             break;
           }
-          const std::uint8_t meta_attr = (r->kind == REQ_UNPAIR) ? 0x02 : 0x03;
-          std::uint8_t payload[5] = {0, 0, meta_attr,
-                                     static_cast<std::uint8_t>(id & 0xFF),
-                                     static_cast<std::uint8_t>((id >> 8) & 0xFF)};
-          hubproto::Header h{};
-          h.version = hubproto::kProtocolVersion;
-          h.type = hubproto::MsgType::Command;
-          h.chip_id = e->chip_id;
-          h.entity_id = hubproto::kSelfEntityId;
-          bus.publish(h, payload, sizeof(payload));
+          send_chip_meta(bus, e->chip_id, r->kind == REQ_UNPAIR ? core::app::kMetaUnpair : core::app::kMetaIdentify, id);
           const char* name = reg.name_of(id);
           if (name != nullptr) {
             std::snprintf(r->out, r->out_cap, "%s 0x%04x (%s) -> chip 0x%02x (sent)\n",

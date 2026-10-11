@@ -1,8 +1,9 @@
 import { FlatList, StyleSheet, Text, View } from 'react-native';
-import { isReachable, sortedDevices } from '../model/devices';
+import { canManageDevice, isReachable, sortedDevices } from '../model/devices';
 import type { Commands } from '../hooks/useCommands';
 import type { HomeState } from '../protocol/store';
 import { DeviceCard } from './DeviceCard';
+import { PairingPanel } from './PairingPanel';
 import { useTheme } from './theme';
 
 export function DevicesScreen({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -13,6 +14,7 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
       data={devices}
       keyExtractor={(e) => String(e.id)}
       contentContainerStyle={styles.list}
+      ListHeaderComponent={home.status === 'ready' ? <PairingPanel home={home} commands={commands} /> : null}
       renderItem={({ item }) => (
         <DeviceCard
           entity={item}
@@ -22,13 +24,19 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
           onRename={async (name) =>
             (await commands.request(name === null ? 'name.clear' : 'name.set', name === null ? { entity: item.id } : { entity: item.id, name })) !== null
           }
+          {...(canManageDevice(home, item)
+            ? {
+                onIdentify: async () => (await commands.request('identify', { entity: item.id })) !== null,
+                onRemove: async () => (await commands.request('unpair', { entity: item.id })) !== null,
+              }
+            : {})}
         />
       )}
       ListEmptyComponent={
         <View style={styles.empty}>
           <Text style={[styles.emptyTitle, { color: t.text }]}>{home.status === 'ready' ? 'No devices yet' : 'Waiting for the hub…'}</Text>
           {home.status === 'ready' && (
-            <Text style={{ color: t.muted, textAlign: 'center' }}>Pair a device on the hub (the pair command) and it will show up here.</Text>
+            <Text style={{ color: t.muted, textAlign: 'center' }}>Use "Add a device" above and it will show up here.</Text>
           )}
         </View>
       }

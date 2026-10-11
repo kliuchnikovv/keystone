@@ -477,6 +477,9 @@ void handle_meta(std::uint8_t attr, std::uint16_t arg) {
                static_cast<unsigned>(arg), static_cast<unsigned>(s->short_addr));
       s->in_use = false;
       persist_switches();
+      // The brain only forgets an entity on a fresh HELLO (it clears the chip and re-queries),
+      // so without this an unpaired device would linger in the registry and the app.
+      send_hello();
       break;
     }
     case kMetaIdentify: {

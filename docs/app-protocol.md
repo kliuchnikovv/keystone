@@ -4,8 +4,7 @@ Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for dev
 mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
 handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
 requests for names, rules, schedules and timers) are implemented and verified on
-hardware. Still to come: `pair`/`unpair`/`identify`, a build on
-a phone. The hub serves no UI
+hardware. Still to come: a build on a phone. The hub serves no UI
 and no static files; it only speaks this protocol. The client is a React Native
 (Expo) app that also builds for the web, in [`app/`](../app/).
 
@@ -155,8 +154,9 @@ so they also update the desired state (reconciler).
 | `schedule.del` | `index` | |
 | `timer.add` | `delay_s` (1..604800), `entity`, `action` | `index` is the slot number |
 | `timer.cancel` | `index` | |
-| `pair` / `unpair` | `seconds` / `entity` | Zigbee join window — **not implemented yet** (answered `unsupported`) |
-| `identify` | `entity` | **not implemented yet** |
+| `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
+| `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
+| `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
 
 Error codes: a missing or ill-typed argument is `bad_args` (the `message` names it);
 an entity or attribute that does not exist, or an index with nothing behind it, is

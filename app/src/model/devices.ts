@@ -75,3 +75,11 @@ export function isReachable(s: HomeState, e: Entity): boolean {
   const chip = s.chips.find((c) => c.id === e.chip);
   return chip === undefined || chip.status === 'ready';
 }
+
+/** Devices that live on the Zigbee chip are the ones the hub can identify and remove. */
+export function canManageDevice(s: HomeState, e: Entity): boolean {
+  return s.chips.some((c) => c.id === e.chip && c.label === 'zigbee');
+}
+
+/** How long the Zigbee network stays open when the app asks to add a device. */
+export const PAIR_SECONDS = 120;

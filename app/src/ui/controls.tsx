@@ -67,7 +67,7 @@ export function Button({ label, onPress, kind = 'primary', disabled, a11y }: { l
 }
 
 /** Delete that must be tapped twice (a confirmation that works on every platform). */
-export function ConfirmDelete({ onConfirm, a11y }: { onConfirm(): void; a11y: string }) {
+export function ConfirmDelete({ onConfirm, a11y, label = 'Delete' }: { onConfirm(): void; a11y: string; label?: string }) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -75,7 +75,7 @@ export function ConfirmDelete({ onConfirm, a11y }: { onConfirm(): void; a11y: st
     <Button
       kind="danger"
       a11y={a11y}
-      label={armed ? 'Tap again to delete' : 'Delete'}
+      label={armed ? (label === 'Delete' ? 'Tap again to delete' : `Tap again: ${label.toLowerCase()}`) : label}
       onPress={() => {
         if (armed) {
           onConfirm();

@@ -97,6 +97,38 @@ describe('Devices', () => {
   });
 });
 
+describe('Adding, finding and removing devices', () => {
+  it('"Add a device" opens the network, counts down, and shows what joins', async () => {
+    renderHome();
+    await screen.findByText('plug1');
+    fireEvent.click(screen.getByLabelText('Add a device'));
+    await screen.findByText(/Looking for devices… 2:0\d/);
+    expect(hub.pairCalls).toEqual([120]);
+    act(() => hub.simulateJoin(0x0200, 'new_plug'));
+    await screen.findByText('✓ Found new_plug');
+    expect(card('new_plug')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Done'));
+    expect(screen.queryByText(/Looking for devices/)).toBeNull();
+    expect(screen.getByLabelText('Add a device')).toBeTruthy();
+  });
+
+  it('a device can be made to blink, and removal needs a second tap', async () => {
+    renderHome();
+    await screen.findByText('plug1');
+    fireEvent.click(screen.getByLabelText('Rename plug1'));
+    fireEvent.click(screen.getByLabelText('Identify plug1'));
+    await screen.findByText(/should blink/);
+    expect(hub.identifyCalls).toEqual([0x0100]);
+
+    fireEvent.click(screen.getByLabelText('Remove plug1'));
+    expect(hub.unpairCalls).toEqual([]); // first tap only arms it
+    fireEvent.click(screen.getByLabelText('Remove plug1'));
+    await waitFor(() => expect(screen.queryByText('plug1')).toBeNull());
+    expect(hub.unpairCalls).toEqual([0x0100]);
+    expect(screen.getByText('lamp')).toBeTruthy(); // the others stay
+  });
+});
+
 describe('Hub tab', () => {
   it('lists the chips with their health', async () => {
     renderHome();

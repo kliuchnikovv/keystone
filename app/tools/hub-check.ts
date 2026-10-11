@@ -392,6 +392,28 @@ if (process.argv.includes('--mutate')) {
       const want = ['bad_args', 'bad_args', 'not_found', 'read_only', 'not_found', 'bad_args', 'not_found', 'bad_args', 'not_found'];
       return JSON.stringify(got) === JSON.stringify(want) ? true : got.join(',');
     });
+    // Zigbee chip operations. Nothing here removes a device: unpair is only checked with arguments
+    // that must be refused. A pair of 1 s is harmless; identify makes the plug blink for 10 s.
+    await check('pair / identify / unpair validate their arguments', async () => {
+      const chipEntity = c.getSnapshot().chips[0] ? c.getSnapshot().chips[0]!.id : 1; // a chip's self entity is its chip id
+      const got = [
+        await code(c.req('pair', { seconds: 0 })),
+        await code(c.req('pair', { seconds: 255 })),
+        await code(c.req('pair', { seconds: '60' })),
+        await code(c.req('identify', {})),
+        await code(c.req('identify', { entity: 65000 })),
+        await code(c.req('identify', { entity: chipEntity })),
+        await code(c.req('unpair', { entity: 65000 })),
+        await code(c.req('unpair', { entity: chipEntity })),
+      ];
+      const want = ['bad_args', 'bad_args', 'bad_args', 'bad_args', 'not_found', 'not_found', 'not_found', 'not_found'];
+      return JSON.stringify(got) === JSON.stringify(want) ? true : got.join(',');
+    });
+    await check('pair for 1 s and identify a switch are accepted', async () => {
+      const r1 = await c.req('pair', { seconds: 1 }).then(() => true, () => false);
+      const r2 = await c.req('identify', { entity: ent }).then(() => true, () => false);
+      return r1 && r2 ? true : `pair ${r1}, identify ${r2}`;
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();
