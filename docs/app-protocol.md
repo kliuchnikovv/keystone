@@ -1,6 +1,6 @@
 # App protocol — how a phone/web client talks to the hub
 
-Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for devices, hub, schedules, timers, rules, names; TLS with certificate pinning). mDNS advertising and a Node discovery tool (stage 6). Not yet done: TLS on a phone (native pinning), discovery inside the app.** The client library, a
+Status: **v1, stages 1–5 done on the hub and in the tools/web (screens for devices, hub, schedules, timers, rules, names; TLS with certificate pinning). mDNS advertising and a Node discovery tool (stage 6). Phone support (pinned socket + mDNS browsing in a native module) is written but unverified: nothing here can build it.** The client library, a
 mock hub (stage 2) and the hub side over plain `ws://` with a token (stage 3:
 handshake, snapshot, live `state`/`chip` events, `cmd`/`ack`, and the management
 requests for names, rules, schedules and timers) are implemented and verified on
@@ -269,10 +269,15 @@ hub presents and stops.
 |---|---|---|
 | Node (tools, tests) | pinned fingerprint (`tools/pinned-socket.ts`) | implemented and verified against the real hub: 31/31 conformance checks over TLS, wrong pin refused, token never sent |
 | Browser (web build) | the browser's own certificate exception: open `https://<hub>:8443/` once and accept it | verified in Chromium against the real hub. Browsers expose nothing about TLS to a page, so a pin **cannot** be checked: with a fingerprint set the app refuses (`pin_unsupported`) instead of pretending. A browser without the exception just fails, and the app shows a hint |
-| iOS / Android (React Native) | needs native support | **not implemented and not verified.** Stock RN `WebSocket` cannot pin and will reject a self-signed certificate. Android also checks the host name against the certificate (a changing IP does not match; use a stable name such as `keystone-hub.local` in the SAN, or an IP SAN passed to the script). Options: a development build with a pinning module, or an Expo config plugin (Android `network_security_config` trusting the hub certificate; iOS ATS pinned identity). Until then a phone has to use `webplain on` on a trusted network |
+| iOS / Android (React Native) | the local Expo module `app/modules/keystone-net`: a pinned WebSocket (Android: OkHttp with a trust manager that accepts exactly the pinned leaf certificate and no host-name check; iOS: `URLSessionWebSocketTask` whose server-trust delegate compares the leaf's SHA-256) plus an mDNS browser (Android `NsdManager`, iOS `NetServiceBrowser`) | **written, NOT compiled and NOT run on a device.** There is no Android/Apple toolchain here: the Kotlin and Swift pass only a tree-sitter syntax check. Verified: the TS side against a fake module (14 tests), autolinking finds the module on both platforms, `expo prebuild` accepts `app.json` and puts the iOS local-network/Bonjour keys and the Android multicast permission into the generated projects. Stock RN `WebSocket` cannot pin and rejects a self-signed certificate, so the module is the only route; it needs a dev/production build (`npx expo run:ios` / `run:android` or EAS), not Expo Go. Without the module (Expo Go, web) a pinned hub is refused with `pin_unsupported` |
 
-`SocketFactory` (`src/protocol/client.ts`) is the seam: a native build provides a factory
-that honours `opts.fingerprint`; the default factory throws `PinUnsupportedError`.
+`SocketFactory` (`src/protocol/client.ts`) is the seam: `src/native/platform.ts` picks the
+native pinned socket when the build has the module, and otherwise a pinned hub gets
+`PinUnsupportedError`; without a pin (ws://, or wss:// with a real certificate) the
+platform's own WebSocket is used. Three layers keep a native bug from silently turning
+pinning off: the platform reports `open` only after the certificate matched; it also reports
+the fingerprint it saw, which JS compares again (an `open` with a missing or different
+fingerprint is treated as a mismatch); and the token goes out only on `open`.
 
 **Limits to know.** The hub's private key sits in unencrypted flash (anyone with the
 board can read it; flash encryption is a separate project). The 6 KB TLS input buffer
@@ -317,7 +322,9 @@ re-pinning everywhere.
    is a small pure codec (compression pointers, bounded against loops/truncation, goodbye
    packets, unknown versions ignored; 8 tests), `npm run discover` prints the hub URL.
    Costs 7 KB of heap (idle 201 KB, 3 TLS clients 153 KB, lowest 129 KB, no leak).
-   *Open:* discovery inside the phone app (needs a native module), polish.
+   Discovery inside the phone app: native browser in `keystone-net`, a list on the connect
+   screen (tapping a hub fills the address, never the fingerprint: mDNS is unauthenticated).
+   Unverified on a device, see §10. *Open:* polish.
 
 Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

@@ -1,10 +1,16 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { ActivityIndicator, View } from 'react-native';
+import { useDiscovery } from './src/hooks/useDiscovery';
 import { createSettingsStore, type Settings } from './src/settings';
 import { defaultStore } from './src/storage';
 import { ConnectScreen } from './src/ui/ConnectScreen';
 import { Home } from './src/ui/Home';
+
+// mDNS browsing runs only while this screen is up.
+function ConnectWithDiscovery(props: Omit<ComponentProps<typeof ConnectScreen>, 'discovery'>) {
+  return <ConnectScreen {...props} discovery={useDiscovery()} />;
+}
 
 export default function App() {
   const store = useMemo(() => createSettingsStore(defaultStore), []);
@@ -22,7 +28,7 @@ export default function App() {
         <ActivityIndicator />
       </View>
     ) : settings === null ? (
-      <ConnectScreen
+      <ConnectWithDiscovery
         notice={notice}
         onSave={(s) => {
           setNotice(null);

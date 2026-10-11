@@ -306,7 +306,7 @@ export class HubClient {
   }
 }
 
-function defaultSocketFactory(url: string, opts: { fingerprint?: string }): SocketLike {
+export function defaultSocketFactory(url: string, opts: { fingerprint?: string }): SocketLike {
   // The platform WebSocket (browser, React Native) exposes no TLS details, so a pin
   // cannot be checked. Pretending otherwise would be false assurance: refuse instead.
   if (opts.fingerprint) throw new PinUnsupportedError();

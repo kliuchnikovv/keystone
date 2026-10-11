@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { Discovery } from '../hooks/useDiscovery';
+import { hubUrl } from '../native/discovery';
 import { normalizeFingerprint } from '../protocol/fingerprint';
 import { isPlaintext, isSecure, normalizeUrl, validateSettings, type Settings } from '../settings';
 import { useTheme } from './theme';
@@ -9,9 +11,11 @@ export interface ConnectScreenProps {
   /** Shown above the form, e.g. "The hub rejected the token". */
   notice?: string | null;
   onSave(s: Settings): void;
+  /** Hubs found on the network (native builds only); tapping one fills in the address. */
+  discovery?: Discovery;
 }
 
-export function ConnectScreen({ initial, notice, onSave }: ConnectScreenProps) {
+export function ConnectScreen({ initial, notice, onSave, discovery }: ConnectScreenProps) {
   const t = useTheme();
   const [url, setUrl] = useState(initial?.url ?? '');
   const [token, setToken] = useState(initial?.token ?? '');
@@ -40,6 +44,33 @@ export function ConnectScreen({ initial, notice, onSave }: ConnectScreenProps) {
           Enter the hub's address and the token you set on its console with <Text style={styles.mono}>webtoken</Text>.
         </Text>
         {notice ? <Text style={[styles.notice, { color: t.bad }]}>{notice}</Text> : null}
+
+        {discovery?.available && (
+          <View accessibilityLabel="Hubs on this network" style={styles.found}>
+            <Text style={[styles.label, { color: t.muted }]}>Hubs on this network</Text>
+            {discovery.hubs.length === 0 && <Text style={[styles.hint, { color: t.muted }]}>Searching…</Text>}
+            {discovery.hubs.map((h) => (
+              <Pressable
+                key={h.instance}
+                accessibilityRole="button"
+                accessibilityLabel={`Use hub ${h.name ?? h.instance}`}
+                onPress={() => {
+                  setUrl(hubUrl(h));
+                  if (!h.tls) setFingerprint('');
+                }}
+                style={[styles.hub, { backgroundColor: t.card, borderColor: t.border }]}
+              >
+                <Text style={{ color: t.text, fontSize: 15, fontWeight: '600' }}>{h.name ?? h.instance}</Text>
+                <Text style={{ color: t.muted, fontSize: 12 }}>
+                  {h.address ?? h.host}:{h.port} · {h.tls ? 'encrypted' : 'not encrypted'}
+                </Text>
+              </Pressable>
+            ))}
+            <Text style={[styles.hint, { color: t.muted }]}>
+              Finding a hub does not prove it is yours: for an encrypted hub, still enter the fingerprint the hub console prints.
+            </Text>
+          </View>
+        )}
 
         <Text style={[styles.label, { color: t.muted }]}>Hub address</Text>
         <TextInput
@@ -115,6 +146,8 @@ const styles = StyleSheet.create({
   err: { fontSize: 13, marginTop: 6 },
   warn: { fontSize: 13, marginTop: 12 },
   hint: { fontSize: 12, marginTop: 6, lineHeight: 17 },
+  found: { marginTop: 4 },
+  hub: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
   notice: { fontSize: 14, marginBottom: 4, fontWeight: '600' },
   button: { marginTop: 22, borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
   buttonText: { fontSize: 16, fontWeight: '600' },

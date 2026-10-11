@@ -175,6 +175,35 @@ describe('Connect screen', () => {
   });
 });
 
+describe('Hub discovery on the connect screen', () => {
+  const found = { instance: 'Keystone hub', name: 'home', host: 'keystone.local', address: '192.168.0.202', port: 8443, tls: true };
+
+  it('shows nothing where the build cannot browse (web, Expo Go)', () => {
+    render(<ConnectScreen onSave={() => {}} discovery={{ available: false, hubs: [] }} />);
+    expect(screen.queryByLabelText('Hubs on this network')).toBeNull();
+  });
+
+  it('says it is searching, then lists hubs; tapping one fills the address but never the fingerprint', () => {
+    const { rerender } = render(<ConnectScreen onSave={() => {}} discovery={{ available: true, hubs: [] }} />);
+    expect(screen.getByText('Searching…')).toBeTruthy();
+    rerender(<ConnectScreen onSave={() => {}} discovery={{ available: true, hubs: [found] }} />);
+    expect(screen.getByText('192.168.0.202:8443 · encrypted')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Use hub home'));
+    expect((screen.getByLabelText('Hub address') as HTMLInputElement).value).toBe('wss://192.168.0.202:8443/ws');
+    // Discovery is unauthenticated: the pin must still come from the person.
+    expect((screen.getByLabelText('Certificate fingerprint') as HTMLInputElement).value).toBe('');
+    expect(screen.getByText(/does not prove it is yours/)).toBeTruthy();
+  });
+
+  it('a plain hub fills a ws:// address and clears a stale fingerprint', () => {
+    render(<ConnectScreen initial={{ url: 'wss://old:8443/ws', token: 'abcdefgh', fingerprint: 'D7:C0:8E:E0:28:AA:C6:DE:7C:D8:F2:90:62:5F:08:A7:84:34:42:AD:D9:20:8F:A9:27:6A:71:9D:AC:96:B7:71' }} onSave={() => {}} discovery={{ available: true, hubs: [{ ...found, port: 8080, tls: false }] }} />);
+    fireEvent.click(screen.getByLabelText('Use hub home'));
+    expect((screen.getByLabelText('Hub address') as HTMLInputElement).value).toBe('ws://192.168.0.202:8080/ws');
+    expect(screen.getByText(/use it on your own network only/)).toBeTruthy();
+    expect(screen.queryByLabelText('Certificate fingerprint')).toBeNull();
+  });
+});
+
 describe('Certificate fingerprint', () => {
   const colons = 'D7:C0:8E:E0:28:AA:C6:DE:7C:D8:F2:90:62:5F:08:A7:84:34:42:AD:D9:20:8F:A9:27:6A:71:9D:AC:96:B7:71';
 

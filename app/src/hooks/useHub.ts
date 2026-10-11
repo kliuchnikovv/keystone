@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { keystoneNet } from '../native/module';
+import { chooseSocketFactory } from '../native/platform';
 import { HubClient, type HubClientOptions } from '../protocol/client';
 import type { HomeState } from '../protocol/store';
 import type { Settings } from '../settings';
@@ -11,6 +13,7 @@ export function useHubClient(settings: Settings, options: Partial<HubClientOptio
         url: settings.url,
         token: settings.token,
         clientName: 'keystone-app',
+        socketFactory: chooseSocketFactory(keystoneNet()),
         ...(settings.fingerprint ? { pinnedFingerprint: settings.fingerprint } : {}),
         ...options,
       }),

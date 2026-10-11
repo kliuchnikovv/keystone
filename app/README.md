@@ -21,6 +21,8 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.
 - `src/protocol/mdns.ts`, `tools/discover.ts` — find hubs on the LAN (mDNS `_keystone._tcp`).
+- `modules/keystone-net/` — the native Expo module (Kotlin + Swift): certificate-pinned WebSocket
+  and mDNS browsing for phones; `src/native/` is its TypeScript side. **Never built on a device.**
 
 ## Commands
 
@@ -56,10 +58,17 @@ enough) and the token.
   needs `webplain on` on the hub (plain `ws://`, trusted network only) and may need
   cleartext traffic allowed (iOS ATS exception for local networking, Android
   `usesCleartextTraffic`). Native pinning is open work; none of this is tried on a device.
+- **Phones** need a development build, because the pinning module is native code (Expo Go
+  cannot load it): `npx expo run:android` / `npx expo run:ios` (needs the Android SDK / Xcode)
+  or an EAS build. The module has not been compiled or run by the author: expect to fix
+  build errors, and test the three cases below before trusting it — (1) the right
+  fingerprint connects, (2) a wrong one ends in the "untrusted" banner without the hub seeing a
+  `hello`, (3) a hub whose certificate was regenerated is refused. For plain `ws://` development
+  Android needs `usesCleartextTraffic`.
 - Discovery is mDNS (`_keystone._tcp`, host `keystone.local`). It only says where the hub is;
-  the fingerprint, not mDNS, is what you trust. The app does not browse yet (a browser cannot
-  do mDNS; a phone needs a native module) — type the address, or the `keystone.local` name
-  if your OS resolves it.
+  the fingerprint, not mDNS, is what you trust. The connect screen lists hubs on a native build;
+  on the web (a browser cannot do mDNS) type the address, or the `keystone.local` name if your
+  OS resolves it.
 - The web build keeps the token in `localStorage`: fine for development, prefer the
   native app for daily use.
 - `npm audit` reports vulnerabilities in the React Native / Expo build tooling; none
