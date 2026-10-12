@@ -57,6 +57,8 @@ TEST_CASE("decode_header rejects an unknown message type") {
 TEST_CASE("is_known_type accepts defined types and rejects others") {
   CHECK(hubproto::is_known_type(0x01));  // Hello
   CHECK(hubproto::is_known_type(0x40));  // Heartbeat
+  CHECK(hubproto::is_known_type(0x04));  // Undeclare
+  CHECK_FALSE(hubproto::is_known_type(0x05));
   CHECK_FALSE(hubproto::is_known_type(0x00));
   CHECK_FALSE(hubproto::is_known_type(0x11));
 }

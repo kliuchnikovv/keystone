@@ -8,8 +8,12 @@ Light + EPM (ActivePower W) + EEM (CumulativeEnergyImported Wh) clusters when
 declared. Build path: Docker image `espressif/esp-matter:release-v1.6_idf_v5.5.5`
 (Route 3 below); flash from host esptool.
 
-Known gap: removing a Zigbee device (`unpair`) drops its entity on the brain, but the bridged
-Matter endpoint that mirrors it is not removed from the Matter side.
+Removing a Zigbee device (`unpair`, console or app) removes its Matter mirror too: the brain remembers the
+unpair request, and once the Zigbee chip has declared again without that entity it sends the Matter chip
+`Undeclare` (hubproto 0x04, entity in the header); thread-c6 removes the bridged endpoint (and its NVS record)
+under the Matter stack lock. Deliberately tied to the explicit request, not to "an entity is missing" — one lost
+DECLARE frame must never delete an endpoint people have put in rooms and automations. Not covered: a device
+that leaves by itself (factory reset) and an unpair pending across a brain reboot.
 
 Matter is a stack of independent pieces. Each has its own effort and its own
 failure mode; put together they let Apple Home / Google Home / Alexa see the

@@ -15,6 +15,7 @@ enum class MsgType : std::uint8_t {
   Hello      = 0x01,
   Declare    = 0x02,
   DeclareEnd = 0x03,
+  Undeclare  = 0x04,  // brain→chip   the entity in the header is gone (no payload): drop what mirrors it
   State      = 0x10,
   Command    = 0x20,
   CmdAck     = 0x21,

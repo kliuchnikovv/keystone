@@ -244,6 +244,25 @@ std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity
   return new_ep;
 }
 
+// The entity is gone from the hub (a device was unpaired): remove the Matter endpoint that mirrored it, so
+// controllers (Apple Home...) stop listing a dead accessory. Also forgets it in NVS (app_bridge_remove_device).
+void remove_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id) {
+  keystone::BridgedAddr addr{chip_id, entity_id};
+  const std::uint16_t ep = app_bridge_get_endpoint(&addr);
+  if (ep == chip::kInvalidEndpointId) {
+    ESP_LOGI(kTag, "undeclare entity 0x%04x: no bridged endpoint for it", entity_id);
+    return;
+  }
+  app_bridged_device_t* bd = app_bridge_get_device(ep);
+  if (bd == nullptr) return;
+  // The Matter stack reads endpoints from its own task: take its lock (recursive, so safe if already held).
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+  const esp_err_t err = app_bridge_remove_device(bd);
+  if (ep < kMaxEpTracked) g_last_onoff[ep] = -1;  // unknown again
+  ESP_LOGI(kTag, "undeclare entity 0x%04x: removed Matter endpoint %u (%s)", entity_id,
+           static_cast<unsigned>(ep), err == ESP_OK ? "ok" : esp_err_to_name(err));
+}
+
 // STATE from the brain — apply to the mirrored Matter attribute.
 void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
                  const std::uint8_t* payload, std::size_t len) {
@@ -323,6 +342,9 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
     }
     case hubproto::MsgType::State:
       apply_state(h.chip_id, h, payload, len);
+      return;
+    case hubproto::MsgType::Undeclare:
+      remove_bridged_endpoint(h.chip_id, h.entity_id);
       return;
     default:
       return;

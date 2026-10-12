@@ -7,6 +7,7 @@ bool is_known_type(std::uint8_t t) noexcept {
     case MsgType::Hello:
     case MsgType::Declare:
     case MsgType::DeclareEnd:
+    case MsgType::Undeclare:
     case MsgType::State:
     case MsgType::Command:
     case MsgType::CmdAck:

@@ -2362,9 +2362,31 @@ std::atomic<bool> g_app_force_check{false};  // a mutation just happened: look f
 
 // A management request (docs/app-protocol.md §5), run in the main loop. The same
 // containers the console edits, so both surfaces see each other's changes.
+// Devices the hub was asked to unpair. The Zigbee chip answers a successful unpair with a fresh HELLO, so the
+// brain's registry loses the entity; once the chip has declared again without it, the Matter chip is told to
+// drop the endpoint that mirrored it (Undeclare), so Apple Home does not keep a ghost accessory. Removal is
+// tied to this explicit request, not to "an entity is missing": one lost DECLARE frame must never delete an
+// endpoint people have put in rooms and automations. Main loop only.
+constexpr std::uint32_t kUnpairWatchMs = 120000;  // a device that never left is forgotten after this
+struct PendingUnpair {
+  bool used = false;
+  std::uint16_t entity = 0;
+  std::uint32_t since_ms = 0;
+} g_unpair[4];
+
+void note_unpair(std::uint16_t entity, std::uint32_t now) {
+  PendingUnpair* free_slot = nullptr;
+  for (auto& u : g_unpair) {
+    if (u.used && u.entity == entity) { u.since_ms = now; return; }
+    if (!u.used && free_slot == nullptr) free_slot = &u;
+  }
+  if (free_slot != nullptr) *free_slot = PendingUnpair{true, entity, now};
+}
+
 // A chip-meta COMMAND: entity = the chip's self entity, attr = the op (core::app::kMeta*), the
 // u16 value its argument. Mirrored in zigbee-c6 handle_meta.
 void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::uint16_t arg) {
+  if (attr == core::app::kMetaUnpair) note_unpair(arg, now_ms(nullptr));
   const std::uint8_t payload[5] = {0, 0, attr, static_cast<std::uint8_t>(arg & 0xFF),
                                    static_cast<std::uint8_t>((arg >> 8) & 0xFF)};
   hubproto::Header h{};
@@ -2987,6 +3009,36 @@ extern "C" void app_main(void) {
       const bool dirty = reconciler.take_dirty();
       xSemaphoreGiveRecursive(g_rec_mu);
       if (dirty) persist_desired();
+    }
+
+    // An unpaired device is gone from the registry and the Zigbee chip has finished declaring: drop its Matter
+    // mirror and the hub's memory of what it wanted from it. A device still in the registry (the leave failed)
+    // is left alone and forgotten after kUnpairWatchMs.
+    for (auto& u : g_unpair) {
+      if (!u.used) continue;
+      if (reg.find(u.entity) != nullptr) {  // not gone (yet)
+        if (static_cast<std::uint32_t>(t - u.since_ms) > kUnpairWatchMs) {
+          ESP_LOGW(kTag, "unpair 0x%04x: the device is still declared after %u s, giving up on its cleanup",
+                   static_cast<unsigned>(u.entity), static_cast<unsigned>(kUnpairWatchMs / 1000));
+          u.used = false;
+        }
+        continue;
+      }
+      // Gone from the registry: wait for the Zigbee chip to finish declaring (so it is not just mid-resync) and
+      // for the Matter chip to be there to hear it (it keeps waiting while that chip is down; lost on a brain reboot).
+      if (!coord.chip_ready(kZigbeeChipId) || !coord.chip_ready(kThreadChipId)) continue;
+      hubproto::Header g{};
+      g.version = hubproto::kProtocolVersion;
+      g.type = hubproto::MsgType::Undeclare;
+      g.chip_id = kThreadChipId;
+      g.entity_id = u.entity;
+      bus.publish(g, nullptr, 0);
+      xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+      if (reconciler.desired().clear_entity(u.entity) > 0) reconciler.note_dirty();
+      xSemaphoreGiveRecursive(g_rec_mu);
+      ESP_LOGI(kTag, "unpair 0x%04x done: told the Matter chip to drop its bridged endpoint",
+               static_cast<unsigned>(u.entity));
+      u.used = false;
     }
 
     if (s_clock_just_synced) {
