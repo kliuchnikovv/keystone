@@ -12,6 +12,7 @@
 #include <initializer_list>
 
 #include "core/app_protocol.hpp"
+#include "core/civil_time.hpp"
 #include "core/entity_registry.hpp"  // AttrState
 #include "core/scene_table.hpp"
 
@@ -341,8 +342,12 @@ Outcome rule_del(Engine& rules, const Reader& r, int args) {
 
 // ---- schedules -----------------------------------------------------------------------
 
+// `date` ("YYYY-MM-DD", local) makes a one-off: it runs on that day and is removed (then `days` must be
+// absent). `today` is the hub's local civil_day_number, 0 while its clock is unknown (a date in the past
+// is then not noticed here: the table drops it the next day).
 template <typename Reg, typename Scenes, typename Sched, typename Reader>
-Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader& r, int args) {
+Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader& r, int args,
+                     std::int32_t today = 0) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   Outcome fail;
   char t[16];
@@ -352,11 +357,19 @@ Outcome schedule_add(Reg& reg, const Scenes& scenes, Sched& sched, const Reader&
   }
   std::uint8_t days = kEveryDay;
   if (!detail::parse_days(r, r.find(args, "days"), days)) return Outcome::fail(Err::BadArgs, "days");
+  std::int32_t once = 0;
+  const int date_tok = r.find(args, "date");
+  if (date_tok >= 0) {
+    char d[16];
+    if (r.find(args, "days") >= 0) return Outcome::fail(Err::BadArgs, "date and days exclude each other");
+    if (!r.get_string(date_tok, d, sizeof(d)) || !parse_date(d, once)) return Outcome::fail(Err::BadArgs, "date: YYYY-MM-DD");
+    if (today != 0 && once < today) return Outcome::fail(Err::BadArgs, "date is in the past");
+  }
   hubproto::Value action{};
   std::uint16_t entity = 0;
   std::uint8_t attr = 0;
   if (!detail::action_target(reg, scenes, r, args, entity, attr, action, fail)) return fail;
-  const int slot = sched.add_point(entity, attr, action, point, days);
+  const int slot = sched.add_point(entity, attr, action, point, days, once);
   if (slot < 0) return Outcome::fail(Err::TableFull, "schedule table is full");
   return Outcome::at(slot);
 }

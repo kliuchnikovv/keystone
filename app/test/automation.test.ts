@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
-  addableSettings, draftsFromCurrentState, draftsRequest, inputText, sceneDrafts, describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, formatCountdown, inputUnit,
+  addableSettings, draftsFromCurrentState, draftsRequest, inputText, sceneDrafts, describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, validDate, localDate, describeDate, formatCountdown, inputUnit,
   nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
@@ -119,6 +119,24 @@ describe('request builders', () => {
     });
     expect(scheduleRequest({ time: '2200', days: 'daily', entity: 256, action: 'off' }).ok).toBe(false);
     expect(scheduleRequest({ time: '22:00', days: [], entity: 256, action: 'off' })).toMatchObject({ error: 'Pick at least one day' });
+    // a one-off sends a date and no days; "today" is allowed, yesterday is not; a scene works the same way
+    expect(scheduleRequest({ time: '19:00', days: 'daily', date: '2026-10-20', today: '2026-10-12', entity: 256, action: 'on' }))
+      .toEqual({ ok: true, value: { time: '19:00', date: '2026-10-20', entity: 256, action: 'on' } });
+    expect(scheduleRequest({ time: '19:00', days: 'daily', date: '2026-10-12', today: '2026-10-12', entity: null, action: 'on', scene: 'night' }))
+      .toEqual({ ok: true, value: { time: '19:00', date: '2026-10-12', scene: 'night' } });
+    expect(scheduleRequest({ time: '19:00', days: 'daily', date: '2026-10-11', today: '2026-10-12', entity: 256, action: 'on' }))
+      .toMatchObject({ ok: false, error: 'That date has already passed' });
+    expect(scheduleRequest({ time: '19:00', days: 'daily', date: '2026-02-30', today: '2026-01-01', entity: 256, action: 'on' }))
+      .toMatchObject({ ok: false, error: 'Date must look like 2026-10-20' });
+    expect(validDate('2028-02-29')).toBe(true);
+    expect(validDate('2026-02-29')).toBe(false);
+    expect(validDate('1999-12-31')).toBe(false);
+    expect(validDate('2026-1-5')).toBe(false);
+    expect(localDate(new Date(2026, 9, 5, 23, 59))).toBe('2026-10-05');
+    expect(describeDate('2026-10-05')).toBe('5 Oct 2026');
+    expect(describeDate('garbage')).toBe('garbage');
+    expect(describeSchedule({ index: 0, time: '19:00', days: 'once', date: '2026-10-20', entity: 256, attr: 1, action: 'on' }, ents))
+      .toEqual({ title: '19:00 · On plug1', detail: 'Once, 20 Oct 2026' });
     expect(scheduleRequest({ time: '22:00', days: 'daily', entity: null, action: 'off' })).toMatchObject({ error: 'Pick a device' });
   });
   it('timer converts minutes to seconds and bounds them', () => {

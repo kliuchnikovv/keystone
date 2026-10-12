@@ -108,6 +108,27 @@ describe('Schedules', () => {
     await screen.findByText(/No schedules/);
   });
 
+  it('a one-off on a date: the form asks for the date, refuses a past or invalid one, the card says "Once"', async () => {
+    await openApp();
+    await gotoAutomations();
+    click('Add schedule');
+    type('Time', '19:00');
+    click('Device');
+    click('Choose lamp');
+    click('Once, on a date');
+    type('Date', '2001-01-01');
+    click('Save schedule');
+    expect(await screen.findByText('That date has already passed')).toBeTruthy();
+    type('Date', '2099-02-30');
+    click('Save schedule');
+    expect(await screen.findByText(/Date must look like/)).toBeTruthy();
+    type('Date', '2099-10-20');
+    click('Save schedule');
+    const item = await screen.findByLabelText('schedule 19:00 · Off lamp');
+    expect(within(item).getByText('Once, 20 Oct 2099')).toBeTruthy();
+    expect(hub.schedules[0]).toMatchObject({ days: 'once', date: '2099-10-20' });
+  });
+
   it('picking individual days works, and none selected is refused', async () => {
     await openApp();
     await gotoAutomations();

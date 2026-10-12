@@ -34,7 +34,7 @@ one predicate, one action). To make rules richer:
   open: OR, more than one extra condition, several actions per rule.
 - ~~**Recurring time-of-day actions**~~ ✅ done (`core::ScheduleTable`, NVS key
   `schedules`): `at 22:00 off plug1 [daily|weekdays|weekends|mon,tue,..]`,
-  `schedules`, `unschedule <n>`; local time (see `tz`), once per day, caught up
+  `schedules`, `unschedule <n>` (`at 2026-10-20 19:00 on plug1` runs once on that date and deletes itself); local time (see `tz`), once per day, caught up
   within 10 min of its time, last-fired day persisted. Open: conditions that
   combine a time window with a state — done by `between` + `and` — ~~sunrise / sunset~~
   ✅ done (see below), one-shot absolute times.

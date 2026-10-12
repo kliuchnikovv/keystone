@@ -7,6 +7,9 @@
 // its time (a brain that boots or syncs its clock a little late still runs it; one
 // that was off for hours does not replay a stale action). The last-fired day is
 // persisted so a reboot inside that window does not fire it a second time.
+// A schedule can also be one-off: `once_day` (a civil_day_number) makes it fire on that date only, whatever
+// the weekdays say, and then it removes itself. One whose date has passed unfired (the hub was off) is
+// dropped silently the next day; take_pruned() tells the caller the table changed and needs saving.
 // Not handled: a window that crosses midnight (23:58 + 10 min is not carried into
 // the next day).
 #pragma once
@@ -31,9 +34,10 @@ template <std::size_t MaxSchedules = 8>
 class ScheduleTable {
  public:
   static constexpr std::uint16_t kMagic = 0x4353;  // 'SC'
-  static constexpr std::uint8_t  kVersion = 1;
+  static constexpr std::uint8_t  kVersion = 2;  // 2 added once_day (v1 entries are 16 bytes and still load)
   static constexpr std::size_t   kHeaderSize = 6;
-  static constexpr std::size_t   kEntryWireSize = 16;
+  static constexpr std::size_t   kEntryWireSize = 20;
+  static constexpr std::size_t   kEntryWireSizeV1 = 16;
   static constexpr int           kDefaultMaxLateMin = 10;
   static constexpr std::int32_t  kNeverFired = -1;
 
@@ -45,6 +49,7 @@ class ScheduleTable {
     std::uint16_t   minute_of_day = 0;  // a time point (core/sun.hpp): a local minute 0..1439, or sun-relative
     std::uint8_t    weekdays = kEveryDay;
     std::int32_t    last_fired_day = kNeverFired;  // civil_day_number
+    std::int32_t    once_day = 0;  // 0 = recurring; else the one civil_day_number it runs on, then it is gone
   };
 
   using FireCallback = void (*)(void* ctx, std::size_t slot, const Schedule& s);
@@ -73,9 +78,10 @@ class ScheduleTable {
   // Add a schedule at a time point: a fixed minute or relative to sunrise/sunset ("sunset+30").
   // A sun-relative schedule fires only on days the sun's time is known (a location is set, and the
   // sun rises and sets that day) and the offset time falls inside the day.
+  // `once_day` != 0 makes it a one-off on that date (`weekdays` is then ignored).
   int add_point(std::uint16_t entity_id, std::uint8_t attr_id, const hubproto::Value& value,
-                std::uint16_t point, std::uint8_t weekdays = kEveryDay) noexcept {
-    if (!valid_point(point) || (weekdays & kEveryDay) == 0) return -1;
+                std::uint16_t point, std::uint8_t weekdays = kEveryDay, std::int32_t once_day = 0) noexcept {
+    if (!valid_point(point) || (weekdays & kEveryDay) == 0 || once_day < 0) return -1;
     for (std::size_t i = 0; i < MaxSchedules; ++i) {
       if (items_[i].active) continue;
       Schedule& s = items_[i];
@@ -86,6 +92,7 @@ class ScheduleTable {
       s.value = value;
       s.minute_of_day = point;
       s.weekdays = static_cast<std::uint8_t>(weekdays & kEveryDay);
+      s.once_day = once_day;
       return static_cast<int>(i);
     }
     return -1;
@@ -122,7 +129,16 @@ class ScheduleTable {
     for (std::size_t i = 0; i < MaxSchedules; ++i) {
       Schedule& s = items_[i];
       if (!s.active) continue;
-      if ((s.weekdays & (1u << now.weekday)) == 0) continue;
+      if (s.once_day != 0) {
+        if (today > s.once_day) {  // its day went by without it running (hub off, clock unsynced): forget it
+          s.active = false;
+          pruned_ = true;
+          continue;
+        }
+        if (today != s.once_day) continue;
+      } else if ((s.weekdays & (1u << now.weekday)) == 0) {
+        continue;
+      }
       if (s.last_fired_day == today) continue;
       int due = 0;
       if (!point_minute(s.minute_of_day, sun, due)) continue;
@@ -132,13 +148,21 @@ class ScheduleTable {
       s.last_fired_day = today;
       ++fired;
       if (cb != nullptr) cb(ctx, i, s);
+      if (s.once_day != 0) s.active = false;  // a one-off has done its job
     }
     return fired;
   }
 
+  // True once after poll() dropped an expired one-off: the stored table changed without anything firing.
+  bool take_pruned() noexcept {
+    const bool p = pruned_;
+    pruned_ = false;
+    return p;
+  }
+
   // ---- persistence ---------------------------------------------------------
   // Entry: entity u16, attr u8, value (type u8, len u8, raw[4]), minute u16,
-  //        weekdays u8, last_fired_day i32.
+  //        weekdays u8, last_fired_day i32, once_day i32 (v2).
   std::size_t serialized_size() const noexcept {
     return kHeaderSize + active_count() * kEntryWireSize;
   }
@@ -162,6 +186,7 @@ class ScheduleTable {
       detail::put_u16_le(p + off + 9, s.minute_of_day);
       p[off + 11] = s.weekdays;
       detail::put_u32_le(p + off + 12, static_cast<std::uint32_t>(s.last_fired_day));
+      detail::put_u32_le(p + off + 16, static_cast<std::uint32_t>(s.once_day));
       off += kEntryWireSize;
     }
     return off;
@@ -172,13 +197,14 @@ class ScheduleTable {
   bool load(const void* in, std::size_t len) noexcept {
     if (in == nullptr || len < kHeaderSize) return false;
     const auto* p = static_cast<const std::uint8_t*>(in);
-    if (detail::get_u16_le(p) != kMagic || p[2] != kVersion) return false;
+    if (detail::get_u16_le(p) != kMagic || (p[2] != kVersion && p[2] != 1)) return false;
+    const std::size_t entry = p[2] == 1 ? kEntryWireSizeV1 : kEntryWireSize;
     const std::size_t n = detail::get_u16_le(p + 4);
-    if (n > MaxSchedules || len < kHeaderSize + n * kEntryWireSize) return false;
+    if (n > MaxSchedules || len < kHeaderSize + n * entry) return false;
 
     Schedule loaded[MaxSchedules];
     for (std::size_t i = 0; i < n; ++i) {
-      const std::uint8_t* e = p + kHeaderSize + i * kEntryWireSize;
+      const std::uint8_t* e = p + kHeaderSize + i * entry;
       Schedule& s = loaded[i];
       const auto vt = static_cast<hubproto::ValueType>(e[3]);
       if (hubproto::value_size(vt) == 0 || e[4] != hubproto::value_size(vt)) return false;
@@ -193,6 +219,10 @@ class ScheduleTable {
       s.minute_of_day = minute;
       s.weekdays = static_cast<std::uint8_t>(e[11] & kEveryDay);
       s.last_fired_day = static_cast<std::int32_t>(detail::get_u32_le(e + 12));
+      if (entry == kEntryWireSize) {
+        s.once_day = static_cast<std::int32_t>(detail::get_u32_le(e + 16));
+        if (s.once_day < 0) return false;
+      }
     }
     clear();
     for (std::size_t i = 0; i < n; ++i) items_[i] = loaded[i];
@@ -201,6 +231,7 @@ class ScheduleTable {
 
  private:
   Schedule items_[MaxSchedules] = {};
+  bool pruned_ = false;
 };
 
 }  // namespace core

@@ -15,6 +15,7 @@
 //   in <sec> <on|off> <id>  run a switch action after a delay (a timer)
 //   timers | cancel <n>     list / cancel pending timers
 //   at <HH:MM> <on|off|toggle> <id> [days]   recurring local-time action (schedules, unschedule)
+//   at <YYYY-MM-DD> <HH:MM> <on|off|toggle> <id>   the same, once, on that date
 // Console handlers only enqueue requests; the main loop executes them, so all
 // core access stays single-threaded (the UART RX task is the only other writer).
 //
@@ -1489,11 +1490,40 @@ const char* days_text(std::uint8_t mask, char* buf, std::size_t cap) {
   return buf;
 }
 
-// at <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,...]
+// "daily" / "mon,wed" for a recurring schedule, "on 2026-10-20" for a one-off.
+const char* schedule_when(const Schedules::Schedule& s, char* buf, std::size_t cap) {
+  if (s.once_day == 0) return days_text(s.weekdays, buf, cap);
+  char d[16];
+  core::format_date(s.once_day, d, sizeof(d));
+  std::snprintf(buf, cap, "on %s", d);
+  return buf;
+}
+
+// The hub's local date as a civil_day_number; 0 until the clock is synced.
+std::int32_t local_today() {
+  if (!s_time_synced) return 0;
+  const time_t wall = time(nullptr);
+  struct tm lt{};
+  localtime_r(&wall, &lt);
+  return core::civil_day_number(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
+}
+
+// at [<YYYY-MM-DD>] <HH:MM> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,...]
 int cmd_at(int argc, char** argv) {
   static const char* kUsage =
       "usage: at <HH:MM|sunrise|sunset[+-min]> <on|off|toggle> <id_or_name> [daily|weekdays|weekends|mon,tue,..]\n"
-      "       at <time> scene <name> [days]      (e.g. at sunset+30 scene evening)\n";
+      "       at <time> scene <name> [days]      (e.g. at sunset+30 scene evening)\n"
+      "       at <YYYY-MM-DD> <time> <on|off|toggle> <id_or_name>   once, on that date (then it deletes itself)\n";
+  std::int32_t once = 0;
+  if (argc >= 2 && std::strchr(argv[1], '-') != nullptr && argv[1][0] >= '0' && argv[1][0] <= '9' &&
+      std::strlen(argv[1]) == 10) {
+    if (!core::parse_date(argv[1], once)) { printf("bad date '%s' (use YYYY-MM-DD, 2000..2099)\n", argv[1]); return 1; }
+    const std::int32_t today = local_today();
+    if (today != 0 && once < today) { printf("%s is in the past\n", argv[1]); return 1; }
+    --argc;
+    ++argv;
+    if (argc == 5) { printf("a date and days exclude each other\n%s", kUsage); return 1; }
+  }
   if (argc < 4 || argc > 5) { printf("%s", kUsage); return 1; }
   std::uint16_t point = 0;
   if (!core::parse_time_point(argv[1], point)) {
@@ -1519,6 +1549,7 @@ int cmd_at(int argc, char** argv) {
   r.idx = is_scene ? 2 : toggle ? 1 : 0;  // REQ_AT: 2 = apply the scene named by `target`
   r.delay_ms = point;  // a time point: a local minute of the day, or relative to the sun
   r.id = days;                                           // weekday mask
+  r.argc = once;                                         // REQ_AT: the date of a one-off (civil_day_number), else 0
   r.out = buf;
   r.out_cap = sizeof(buf);
   printf(submit(r) ? "%s" : "timeout\n", buf);
@@ -1987,7 +2018,7 @@ void start_console() {
   reg_cmd("sun", "today's sunrise and sunset", &cmd_sun);
   reg_cmd("scene", "scene [<name> | add <name> <id> <attr> <value> ... | del <name>] - named groups of actions", &cmd_scene);
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
-  reg_cmd("at", "at <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - recurring local-time action", &cmd_at);
+  reg_cmd("at", "at [<YYYY-MM-DD>] <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - local-time action, recurring or once on a date", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
@@ -2390,7 +2421,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     o = rule_del(rules, reader, m.args);
     if (o.ok) persist_rules(rules);
   } else if (!std::strcmp(op, "schedule.add")) {
-    o = schedule_add(reg, scenes, sched, reader, m.args);
+    o = schedule_add(reg, scenes, sched, reader, m.args, local_today());
     if (o.ok) persist_schedules(sched);
   } else if (!std::strcmp(op, "schedule.del")) {
     o = schedule_del(sched, reader, m.args);
@@ -3068,7 +3099,8 @@ extern "C" void app_main(void) {
                        s.attr_id, s.value);
           },
           &fc, core::ScheduleTable<8>::kDefaultMaxLateMin, have_sun ? &sun : nullptr);
-      if (n > 0) persist_schedules(schedule_table);  // keeps last_fired_day across reboots
+      // Saved after a fire (keeps last_fired_day across reboots, drops a finished one-off) and after an expired one-off was dropped.
+      if (schedule_table.take_pruned() || n > 0) persist_schedules(schedule_table);
     }
 
     // Scenes that rules asked for (queued by the rule hook in the UART task).
@@ -3344,7 +3376,7 @@ extern "C" void app_main(void) {
               r->idx == 2 ? hubproto::Value::make_bool(true)
               : r->idx == 1 ? hubproto::Value::make_u8(2) : hubproto::Value::make_bool(r->val);
           const auto point = static_cast<std::uint16_t>(r->delay_ms);
-          const int slot = schedule_table.add_point(id, sattr, action, point, static_cast<std::uint8_t>(r->id));
+          const int slot = schedule_table.add_point(id, sattr, action, point, static_cast<std::uint8_t>(r->id), r->argc);
           if (slot < 0) {
             std::snprintf(r->out, r->out_cap, "no free schedule slot\n");
             break;
@@ -3352,15 +3384,20 @@ extern "C" void app_main(void) {
           persist_schedules(schedule_table);
           char dbuf[40], tbuf[24];
           core::format_time_point(point, tbuf, sizeof(tbuf));
+          if (r->argc != 0) {
+            char d[16];
+            core::format_date(r->argc, d, sizeof(d));
+            std::snprintf(dbuf, sizeof(dbuf), "on %s", d);
+          } else {
+            days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf));
+          }
           const char* hint = s_time_synced ? "" : " (clock not synced yet — paused until it is)";
           if (core::is_solar_point(point) && !g_loc_set) hint = " (no location yet — set one with `loc <lat> <lon>`; it will not fire until then)";
           if (id == core::kSceneTarget) {
-            std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s scene %s%s\n", slot, tbuf,
-                          days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)), r->target, hint);
+            std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s scene %s%s\n", slot, tbuf, dbuf, r->target, hint);
             break;
           }
-          std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s 0x%04x -> %s%s\n", slot, tbuf,
-                        days_text(static_cast<std::uint8_t>(r->id), dbuf, sizeof(dbuf)),
+          std::snprintf(r->out, r->out_cap, "schedule #%d: %s %s 0x%04x -> %s%s\n", slot, tbuf, dbuf,
                         static_cast<unsigned>(id), timer_action_text(action), hint);
           break;
         }
@@ -3377,14 +3414,14 @@ extern "C" void app_main(void) {
               const char* sn = scene_name_for(s->entity_id, s->attr_id);
               off += static_cast<std::size_t>(std::snprintf(
                   r->out + off, r->out_cap - off, "#%u: %s %s  scene %s\n", static_cast<unsigned>(i), tbuf,
-                  days_text(s->weekdays, dbuf, sizeof(dbuf)), sn != nullptr ? sn : "?"));
+                  schedule_when(*s, dbuf, sizeof(dbuf)), sn != nullptr ? sn : "?"));
               continue;
             }
             const char* name = reg.name_of(s->entity_id);
             off += static_cast<std::size_t>(std::snprintf(
                 r->out + off, r->out_cap - off, "#%u: %s %s  0x%04x%s%s%s -> %s\n",
                 static_cast<unsigned>(i), tbuf,
-                days_text(s->weekdays, dbuf, sizeof(dbuf)),
+                schedule_when(*s, dbuf, sizeof(dbuf)),
                 static_cast<unsigned>(s->entity_id), name != nullptr ? " (" : "",
                 name != nullptr ? name : "", name != nullptr ? ")" : "",
                 timer_action_text(s->value)));

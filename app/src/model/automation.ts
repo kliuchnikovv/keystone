@@ -45,6 +45,30 @@ export function describeDays(d: Days): string {
   return WEEK.filter((w) => d.includes(w)).map((w) => DAY_NAMES[w]).join(', ');
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A real calendar date written YYYY-MM-DD (2000..2099, as the hub accepts). */
+export function validDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (y < 2000 || y > 2099) return false;
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+
+/** The phone's local date as YYYY-MM-DD (the hub's own day may differ by a time zone; it judges for real). */
+export function localDate(now: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/** "2026-10-20" → "20 Oct 2026". */
+export function describeDate(s: string): string {
+  if (!validDate(s)) return s;
+  return `${Number(s.slice(8, 10))} ${MONTHS[Number(s.slice(5, 7)) - 1]} ${s.slice(0, 4)}`;
+}
+
 export function formatCountdown(seconds: number): string {
   if (seconds <= 0) return 'now';
   if (seconds < 90) return `${seconds} s`;
@@ -89,9 +113,10 @@ export interface TimeContext {
 
 export function describeSchedule(s: Schedule, entities: Entity[], ctx?: TimeContext): { title: string; detail: string } {
   const waiting = isSunPoint(s.time) && ctx !== undefined && !ctx.hasLocation;
+  const when = s.days === 'once' ? `Once, ${s.date ? describeDate(s.date) : 'one day'}` : describeDays(s.days);
   return {
     title: `${describeTimePoint(s.time)} · ${doText(s, entities)}`,
-    detail: waiting ? `${describeDays(s.days)} · waiting for the hub's location` : describeDays(s.days),
+    detail: waiting ? `${when} · waiting for the hub's location` : when,
   };
 }
 
@@ -253,13 +278,25 @@ export interface ScheduleForm {
   action: Action;
   /** Set to apply a scene instead of switching `entity`. */
   scene?: string | null;
+  /** YYYY-MM-DD: run once on that day instead of on `days`. */
+  date?: string | null;
+  /** The phone's local date (YYYY-MM-DD) to refuse a past `date` against; defaults to now. */
+  today?: string;
 }
 export function scheduleRequest(f: ScheduleForm): Built {
   if (!validTimePoint(f.time)) return { ok: false, error: 'Time must look like 07:30, sunset or sunset+30' };
-  if (Array.isArray(f.days) && f.days.length === 0) return { ok: false, error: 'Pick at least one day' };
-  if (f.scene) return { ok: true, value: { time: f.time, days: f.days, scene: f.scene } };
+  let when: Record<string, unknown>;
+  if (f.date !== undefined && f.date !== null) {
+    if (!validDate(f.date)) return { ok: false, error: 'Date must look like 2026-10-20' };
+    if (f.date < (f.today ?? localDate())) return { ok: false, error: 'That date has already passed' };
+    when = { time: f.time, date: f.date };
+  } else {
+    if (Array.isArray(f.days) && f.days.length === 0) return { ok: false, error: 'Pick at least one day' };
+    when = { time: f.time, days: f.days };
+  }
+  if (f.scene) return { ok: true, value: { ...when, scene: f.scene } };
   if (f.entity === null) return { ok: false, error: 'Pick a device' };
-  return { ok: true, value: { time: f.time, days: f.days, entity: f.entity, action: f.action } };
+  return { ok: true, value: { ...when, entity: f.entity, action: f.action } };
 }
 
 export interface TimerForm {

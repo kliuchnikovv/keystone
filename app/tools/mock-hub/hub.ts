@@ -728,24 +728,36 @@ export class MockHub {
   private parseSchedule(a: Record<string, unknown>): Omit<Schedule, 'index'> | { code: ErrorCode; message: string } {
     const bad = (code: ErrorCode, message: string) => ({ code, message });
     if (!isTimePoint(a.time)) return bad('bad_args', 'time');
-    const days = a.days as Days | undefined;
     const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const daysOk =
-      days === 'daily' || days === 'weekdays' || days === 'weekends' ||
-      (Array.isArray(days) && days.length > 0 && days.every((d) => names.includes(d)));
-    if (!daysOk) return bad('bad_args', 'days');
+    let days = a.days as Days | undefined;
+    let date: string | undefined;
+    if (a.date !== undefined) {
+      // A one-off: a real date, today (the mock's clock is UTC) or later, and no days.
+      if (a.days !== undefined) return bad('bad_args', 'date and days exclude each other');
+      const d = a.date;
+      const real = typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d;
+      if (!real || Number(d.slice(0, 4)) < 2000 || Number(d.slice(0, 4)) > 2099) return bad('bad_args', 'date: YYYY-MM-DD');
+      if (d < new Date().toISOString().slice(0, 10)) return bad('bad_args', 'date is in the past');
+      date = d;
+    } else {
+      const daysOk =
+        days === 'daily' || days === 'weekdays' || days === 'weekends' ||
+        (Array.isArray(days) && days.length > 0 && days.every((d) => names.includes(d)));
+      if (!daysOk) return bad('bad_args', 'days');
+    }
+    const when = date !== undefined ? { days: 'once' as const, date } : { days: days as Days };
     if (a.scene !== undefined) {
       if (a.entity !== undefined || a.action !== undefined) return bad('bad_args', 'scene excludes entity/action');
       if (typeof a.scene !== 'string' || !/^[a-z][a-z0-9_]{0,22}$/.test(a.scene)) return bad('bad_args', 'scene: a scene name');
       if (!this.scenes.some((s) => s.name === a.scene)) return bad('not_found', 'no such scene');
-      return { time: a.time as string, days: days as Days, scene: a.scene };
+      return { time: a.time as string, ...when, scene: a.scene };
     }
     if (a.action !== 'on' && a.action !== 'off' && a.action !== 'toggle') return bad('bad_args', 'action');
     const e = this.entities.find((x) => x.id === a.entity);
     if (!e) return bad('not_found', 'no such entity');
     const onoff = e.attrs.find((x) => x.name === 'on_off' && x.flags.includes('w'));
     if (!onoff) return bad('bad_args', 'entity has no on/off switch');
-    return { time: a.time as string, days: days as Days, entity: e.id, attr: onoff.id, action: a.action };
+    return { time: a.time as string, ...when, entity: e.id, attr: onoff.id, action: a.action };
   }
 
   // ---- helpers ----------------------------------------------------------------

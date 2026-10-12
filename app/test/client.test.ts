@@ -316,6 +316,23 @@ describe('management requests', () => {
     await expect(c.req('rule.add', rule)).rejects.toMatchObject({ code: 'table_full' });
   });
 
+  it('schedules: a one-off needs a real date that is not past, and excludes days', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    expect(await c.req('schedule.add', { time: '19:00', date: '2099-10-20', entity: 0x0100, action: 'on' })).toEqual({ index: 0 });
+    await until(() => c.getSnapshot().schedules.length === 1, 'the one-off');
+    expect(c.getSnapshot().schedules[0]).toMatchObject({ time: '19:00', days: 'once', date: '2099-10-20' });
+    for (const bad of [
+      { time: '19:00', date: '2001-01-01', entity: 0x0100, action: 'on' }, // past
+      { time: '19:00', date: '2099-02-30', entity: 0x0100, action: 'on' }, // not a date
+      { time: '19:00', date: 'tomorrow', entity: 0x0100, action: 'on' },
+      { time: '19:00', date: '2099-10-20', days: 'daily', entity: 0x0100, action: 'on' }, // both
+    ]) {
+      await expect(c.req('schedule.add', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+  });
+
   it('schedules: add, validate, delete', async () => {
     const c = client();
     c.connect();

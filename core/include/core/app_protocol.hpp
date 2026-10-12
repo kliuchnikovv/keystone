@@ -535,7 +535,12 @@ void write_schedule(JsonWriter& w, std::size_t index, const S& s, const char* sc
   w.begin_object().kv("index", static_cast<std::int64_t>(index)).key("time");
   write_hhmm(w, s.minute_of_day);
   w.key("days");
-  if (s.weekdays == kEveryDay) {
+  if (s.once_day != 0) {
+    char date[16];
+    format_date(s.once_day, date, sizeof(date));
+    w.str("once");
+    w.kv("date", date);
+  } else if (s.weekdays == kEveryDay) {
     w.str("daily");
   } else if (s.weekdays == kWeekdays) {
     w.str("weekdays");

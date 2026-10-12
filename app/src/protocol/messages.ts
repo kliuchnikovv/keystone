@@ -92,7 +92,9 @@ export interface Scene {
 export interface Schedule {
   index: number;
   time: string;
-  days: Days;
+  /** `once` is a one-off: it runs on `date` (YYYY-MM-DD, the hub's local day) and then removes itself. */
+  days: Days | 'once';
+  date?: string;
   entity?: number;
   attr?: number;
   action?: Action;

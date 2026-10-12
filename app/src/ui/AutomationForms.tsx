@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  COMPARISONS, WEEK, actionText, attrOptions, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
+  COMPARISONS, WEEK, actionText, localDate, attrOptions, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption, type ConditionForm, type RuleForm,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
@@ -107,20 +107,21 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
 export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
   const [time, setTime] = useState('');
   const [days, setDays] = useState<Days>('daily');
+  const [date, setDate] = useState<string | null>(null);  // set = a one-off on that day
   const [entity, setEntity] = useState<number | null>(null);
   const [action, setAction] = useState<Action>('off');
   const [target, setTarget] = useState<Target>('device');
   const [scene, setScene] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const custom = Array.isArray(days);
+  const custom = date === null && Array.isArray(days);
   const toggleDay = (d: Weekday) => {
     const cur = Array.isArray(days) ? days : [];
     setDays(cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]);
   };
 
   const save = async () => {
-    const r = scheduleRequest({ time, days, entity, action, scene: target === 'scene' ? scene ?? '' : null });
+    const r = scheduleRequest({ time, days, date, entity, action, scene: target === 'scene' ? scene ?? '' : null });
     if (!r.ok) return setError(r.error);
     setError(null);
     await onSubmit(r.value);
@@ -133,11 +134,17 @@ export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, on
       </Field>
       <Field label="Days">
         <ChipRow>
-          <Chip label="Every day" selected={days === 'daily'} onPress={() => setDays('daily')} />
-          <Chip label="Weekdays" selected={days === 'weekdays'} onPress={() => setDays('weekdays')} />
-          <Chip label="Weekends" selected={days === 'weekends'} onPress={() => setDays('weekends')} />
-          <Chip label="Pick days" selected={custom} onPress={() => setDays(custom ? 'daily' : [])} />
+          <Chip label="Every day" selected={date === null && days === 'daily'} onPress={() => { setDate(null); setDays('daily'); }} />
+          <Chip label="Weekdays" selected={date === null && days === 'weekdays'} onPress={() => { setDate(null); setDays('weekdays'); }} />
+          <Chip label="Weekends" selected={date === null && days === 'weekends'} onPress={() => { setDate(null); setDays('weekends'); }} />
+          <Chip label="Pick days" selected={custom} onPress={() => { setDate(null); setDays(custom ? 'daily' : []); }} />
+          <Chip label="Once, on a date" selected={date !== null} onPress={() => setDate(date === null ? localDate() : null)} />
         </ChipRow>
+        {date !== null && (
+          <View style={{ marginTop: 8 }}>
+            <Input label="Date" value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" autoCapitalize="none" />
+          </View>
+        )}
         {custom && (
           <View style={{ marginTop: 8 }}>
             <ChipRow>

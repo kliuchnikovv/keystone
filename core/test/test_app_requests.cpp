@@ -71,7 +71,7 @@ struct Home {
   Outcome name_clear(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::name_clear(reg, r, g); }); }
   Outcome rule_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_add(reg, scenes, rules, r, g); }); }
   Outcome rule_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_del(rules, r, g); }); }
-  Outcome sched_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, scenes, sched, r, g); }); }
+  Outcome sched_add(const std::string& a, std::int32_t today = 0) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, scenes, sched, r, g, today); }); }
   Outcome sched_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::schedule_del(sched, r, g); }); }
   Outcome timer_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::timer_add(reg, scenes, timers, r, g, 5000, 1000000); }); }
   Outcome scene_put(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::scene_put(reg, scenes, r, g); }); }
@@ -247,6 +247,23 @@ TEST_CASE("schedule.add: days as a word, a list, or omitted; toggle is the U8 2 
 
   REQUIRE(h.sched_add(R"({"time":"07:00","entity":257,"action":"on"})").ok);  // days omitted
   CHECK(h.sched.get(2)->weekdays == kEveryDay);
+}
+
+TEST_CASE("schedule.add: a date makes a one-off; it excludes days and cannot be in the past") {
+  Home h;
+  const std::int32_t today = core::civil_day_number(2026, 10, 12);
+  auto o = h.sched_add(R"({"time":"19:00","date":"2026-10-20","entity":256,"action":"on"})", today);
+  REQUIRE(o.ok);
+  const auto* s = h.sched.get(static_cast<std::size_t>(o.index));
+  CHECK(s->once_day == core::civil_day_number(2026, 10, 20));
+  CHECK(s->minute_of_day == 19 * 60);
+  REQUIRE(h.sched_add(R"({"time":"19:00","date":"2026-10-12","entity":256,"action":"on"})", today).ok);  // today is fine
+  CHECK(h.sched_add(R"({"time":"19:00","date":"2026-10-11","entity":256,"action":"on"})", today).err == Err::BadArgs);
+  CHECK(h.sched_add(R"({"time":"19:00","date":"2026-10-11","entity":256,"action":"on"})").ok);  // clock unknown: not judged
+  CHECK(h.sched_add(R"({"time":"19:00","date":"2026-10-20","days":"daily","entity":256,"action":"on"})", today).err == Err::BadArgs);
+  CHECK(h.sched_add(R"({"time":"19:00","date":"2026-02-30","entity":256,"action":"on"})", today).err == Err::BadArgs);
+  CHECK(h.sched_add(R"({"time":"19:00","date":"tomorrow","entity":256,"action":"on"})", today).err == Err::BadArgs);
+  CHECK(h.sched_add(R"({"time":"19:00","date":20261020,"entity":256,"action":"on"})", today).err == Err::BadArgs);
 }
 
 TEST_CASE("schedule.add and schedule.del reject bad input and reuse freed slots") {

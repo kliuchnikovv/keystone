@@ -345,6 +345,24 @@ if (process.argv.includes('--mutate')) {
         await waitFor(() => c.getSnapshot().schedules.length === before.schedules);
       }
     });
+    await check('schedule.add with a date is a one-off (days "once"); a past date, a bad date, or date + days is refused', async () => {
+      const r = await c.req('schedule.add', { time: '03:33', date: '2099-12-31', entity: ent, action: 'off' });
+      const idx = r.index as number;
+      try {
+        if (typeof idx !== 'number') return 'no index in the result';
+        const shown = await waitFor(() => c.getSnapshot().schedules.some((x) => x.index === idx && x.days === 'once' && x.date === '2099-12-31'));
+        if (!shown) return 'not listed as a one-off';
+        const got = [
+          await code(c.req('schedule.add', { time: '03:33', date: '2001-01-01', entity: ent, action: 'off' })),
+          await code(c.req('schedule.add', { time: '03:33', date: '2099-02-30', entity: ent, action: 'off' })),
+          await code(c.req('schedule.add', { time: '03:33', date: '2099-12-31', days: 'daily', entity: ent, action: 'off' })),
+        ];
+        return got.every((x) => x === 'bad_args') ? true : got.join(',');
+      } finally {
+        if (typeof idx === 'number') await c.req('schedule.del', { index: idx });
+        await waitFor(() => c.getSnapshot().schedules.length === before.schedules);
+      }
+    });
     await check('timer.add / timer.cancel', async () => {
       const r = await c.req('timer.add', { entity: ent, action: 'off', delay_s: 3000 });
       const idx = r.index as number;

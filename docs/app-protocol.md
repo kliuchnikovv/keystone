@@ -164,7 +164,7 @@ so they also update the desired state (reconciler).
 | `name.set` / `name.clear` | `entity`, `name` | names `[a-z][a-z0-9_]{0,22}` (start with a letter, so never mistaken for a numeric id), unique; chips cannot be named |
 | `rule.add` | rule (§6) | `res.result.index`. `then` must be writable (`read_only` otherwise); `when` and `and` may be any attribute, a chip's telemetry included; values are checked against the attribute's type and range |
 | `rule.del` | `index` | later rules shift down |
-| `schedule.add` | `time` `"HH:MM"` or `"sunrise"`/`"sunset"` with an optional offset `"sunset+30"` (±180 min, see below), `days` (default daily), `entity`, `action` — or `scene` instead of the last two | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
+| `schedule.add` | `time` `"HH:MM"` or `"sunrise"`/`"sunset"` with an optional offset `"sunset+30"` (±180 min, see below), `days` (default daily) **or** `date` `"YYYY-MM-DD"` (a one-off, see below), `entity`, `action` — or `scene` instead of the last two | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
 | `schedule.del` | `index` | |
 | `timer.add` | `delay_s` (1..604800), `entity`, `action` — or `scene` instead of the last two | `index` is the slot number |
 | `timer.cancel` | `index` | |
@@ -207,7 +207,14 @@ Mirror the console grammar and `core::Rule`, with numeric ids:
 { "index": 0, "time": "22:00", "days": "daily", "entity": 256, "attr": 1, "action": "off" }
 // days: "daily" | "weekdays" | "weekends" | ["mon","tue",…]
 // or, applying a scene:  { "index": 0, "time": "22:00", "days": "daily", "scene": "evening" }
+// a one-off:             { "index": 0, "time": "19:00", "days": "once", "date": "2026-10-20", "entity": 256, "attr": 1, "action": "on" }
 ```
+
+**One-off schedules.** `schedule.add` with `date` (a real date in 2000..2099, the hub's local day) runs once on that
+day, within 10 minutes after `time` (like any schedule), and then removes itself; the list is re-sent. `date` and
+`days` exclude each other, and a date before the hub's local today is `bad_args` (while the clock is not synced
+the hub cannot tell, so it accepts it). A one-off whose day passed without it running (hub off, clock never
+synced) is dropped silently the next day. Console: `at 2026-10-20 19:00 on plug1`. Stored as schedule blob v2 (v1 still loads).
 
 ```jsonc
 { "index": 0, "entity": 256, "attr": 1, "action": "on", "left_s": 42 }   // a pending timer

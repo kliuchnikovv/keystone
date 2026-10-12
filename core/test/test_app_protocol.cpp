@@ -330,6 +330,14 @@ TEST_CASE("rules, schedules and timers are encoded like the console lists them")
   t.add(0x0101, 1, Value::make_u8(2), 6, 30, kWeekdays);
   t.add(0x0102, 1, Value::make_bool(true), 7, 5, kWeekend);
   t.add(0x0103, 1, Value::make_bool(true), 8, 15, 0x0A);  // mon, wed
+  CHECK(t.add_point(0x0104, 1, Value::make_bool(false), 19 * 60, kEveryDay, civil_day_number(2026, 10, 20)) == -1);  // table full
+  Sched once;
+  once.add_point(0x0104, 1, Value::make_bool(false), 19 * 60, kEveryDay, civil_day_number(2026, 10, 20));
+  {
+    JsonWriter w(buf, sizeof(buf));
+    write_schedule(w, 2, *once.get(0));
+    CHECK(std::string(w.c_str()) == R"({"index":2,"time":"19:00","days":"once","date":"2026-10-20","entity":260,"attr":1,"action":"off"})");
+  }
   const char* expect[] = {
       R"({"index":0,"time":"22:00","days":"daily","entity":256,"attr":1,"action":"off"})",
       R"({"index":1,"time":"06:30","days":"weekdays","entity":257,"attr":1,"action":"toggle"})",

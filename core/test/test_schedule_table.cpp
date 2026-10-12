@@ -272,3 +272,99 @@ TEST_CASE("sun-relative schedules are stored as they are, and a bad stored point
   CHECK(t.add_point(0x103, 1, Value::make_bool(true), 1440) == -1);
   CHECK(t.add_point(0x103, 1, Value::make_bool(true), core::solar_point(true, 200)) == -1);
 }
+
+// ---- one-off schedules (a date) -----------------------------------------------------------
+
+TEST_CASE("dates: parse, format and the day-number round trip") {
+  std::int32_t n = 0;
+  REQUIRE(core::parse_date("2026-10-12", n));
+  CHECK(n == core::civil_day_number(2026, 10, 12));
+  char buf[16];
+  core::format_date(n, buf, sizeof(buf));
+  CHECK(std::strcmp(buf, "2026-10-12") == 0);
+  REQUIRE(core::parse_date("2028-02-29", n));  // a leap day
+  core::format_date(n, buf, sizeof(buf));
+  CHECK(std::strcmp(buf, "2028-02-29") == 0);
+  for (std::int32_t d = core::civil_day_number(2000, 1, 1); d < core::civil_day_number(2100, 1, 1); d += 37) {
+    int y, m, dd;
+    core::civil_from_days(d, y, m, dd);
+    CHECK(core::civil_day_number(y, m, dd) == d);
+  }
+  for (const char* bad : {"2026-02-29", "2026-13-01", "2026-00-10", "2026-10-00", "2026-04-31", "1999-12-31", "2100-01-01",
+                          "2026-1-12", "26-10-12", "2026/10/12", "2026-10-12 ", "", "2026-10-1x"}) {
+    CAPTURE(bad);
+    CHECK_FALSE(core::parse_date(bad, n));
+  }
+  CHECK_FALSE(core::parse_date(nullptr, n));
+}
+
+TEST_CASE("a one-off fires on its date only (weekday does not matter), then it is gone") {
+  core::ScheduleTable<4> t;
+  Fired f;
+  const std::int32_t day = core::civil_day_number(2026, 10, 14);  // a Wednesday
+  REQUIRE(t.add_point(0x0100, 1, hubproto::Value::make_bool(true), 19 * 60, core::kWeekend, day) == 0);
+
+  CHECK(t.poll(mon(19, 0), &on_fire, &f) == 0);                                    // Monday: not its date
+  CHECK(t.poll(LocalTime{2026, 10, 14, 18, 59, 3}, &on_fire, &f) == 0);            // too early
+  CHECK(t.poll(LocalTime{2026, 10, 14, 19, 0, 3}, &on_fire, &f) == 1);             // on the day (a weekday it did not list)
+  CHECK(f.entity == 0x0100);
+  CHECK(t.active_count() == 0);                                                    // removed itself
+  CHECK(t.poll(LocalTime{2026, 10, 14, 19, 1, 3}, &on_fire, &f) == 0);
+  CHECK_FALSE(t.take_pruned());                                                    // that was a fire, not a prune
+}
+
+TEST_CASE("a one-off whose day passed is dropped, once, and the caller is told") {
+  core::ScheduleTable<4> t;
+  Fired f;
+  REQUIRE(t.add_point(0x0100, 1, hubproto::Value::make_bool(true), 19 * 60, core::kEveryDay,
+                      core::civil_day_number(2026, 10, 11)) == 0);
+  REQUIRE(t.add(0x0101, 1, hubproto::Value::make_bool(true), 7, 0) == 1);
+  CHECK(t.poll(mon(7, 0), &on_fire, &f) == 1);  // only the recurring one runs
+  CHECK(f.entity == 0x0101);
+  CHECK(t.active_count() == 1);
+  CHECK(t.take_pruned());
+  CHECK_FALSE(t.take_pruned());
+}
+
+TEST_CASE("a one-off in the future is left alone") {
+  core::ScheduleTable<4> t;
+  Fired f;
+  REQUIRE(t.add_point(0x0100, 1, hubproto::Value::make_bool(true), 19 * 60, core::kEveryDay,
+                      core::civil_day_number(2026, 11, 1)) == 0);
+  CHECK(t.poll(mon(19, 0), &on_fire, &f) == 0);
+  CHECK(t.active_count() == 1);
+  CHECK_FALSE(t.take_pruned());
+}
+
+TEST_CASE("one-offs survive save/load, and v1 buffers (no date) still load") {
+  core::ScheduleTable<4> t;
+  REQUIRE(t.add(0x0100, 1, hubproto::Value::make_bool(false), 22, 0) >= 0);
+  const std::int32_t day = core::civil_day_number(2026, 12, 24);
+  REQUIRE(t.add_point(0x0101, 1, hubproto::Value::make_bool(true), 18 * 60, core::kEveryDay, day) >= 0);
+  std::uint8_t buf[256];
+  const std::size_t n = t.save(buf, sizeof(buf));
+  REQUIRE(n == 6 + 2 * 20);
+  core::ScheduleTable<4> u;
+  REQUIRE(u.load(buf, n));
+  CHECK(u.get(0)->once_day == 0);
+  CHECK(u.get(1)->once_day == day);
+  CHECK(u.get(1)->minute_of_day == 18 * 60);
+
+  // A v1 buffer: 16-byte entries, version 1.
+  std::uint8_t v1[6 + 16] = {};
+  v1[0] = 0x53; v1[1] = 0x43; v1[2] = 1; v1[4] = 1;
+  std::uint8_t* e = v1 + 6;
+  e[0] = 0x00; e[1] = 0x01; e[2] = 1; e[3] = static_cast<std::uint8_t>(hubproto::ValueType::Bool); e[4] = 1; e[5] = 1;
+  e[9] = static_cast<std::uint8_t>(22 * 60 & 0xFF); e[10] = static_cast<std::uint8_t>(22 * 60 >> 8); e[11] = core::kEveryDay;
+  e[12] = e[13] = e[14] = e[15] = 0xFF;  // never fired
+  core::ScheduleTable<4> old;
+  REQUIRE(old.load(v1, sizeof(v1)));
+  CHECK(old.get(0)->minute_of_day == 22 * 60);
+  CHECK(old.get(0)->once_day == 0);
+
+  // A negative date is corruption; a v2 buffer cut short is too.
+  buf[6 + 20 + 16 + 3] = 0x80;
+  core::ScheduleTable<4> bad;
+  CHECK_FALSE(bad.load(buf, n));
+  CHECK_FALSE(bad.load(buf, n - 1));
+}
