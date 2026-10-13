@@ -29,6 +29,7 @@
 // this file glues them behind a single Bus so all core components (registry,
 // coordinator, state machine, dispatcher, rules) still see just one bus and
 // don't care where a message came from. Outbound is routed by header.chip_id.
+#include <utility>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -405,7 +406,25 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // readers in the main loop and the console task, hence the mutex.
 core::EventRing<256> g_ev_ring;
 core::EventFanout<4> g_ev_out;
+core::StateDedup<64> g_ev_state_seen;  // a restarted chip re-reports what has not changed: not news
+core::ChipEventGate g_ev_chip_gate;    // a crash loop must not fill the ring with "rebooted"
 SemaphoreHandle_t g_ev_mu = nullptr;
+
+// Who is making the hub send a command, for the `command` event. A command is built and sent in one call
+// on one task, so a per-task value set around the call is enough; rules are the one producer that sends from
+// inside the engine, so the fire hook sets it and the send observer takes it.
+thread_local core::CmdSource t_cmd_src = core::CmdSource::Unknown;
+struct CmdSrcScope {
+  core::CmdSource prev;
+  explicit CmdSrcScope(core::CmdSource s) : prev(t_cmd_src) { t_cmd_src = s; }
+  ~CmdSrcScope() { t_cmd_src = prev; }
+};
+core::CmdSource cmd_src_of(const char* kind) {
+  if (std::strcmp(kind, "rule") == 0) return core::CmdSource::Rule;
+  if (std::strcmp(kind, "schedule") == 0) return core::CmdSource::Schedule;
+  if (std::strcmp(kind, "timer") == 0) return core::CmdSource::Timer;
+  return std::strcmp(kind, "app") == 0 ? core::CmdSource::App : core::CmdSource::Console;
+}
 
 void ev_emit(core::Event e) {
   if (g_ev_mu == nullptr) return;
@@ -446,10 +465,25 @@ core::SceneVia scene_via(const char* kind) {
   return std::strcmp(kind, "app") == 0 ? core::SceneVia::App : core::SceneVia::Console;
 }
 
+// A state report becomes an event only if it is one worth keeping and it is a change.
+void ev_state(std::uint16_t entity_id, std::uint8_t attr_id, const hubproto::Value& v) {
+  if (g_ev_mu == nullptr || !core::state_is_historic(entity_id, attr_id, v)) return;
+  core::Event e;
+  e.kind = core::EventKind::State;
+  e.entity = entity_id;
+  e.attr = attr_id;
+  e.has_value = true;
+  e.value = v;
+  e.t_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
+  xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+  if (g_ev_state_seen.changed(entity_id, attr_id, v)) g_ev_out.emit(e);
+  xSemaphoreGive(g_ev_mu);
+}
+
 void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_id,
                      const hubproto::Value& v) {
   app_on_state(nullptr, entity_id, attr_id, v);
-  if (core::state_is_historic(entity_id, attr_id, v)) ev_attr(core::EventKind::State, entity_id, attr_id, &v);
+  ev_state(entity_id, attr_id, v);
   ESP_LOGD(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
            static_cast<unsigned>(entity_id), static_cast<unsigned>(attr_id),
            static_cast<unsigned>(v.raw[0]));
@@ -480,7 +514,13 @@ void on_chip_event(void* /*ctx*/, std::uint8_t chip, core::ChipMonitor::Event ev
                               : ev == core::ChipMonitor::Event::Resumed  ? core::ChipEv::Resumed
                               : ev == core::ChipMonitor::Event::Rebooted ? core::ChipEv::Rebooted
                                                                          : core::ChipEv::Flapping;
-    ev_attr(core::EventKind::Chip, 0, 0, &arg, static_cast<std::uint8_t>(code), chip);
+    bool record = true;
+    if (g_ev_mu != nullptr) {
+      xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+      record = g_ev_chip_gate.allow(chip, code, static_cast<std::uint32_t>(esp_timer_get_time() / 1000000));
+      xSemaphoreGive(g_ev_mu);
+    }
+    if (record) ev_attr(core::EventKind::Chip, 0, 0, &arg, static_cast<std::uint8_t>(code), chip);
   }
   switch (ev) {
     case core::ChipMonitor::Event::Lost:
@@ -537,7 +577,8 @@ SemaphoreHandle_t g_rec_mu = nullptr;
 
 void rec_note_command(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
                       const hubproto::Value& v) {
-  ev_attr(core::EventKind::Command, entity, attr, &v);
+  ev_attr(core::EventKind::Command, entity, attr, &v, static_cast<std::uint8_t>(t_cmd_src));
+  if (t_cmd_src == core::CmdSource::Rule) t_cmd_src = core::CmdSource::Unknown;  // set by the fire hook for this one send
   xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
   g_rec->note_command(entity, attr, v);
   xSemaphoreGiveRecursive(g_rec_mu);
@@ -545,6 +586,7 @@ void rec_note_command(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
 
 void rec_on_report(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
                    const hubproto::Value& v, bool had, bool changed) {
+  CmdSrcScope src(core::CmdSource::Reconcile);  // a corrective command is sent from inside on_report
   xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
   g_rec->on_report(entity, attr, v, had, changed);
   xSemaphoreGiveRecursive(g_rec_mu);
@@ -608,6 +650,7 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     hubproto::Command cmd{};
     if (len >= 3 && g_reg != nullptr && g_reg->value_type_of(h.entity_id, p[2], vt) &&
         hubproto::decode_command(p, len, vt, cmd)) {
+      CmdSrcScope src(core::CmdSource::Matter);
       rec_note_command(nullptr, cmd.entity_id, cmd.attr_id, cmd.value);
     }
     hubproto::Header fwd = h;
@@ -987,6 +1030,7 @@ Scenes* g_scenes = nullptr;
 QueueHandle_t g_scene_q = nullptr;
 
 void rule_fire_hook(void* /*ctx*/, std::size_t slot, const core::Rule& r) {
+  if (r.action_entity != core::kSceneTarget) t_cmd_src = core::CmdSource::Rule;  // the engine sends right after
   ev_attr(core::EventKind::Rule, r.action_entity, r.action_attr, &r.action_value, 0, static_cast<std::uint16_t>(slot));
 }
 
@@ -1493,6 +1537,7 @@ void run_scene(Dispatcher& disp, Registry& reg, std::uint8_t scene_id, std::uint
     ESP_LOGW(kTag, "%s: scene %u no longer exists", kind, static_cast<unsigned>(scene_id));
     return;
   }
+  CmdSrcScope src(core::CmdSource::Scene);
   const auto res = core::app::apply_scene(reg, *g_scenes, sc->name,
                                           [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
                                             std::uint16_t seq = 0;
@@ -1523,6 +1568,7 @@ void run_action(Dispatcher& disp, Registry& reg, std::uint32_t now, const char* 
     v = hubproto::Value::make_bool(!cur.as_bool());
   }
   ev_attr(trigger, entity_id, attr_id, &v, 0, static_cast<std::uint16_t>(slot));
+  CmdSrcScope src(cmd_src_of(kind));
   std::uint16_t seq = 0;
   disp.send(entity_id, attr_id, v, now, seq);
   ESP_LOGI(kTag, "%s #%u fired: entity 0x%04x attr 0x%02x (seq=%u)", kind,
@@ -2599,7 +2645,11 @@ void app_handle_cmd(const appsrv::Inbound& in, const Registry& reg, Dispatcher& 
 
   g_app_send = AppSendCtx{xTaskGetCurrentTaskHandle(), false, hubproto::CmdAckStatus::Ok};
   std::uint16_t seq = 0;
-  const bool sent = disp.send(entity, attr, v, now, seq);
+  bool sent;
+  {
+    CmdSrcScope src(core::CmdSource::App);
+    sent = disp.send(entity, attr, v, now, seq);
+  }
   const AppSendCtx done = g_app_send;
   g_app_send = AppSendCtx{};
   if (!sent && !done.delivered) return fail(Err::Internal, "command queue full");
@@ -2663,6 +2713,42 @@ void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::u
 
 void persist_webtoken(const char* token);
 void setup_token_request(const char* token, std::uint32_t now);  // defined with the setup code, below
+
+// Live history: what the ring got since the last push goes to every client at once, newest first, so the
+// History tab does not wait for its next poll. At most a page per call; a burst continues on the next
+// pass, and a client that missed one asks with `history` (the push says `latest`). With nobody connected
+// the cursor just follows the ring, so a client that arrives later is not sent the backlog.
+std::uint32_t g_ev_pushed = 0;
+std::uint32_t g_ev_push_ms = 0;
+
+void history_push(Scenes& scenes, std::uint32_t now_ms) {
+  if (g_ev_mu == nullptr || now_ms - g_ev_push_ms < 250) return;
+  g_ev_push_ms = now_ms;
+  static char hb[core::app::kMaxFrame];
+  static core::Event page[core::app::kHistoryPage];
+  xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+  const std::uint32_t latest = g_ev_ring.latest();
+  std::size_t n = 0;
+  if (appsrv::client_count() == 0) {
+    g_ev_pushed = latest;
+  } else {
+    n = g_ev_ring.read_after(g_ev_pushed, core::app::kHistoryPage, page);
+  }
+  xSemaphoreGive(g_ev_mu);
+  if (n == 0) return;
+  g_ev_pushed = page[n - 1].seq;
+  for (std::size_t i = 0; i < n / 2; ++i) std::swap(page[i], page[n - 1 - i]);  // oldest-first -> newest-first
+  core::JsonWriter w(hb, sizeof(hb));
+  core::app::encode_history_push(w, s_time_synced ? static_cast<std::int64_t>(time(nullptr)) : 0,
+                                 static_cast<std::uint32_t>(esp_timer_get_time() / 1000000), page, n,
+                                 latest,
+                                 [](void* sc, std::uint8_t id) -> const char* {
+                                   const auto* found = static_cast<Scenes*>(sc)->find_by_id(id);
+                                   return found != nullptr ? found->name : nullptr;
+                                 },
+                                 &scenes);
+  if (w.ok()) appsrv::broadcast(hb, w.size());
+}
 
 void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
                     Schedules& sched, core::TimerTable<8>& timers, Scenes& scenes, std::uint32_t now) {
@@ -2828,6 +2914,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     if (o.ok) persist_scenes(scenes);
   } else if (!std::strcmp(op, "scene.apply")) {
     o = scene_apply(reg, scenes, reader, m.args, [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
+      CmdSrcScope src(core::CmdSource::Scene);
       std::uint16_t seq = 0;
       return disp.send(e, a, v, now, seq);
     });
@@ -3495,6 +3582,7 @@ extern "C" void app_main(void) {
         core::app::encode_state(w, ev.entity, ev.attr, ev.value);
         if (w.ok()) appsrv::broadcast(b, w.size());
       }
+      history_push(scene_store, t);
       mdns_sync();
       wifi_service(t);
       setup_service(t);
@@ -3621,6 +3709,7 @@ extern "C" void app_main(void) {
             std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
           } else {
             std::uint16_t seq = 0;
+            CmdSrcScope src(core::CmdSource::Console);
             bool ok = disp.send(id, kOnOffAttr,
                                 hubproto::Value::make_bool(r->val), t, seq);
             const char* name = reg.name_of(id);
@@ -4073,6 +4162,7 @@ extern "C" void app_main(void) {
           } else if (argc == 2) {  // apply
             const auto res = core::app::apply_scene(
                 reg, scene_store, argv[1], [&](std::uint16_t e, std::uint8_t a, const hubproto::Value& v) {
+                  CmdSrcScope src(core::CmdSource::Scene);
                   std::uint16_t seq = 0;
                   return disp.send(e, a, v, now_ms(nullptr), seq);
                 });

@@ -85,6 +85,20 @@ export function mergeNewest(list: HistoryList, page: HistoryPage, nowMs: number)
   return { events: all.slice(0, MAX_KEPT), latest: page.latest, hasMore: list.hasMore || all.length > MAX_KEPT };
 }
 
+/**
+ * Fold a live push (`history` message: new events, newest first) onto the list. Null when it does not join what
+ * we have — nothing loaded yet, the hub restarted, or events in between were missed — and the caller should
+ * fetch the newest page instead.
+ */
+export function mergePush(list: HistoryList, page: HistoryPage, nowMs: number): HistoryList | null {
+  if (list.events.length === 0 || page.latest < list.latest) return null;
+  const fresh = place(page, nowMs).filter((e) => e.seq > list.latest);
+  if (fresh.length === 0) return { ...list, latest: Math.max(list.latest, page.latest) };
+  if (lastSeq(fresh) > list.latest + 1) return null;
+  const all = [...fresh, ...list.events];
+  return { events: all.slice(0, MAX_KEPT), latest: fresh[0]!.seq, hasMore: list.hasMore || all.length > MAX_KEPT };
+}
+
 /** Fold a page of older events (asked with `before = oldest we have`) onto the end of the list. */
 export function mergeOlder(list: HistoryList, page: HistoryPage, nowMs: number): HistoryList {
   const have = lastSeq(list.events);
@@ -171,6 +185,18 @@ function changeWords(name: string, value: Value | undefined): string {
 
 const VIA: Record<string, string> = { console: 'from the console', app: 'from the app', rule: 'by a rule', schedule: 'by a schedule', timer: 'by a timer' };
 
+/** Who asked for a command (the event's `what`): the History row ends with it. */
+const COMMAND_VIA: Record<string, string> = {
+  console: 'from the console',
+  app: 'from the app',
+  rule: 'by a rule',
+  schedule: 'by a schedule',
+  timer: 'by a timer',
+  scene: 'by a scene',
+  matter: 'from a Matter controller',
+  reconcile: 'to restore its last setting',
+};
+
 function sceneWords(e: HistoryEvent): string {
   return e.scene ? `scene \u201c${e.scene}\u201d` : 'a scene that has since been deleted';
 }
@@ -196,8 +222,10 @@ export function describeEvent(e: HistoryEvent, h: Home): Described {
       return { icon: '🔌', tone: e.what === 'panic' || e.what === 'watchdog' || e.what === 'brownout' ? 'bad' : 'normal', text: `Hub started${e.what && e.what !== 'unknown' ? ` (${e.what.replace('_', ' ')})` : ''}` };
     case 'state':
       return { icon, tone: 'normal', text: `${device} ${changeWords(name, e.value)}` };
-    case 'command':
-      return { icon: '➡️', tone: 'normal', text: `Sent to ${device}: ${changeWords(name, e.value)}` };
+    case 'command': {
+      const why = e.what ? COMMAND_VIA[e.what] : undefined; // an unknown source (newer hub) says nothing
+      return { icon: '➡️', tone: 'normal', text: `Sent to ${device}: ${changeWords(name, e.value)}${why ? ` ${why}` : ''}` };
+    }
     case 'command_failed':
       return { icon: '⚠️', tone: 'bad', text: `${device}: ${attrLabel(name).toLowerCase()} command failed (${e.what ?? 'unknown'})` };
     case 'rule':

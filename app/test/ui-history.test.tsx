@@ -54,9 +54,31 @@ describe('History tab', () => {
     fireEvent.click(screen.getByLabelText('lamp power'));
     await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
     fireEvent.click(screen.getByRole('tab', { name: 'History' }));
-    await events().findByText('Sent to lamp: turned on');
+    await events().findByText('Sent to lamp: turned on from the app');
     await events().findByText('lamp turned on');
   });
+
+  it('a new event shows up at once, not at the next poll', async () => {
+    renderHome();
+    await openHistory();
+    await events().findByText('Hub started (power on)');
+    act(() => hub.setValue(0x0102, 0x50, true));
+    // The poll is every 4 s: this only passes if the hub's push was folded in.
+    await waitFor(() => expect(screen.getByLabelText(/Motion sensor 0x0102 detected someone/)).toBeTruthy(), { timeout: 1500 });
+    act(() => hub.setValue(0x0102, 0x50, false));
+    await waitFor(() => expect(screen.getByLabelText(/Motion sensor 0x0102 sees no one/)).toBeTruthy(), { timeout: 1500 });
+    expect(screen.getAllByLabelText(/Motion sensor 0x0102/)).toHaveLength(2); // neither twice
+  });
+
+  it('a hub that does not push is still polled', async () => {
+    await hub.close();
+    hub = await MockHub.start({ helloTimeoutMs: 500, ackDelayMs: 10, pushHistory: false });
+    renderHome();
+    await openHistory();
+    await events().findByText('Hub started (power on)');
+    act(() => hub.setValue(0x0102, 0x50, true));
+    await waitFor(() => expect(screen.getByLabelText(/Motion sensor 0x0102 detected someone/)).toBeTruthy(), { timeout: 6000 });
+  }, 15000);
 
   it('tapping a row about a device shows only that device; "Show everything" comes back', async () => {
     renderHome();

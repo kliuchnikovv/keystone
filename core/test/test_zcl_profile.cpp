@@ -183,3 +183,46 @@ TEST_CASE("attr_value_type resolves what a COMMAND for each attribute carries") 
   CHECK(vt == hubproto::ValueType::Enum8);
   CHECK_FALSE(attr_value_type(0x77, vt));
 }
+
+TEST_CASE("read guard: an answer to a read sent before a command is stale, one sent after is fresh") {
+  ReadGuard g{};
+  CHECK_FALSE(g.stale(cluster::kOnOff, 100));  // nothing known
+
+  g.note_read(1000);
+  CHECK_FALSE(g.stale(cluster::kOnOff, 1100));  // no command yet
+  g.note_command(1200);
+  CHECK(g.stale(cluster::kOnOff, 1500));        // asked at 1000, the command went at 1200
+  CHECK(g.stale(cluster::kOnOff, 1200));
+  g.note_read(1300);                            // asked again after the command
+  CHECK_FALSE(g.stale(cluster::kOnOff, 1500));
+}
+
+TEST_CASE("read guard: only the clusters a command changes, only for a few seconds") {
+  ReadGuard g{};
+  g.note_read(1000);
+  g.note_command(1200);
+  CHECK(g.stale(cluster::kLevel, 1500));
+  CHECK(g.stale(cluster::kColor, 1500));
+  CHECK(g.stale(cluster::kThermostat, 1500));
+  CHECK_FALSE(g.stale(0x0b04, 1500));            // power does not change because of a command we made
+  CHECK_FALSE(g.stale(cluster::kBasic, 1500));
+  CHECK(g.stale(cluster::kOnOff, 1200 + ReadGuard::kWindowMs - 1));
+  CHECK_FALSE(g.stale(cluster::kOnOff, 1200 + ReadGuard::kWindowMs));  // that answer is not coming any more
+}
+
+TEST_CASE("read guard: a read and a command in the same millisecond count as the command being later") {
+  ReadGuard g{};
+  g.note_read(500);
+  g.note_command(500);
+  CHECK(g.stale(cluster::kOnOff, 600));
+}
+
+TEST_CASE("read guard: the millisecond clock wrapping does not confuse it") {
+  ReadGuard g{};
+  g.note_read(0xFFFFFF00u);
+  g.note_command(0xFFFFFF80u);
+  CHECK(g.stale(cluster::kOnOff, 0xFFFFFFC0u));
+  CHECK(g.stale(cluster::kOnOff, 100));          // 228 ms after the command, across the wrap
+  g.note_read(0x00000010u);
+  CHECK_FALSE(g.stale(cluster::kOnOff, 100));    // a read sent after the command
+}

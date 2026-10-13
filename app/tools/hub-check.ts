@@ -546,12 +546,15 @@ if (process.argv.includes('--mutate')) {
       const onoff = () => c.getSnapshot().entities.find((e) => e.id === ent)?.attrs.find((a) => a.id === 0x01)?.value;
       const v0 = onoff();
       if (typeof v0 !== 'boolean') return 'no on_off value';
+      const pushed: { latest: number; events: { seq: number; kind: string; what?: string; entity?: number }[] }[] = [];
+      const unsubscribe = c.subscribeHistory((p) => pushed.push(p));
       await c.cmd(ent, 0x01, !v0);
       await waitFor(() => onoff() === !v0);
       await c.cmd(ent, 0x01, v0);
       await waitFor(() => onoff() === v0);
-      await sleep(300);
-      const res = (await c.req('history')) as { now: number; latest: number; oldest: number; events: { seq: number; age: number; kind: string; entity?: number; attr?: number; value?: unknown }[] };
+      await sleep(600);
+      unsubscribe();
+      const res = (await c.req('history')) as { now: number; latest: number; oldest: number; events: { seq: number; age: number; kind: string; what?: string; entity?: number; attr?: number; value?: unknown }[] };
       const ev = res.events;
       if (!Array.isArray(ev) || ev.length < 4) return `expected at least 4 events, got ${ev?.length}`;
       if (ev.some((e, i) => i > 0 && e.seq >= ev[i - 1]!.seq)) return 'not newest first';
@@ -569,7 +572,16 @@ if (process.argv.includes('--mutate')) {
       if (cmdBack < 0 || cmdAway < 0) return `the two commands are not both there: ${mine.join(' ')}`;
       const changeBack = mine.slice(0, cmdBack).includes(`state:${v0}`);
       const changeAway = mine.slice(cmdBack + 1, cmdAway).includes(`state:${!v0}`);
-      return changeBack && changeAway ? true : `commands without their changes: ${mine.join(' ')}`;
+      if (!(changeBack && changeAway)) return `commands without their changes: ${mine.join(' ')}`;
+      // Who asked: these came in over the app protocol.
+      const cmds = ev.filter((e) => e.kind === 'command' && e.entity === ent).slice(0, 2);
+      if (cmds.some((e) => e.what !== 'app')) return `a command from the app is not tagged app: ${cmds.map((e) => e.what).join(',')}`;
+      // Live push: every one of those events reached us without asking, newest first inside a push.
+      const seen = new Set(pushed.flatMap((p) => p.events.map((e) => e.seq)));
+      const missing = [...cmds.map((e) => e.seq), ...ev.filter((e) => e.kind === 'state' && e.entity === ent).slice(0, 2).map((e) => e.seq)].filter((q) => !seen.has(q));
+      if (missing.length > 0) return `events ${missing.join(',')} were not pushed (${pushed.length} push(es))`;
+      if (pushed.some((p) => p.events.some((e, i) => i > 0 && e.seq >= p.events[i - 1]!.seq))) return 'a push is not newest first';
+      return true;
     });
     await check('history: paging with `before`, a device filter, and argument validation', async () => {
       const all = (await c.req('history')) as { latest: number; oldest: number; events: { seq: number; entity?: number }[] };

@@ -244,6 +244,14 @@ export interface HistoryPage {
   events: HistoryEvent[];
 }
 
+/** New events pushed as they happen (`type: 'history'`), newest first, the shape of a `history` result's events. */
+export interface HistoryPush {
+  type: 'history';
+  now: number;
+  latest: number;
+  events: HistoryEvent[];
+}
+
 export interface HubEvent {
   type: 'hub';
   hub: HubInfo;
@@ -285,6 +293,7 @@ export type ServerMessage =
   | TimersEvent
   | TimeEvent
   | HubEvent
+  | HistoryPush
   | Accepted
   | Ack
   | Res

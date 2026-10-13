@@ -22,7 +22,7 @@ namespace core {
 enum class EventKind : std::uint8_t {
   Boot = 1,       // the hub (re)started; the ring starts here, so this is the gap marker. code = reset reason
   State = 2,      // an attribute changed: entity, attr, value
-  Command = 3,    // the hub sent a command: entity, attr, value
+  Command = 3,    // the hub sent a command: entity, attr, value, code = CmdSource (who asked)
   CmdFailed = 4,  // a command was not carried out: entity, attr, code = hubproto::CmdAckStatus
   Rule = 5,       // a rule fired: ref = rule slot; entity/attr/value = its action (a scene: see Scene)
   Schedule = 6,   // a schedule fired: ref = slot
@@ -33,6 +33,14 @@ enum class EventKind : std::uint8_t {
   Pairing = 11,   // the Zigbee network: code = PairingEv, entity = device (unpair/identify), ref = seconds (open)
 };
 inline constexpr std::uint8_t kEventKindMax = 11;
+
+// Who made the hub send a command. Without it the history says a plug "was sent off" and nothing about why.
+enum class CmdSource : std::uint8_t {
+  Unknown = 0, Console = 1, App = 2, Rule = 3, Schedule = 4, Timer = 5, Scene = 6,
+  Matter = 7,     // a Matter controller (Apple Home …) asked through the bridge
+  Reconcile = 8,  // the hub put a device back to what it had last asked for
+};
+inline constexpr std::uint8_t kCmdSourceMax = 8;
 
 enum class SceneVia : std::uint8_t { Console = 0, App = 1, Rule = 2, Schedule = 3, Timer = 4 };
 enum class ChipEv : std::uint8_t { Lost = 0, Resumed = 1, Rebooted = 2, Flapping = 3 };
@@ -91,6 +99,80 @@ inline bool state_is_historic(std::uint16_t entity, std::uint8_t attr, const hub
   return !(attr == hubproto::attr::kEvent && v.type == hubproto::ValueType::Enum8 && v.as_enum8() == static_cast<std::uint8_t>(hubproto::attr::ButtonEvent::Idle));
 }
 
+// A chip in a crash loop reboots every couple of seconds and, with every reboot, says "rebooted" and
+// "flapping" again. Those repeats would push everything else out of a small ring, so the first of each
+// kind goes through and the next ones wait `min_gap_s`. (Lost/Resumed are rare by construction.) The
+// log lines are not gated, and the event's value (the reboot count) still shows how many there were.
+class ChipEventGate {
+ public:
+  static constexpr std::uint8_t kChips = 16;  // chip ids are small (SPEC §6.1)
+
+  explicit ChipEventGate(std::uint32_t min_gap_s = 60) noexcept : min_gap_s_(min_gap_s) {}
+
+  // True if this chip event should be recorded.
+  bool allow(std::uint8_t chip, ChipEv code, std::uint32_t now_s) noexcept {
+    if (code != ChipEv::Rebooted && code != ChipEv::Flapping) return true;
+    Slot& s = slot_[chip % kChips][code == ChipEv::Rebooted ? 0 : 1];
+    if (s.seen && static_cast<std::uint32_t>(now_s - s.t_s) < min_gap_s_) {
+      ++suppressed_;
+      return false;
+    }
+    s.seen = true;
+    s.t_s = now_s;
+    return true;
+  }
+  std::uint32_t suppressed() const noexcept { return suppressed_; }
+
+ private:
+  struct Slot {
+    bool seen = false;
+    std::uint32_t t_s = 0;
+  };
+  Slot slot_[kChips][2] = {};
+  std::uint32_t min_gap_s_;
+  std::uint32_t suppressed_ = 0;
+};
+
+// The STATE stream repeats itself: when a chip restarts, everything it knows is learned again and the
+// registry reports "on" for a plug that was already on. A history wants changes. This remembers the last
+// value recorded per (entity, attribute) and says whether a new report differs. A button's `event` is
+// exempt (two identical presses are two presses). A small table, oldest entry replaced.
+template <std::size_t N = 32>
+class StateDedup {
+ public:
+  bool changed(std::uint16_t entity, std::uint8_t attr, const hubproto::Value& v) noexcept {
+    if (attr == hubproto::attr::kEvent) return true;
+    for (std::size_t i = 0; i < used_; ++i) {
+      Entry& e = tab_[i];
+      if (e.entity != entity || e.attr != attr) continue;
+      if (e.value == v) return false;
+      e.value = v;
+      return true;
+    }
+    Entry& e = tab_[used_ < N ? used_++ : (next_++ % N)];
+    e = Entry{entity, attr, v};
+    return true;
+  }
+  // The device is gone (unpaired): its next report is news again.
+  void forget(std::uint16_t entity) noexcept {
+    std::size_t w = 0;
+    for (std::size_t i = 0; i < used_; ++i) {
+      if (tab_[i].entity != entity) tab_[w++] = tab_[i];
+    }
+    used_ = w;
+  }
+
+ private:
+  struct Entry {
+    std::uint16_t entity = 0;
+    std::uint8_t attr = 0;
+    hubproto::Value value{};
+  };
+  Entry tab_[N] = {};
+  std::size_t used_ = 0;
+  std::size_t next_ = 0;
+};
+
 // Fixed-size in-RAM history, newest wins. Not thread-safe: the owner serialises emit() and read().
 template <std::size_t N>
 class EventRing final : public EventSink {
@@ -109,6 +191,15 @@ class EventRing final : public EventSink {
   std::uint32_t oldest() const noexcept {
     const std::uint32_t held = static_cast<std::uint32_t>(next_seq_ - 1 < N ? next_seq_ - 1 : N);
     return held == 0 ? 0 : next_seq_ - held;
+  }
+  // Events newer than `after` (a seq the reader already has), OLDEST first, at most `max`. If the reader
+  // fell behind the ring (`after` older than what is held), it starts from the oldest that is held.
+  std::size_t read_after(std::uint32_t after, std::size_t max, Event* out) const noexcept {
+    if (latest() == 0 || max == 0 || after >= latest()) return 0;
+    std::uint32_t s = after + 1 < oldest() ? oldest() : after + 1;
+    std::size_t n = 0;
+    for (; s <= latest() && n < max; ++s) out[n++] = buf_[s % N];
+    return n;
   }
   std::size_t size() const noexcept { return latest() == 0 ? 0 : static_cast<std::size_t>(latest() - oldest() + 1); }
 

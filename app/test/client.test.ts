@@ -184,6 +184,32 @@ describe('events', () => {
     expect(n).toBe(1);
   });
 
+  it('history events are pushed to history subscribers, not into the home state', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const got: { latest: number; events: { kind: string; what?: string }[] }[] = [];
+    const off = c.subscribeHistory((p) => got.push(p));
+    hub.setValue(0x0102, 0x50, true);
+    await until(() => got.some((p) => p.events.some((e) => e.kind === 'state')), 'a pushed state event');
+    expect(got[0]!.latest).toBeGreaterThan(1);
+    off();
+    hub.setValue(0x0102, 0x50, false);
+    await until(() => attrValue(c.getSnapshot(), 0x0102, 0x50) === false, 'state after unsubscribe');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(got.flatMap((p) => p.events).filter((e) => e.kind === 'state')).toHaveLength(1);
+  });
+
+  it('a command from the app is recorded as sent by the app', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    const got: { events: { kind: string; what?: string }[] }[] = [];
+    c.subscribeHistory((p) => got.push(p));
+    await c.cmd(0x0101, 0x01, true);
+    await until(() => got.some((p) => p.events.some((e) => e.kind === 'command' && e.what === 'app')), 'a command event tagged app');
+  });
+
   it('a chip going silent is pushed', async () => {
     const c = client();
     c.connect();

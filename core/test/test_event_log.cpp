@@ -310,3 +310,120 @@ TEST_CASE("history request: defaults, limits and filters") {
   CHECK_FALSE(parse(R"({"entity":"a"})", q).ok);
   CHECK(parse(R"({"before":4294967295})", q).ok);
 }
+
+// ---- crash-loop noise, command source, live push -------------------------------------------
+
+TEST_CASE("chip gate: a reboot loop is recorded once a minute, rare events always") {
+  ChipEventGate gate(60);
+  CHECK(gate.allow(2, ChipEv::Rebooted, 100));
+  CHECK_FALSE(gate.allow(2, ChipEv::Rebooted, 102));  // the loop goes round again
+  CHECK_FALSE(gate.allow(2, ChipEv::Rebooted, 159));
+  CHECK(gate.allow(2, ChipEv::Rebooted, 160));         // a minute after the one that was recorded
+  CHECK_FALSE(gate.allow(2, ChipEv::Rebooted, 161));
+  CHECK(gate.suppressed() == 3);
+
+  // Each kind and each chip has its own clock.
+  CHECK(gate.allow(2, ChipEv::Flapping, 101));
+  CHECK(gate.allow(1, ChipEv::Rebooted, 101));
+  CHECK_FALSE(gate.allow(1, ChipEv::Rebooted, 102));
+
+  // Lost and Resumed are never held back.
+  CHECK(gate.allow(2, ChipEv::Lost, 101));
+  CHECK(gate.allow(2, ChipEv::Lost, 101));
+  CHECK(gate.allow(2, ChipEv::Resumed, 101));
+}
+
+TEST_CASE("chip gate: a clock that wrapped does not lock a chip out") {
+  ChipEventGate gate(60);
+  CHECK(gate.allow(1, ChipEv::Rebooted, 0xFFFFFFF0u));
+  CHECK(gate.allow(1, ChipEv::Rebooted, 100));  // 116 s later, across the wrap
+}
+
+TEST_CASE("state dedup: only a change is news; a button press always is") {
+  StateDedup<4> d;
+  const Value on = Value::make_bool(true), off = Value::make_bool(false);
+  CHECK(d.changed(0x100, 1, on));          // the first time we hear of it
+  CHECK_FALSE(d.changed(0x100, 1, on));    // learned again after a chip restart: nothing happened
+  CHECK(d.changed(0x100, 1, off));
+  CHECK_FALSE(d.changed(0x100, 1, off));
+  CHECK(d.changed(0x100, 1, on));          // and back
+  CHECK(d.changed(0x100, 2, Value::make_u8(127)));  // another attribute of the same device
+  CHECK_FALSE(d.changed(0x100, 2, Value::make_u8(127)));
+  CHECK(d.changed(0x101, 1, on));          // another device
+
+  const Value press = Value::make_enum8(1);
+  CHECK(d.changed(0x102, hubproto::attr::kEvent, press));
+  CHECK(d.changed(0x102, hubproto::attr::kEvent, press));  // two presses are two events
+}
+
+TEST_CASE("state dedup: a full table replaces the oldest entry; forget makes a device news again") {
+  StateDedup<2> d;
+  const Value on = Value::make_bool(true);
+  CHECK(d.changed(1, 1, on));
+  CHECK(d.changed(2, 1, on));
+  CHECK(d.changed(3, 1, on));   // evicts device 1
+  CHECK_FALSE(d.changed(3, 1, on));
+  CHECK(d.changed(1, 1, on));   // forgotten by eviction: recorded again, harmless
+
+  d.forget(3);
+  CHECK(d.changed(3, 1, on));
+}
+
+TEST_CASE("ring: read_after gives what is new, oldest first, and survives falling behind") {
+  EventRing<4> ring;
+  Event out[8];
+  CHECK(ring.read_after(0, 8, out) == 0);
+  for (std::uint32_t i = 1; i <= 3; ++i) ring.emit(state_ev(i, 0x100, 1, Value::make_u8(static_cast<std::uint8_t>(i))));
+
+  std::size_t n = ring.read_after(0, 8, out);
+  REQUIRE(n == 3);
+  CHECK(out[0].seq == 1);
+  CHECK(out[2].seq == 3);
+  CHECK(ring.read_after(3, 8, out) == 0);   // nothing new
+  CHECK(ring.read_after(99, 8, out) == 0);  // a cursor from a previous life of the hub
+  n = ring.read_after(1, 8, out);
+  REQUIRE(n == 2);
+  CHECK(out[0].seq == 2);
+  CHECK(ring.read_after(0, 2, out) == 2);   // `max` caps it, still oldest first
+
+  for (std::uint32_t i = 4; i <= 9; ++i) ring.emit(state_ev(i, 0x100, 1, Value::make_u8(static_cast<std::uint8_t>(i))));
+  n = ring.read_after(2, 8, out);            // seq 3..5 were overwritten: start at the oldest held (6)
+  REQUIRE(n == 4);
+  CHECK(out[0].seq == 6);
+  CHECK(out[3].seq == 9);
+}
+
+TEST_CASE("history JSON: a command says who asked") {
+  Event e = state_ev(10, 0x100, 1, Value::make_bool(false));
+  e.kind = EventKind::Command;
+  const struct { CmdSource src; const char* word; } cases[] = {
+      {CmdSource::Console, "console"}, {CmdSource::App, "app"}, {CmdSource::Rule, "rule"},
+      {CmdSource::Schedule, "schedule"}, {CmdSource::Timer, "timer"}, {CmdSource::Scene, "scene"},
+      {CmdSource::Matter, "matter"}, {CmdSource::Reconcile, "reconcile"}};
+  for (const auto& c : cases) {
+    e.code = static_cast<std::uint8_t>(c.src);
+    CHECK(encode(&e, 1).find(std::string("\"what\":\"") + c.word + "\"") != std::string::npos);
+  }
+  e.code = static_cast<std::uint8_t>(CmdSource::Unknown);
+  CHECK(encode(&e, 1).find("\"what\"") == std::string::npos);
+  e.code = 200;  // a source from a newer hub build: no claim at all
+  CHECK(encode(&e, 1).find("\"what\"") == std::string::npos);
+}
+
+TEST_CASE("history JSON: the live push has the page's event shape") {
+  Event ev[2] = {state_ev(990, 0x100, 1, Value::make_bool(true)), state_ev(995, 0x100, 1, Value::make_bool(false))};
+  ev[0].seq = 8;
+  ev[1].seq = 9;
+  char buf[app::kMaxFrame];
+  JsonWriter w(buf, sizeof(buf));
+  app::encode_history_push(w, 1700000000, 1000, ev, 2, 9);
+  REQUIRE(w.ok());
+  const std::string s(buf, w.size());
+  CHECK(s.find("\"type\":\"history\"") != std::string::npos);
+  CHECK(s.find("\"now\":1700000000") != std::string::npos);
+  CHECK(s.find("\"latest\":9") != std::string::npos);
+  CHECK(s.find("\"seq\":8,\"age\":10") != std::string::npos);
+  CHECK(s.find("\"seq\":9,\"age\":5") != std::string::npos);
+  BasicJsonReader<1024> r;
+  CHECK(r.parse(buf, w.size()));
+}

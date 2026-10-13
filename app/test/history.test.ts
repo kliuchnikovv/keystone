@@ -8,6 +8,7 @@ import {
   MAX_KEPT,
   mergeNewest,
   mergeOlder,
+  mergePush,
   parseHistoryPage,
   secondsAgo,
   type Recorded,
@@ -116,6 +117,37 @@ describe('merging pages', () => {
   });
 });
 
+describe('live pushes', () => {
+  const have = mergeNewest(emptyHistory, page([5, 6, 7], 7), 1000);
+
+  it('new events go on top', () => {
+    const l = mergePush(have, page([8, 9], 9), 2000)!;
+    expect(l.events.map((e) => e.seq)).toEqual([9, 8, 7, 6, 5]);
+    expect(l.latest).toBe(9);
+    expect(l.events[0]!.fetchedAt).toBe(2000);
+  });
+
+  it('what we already have is not added twice, and a push with nothing new changes nothing', () => {
+    const l = mergePush(have, page([6, 7, 8], 8), 2000)!;
+    expect(l.events.map((e) => e.seq)).toEqual([8, 7, 6, 5]);
+    expect(mergePush(have, page([6, 7], 7), 2000)!.events).toHaveLength(3);
+  });
+
+  it('says "ask instead" when it does not join: empty list, a gap, a hub that restarted', () => {
+    expect(mergePush(emptyHistory, page([1], 1), 2000)).toBeNull();
+    expect(mergePush(have, page([9, 10], 10), 2000)).toBeNull(); // 8 was missed
+    expect(mergePush(have, page([1, 2], 2), 2000)).toBeNull(); // the sequence began again
+  });
+
+  it('is capped like the rest of the list', () => {
+    let l = mergeNewest(emptyHistory, page([1], 1), 0);
+    for (let s = 2; s <= MAX_KEPT + 5; s++) l = mergePush(l, page([s], s), 0)!;
+    expect(l.events).toHaveLength(MAX_KEPT);
+    expect(l.events[0]!.seq).toBe(MAX_KEPT + 5);
+    expect(l.hasMore).toBe(true);
+  });
+});
+
 describe('time', () => {
   it('ages the event by how long ago the page arrived', () => {
     const e = rec({ kind: 'state', age: 30, fetchedAt: 1000, time: null });
@@ -174,6 +206,17 @@ describe('describeEvent', () => {
 
   it('commands and their failures', () => {
     expect(say({ kind: 'command', entity: 0x0100, attr: 1, value: false })).toBe('Sent to plug1: turned off');
+    // Who asked, when the hub says; a source this app has never heard of adds nothing.
+    const by = (what: string) => say({ kind: 'command', what, entity: 0x0100, attr: 1, value: false });
+    expect(by('app')).toBe('Sent to plug1: turned off from the app');
+    expect(by('console')).toBe('Sent to plug1: turned off from the console');
+    expect(by('rule')).toBe('Sent to plug1: turned off by a rule');
+    expect(by('schedule')).toBe('Sent to plug1: turned off by a schedule');
+    expect(by('timer')).toBe('Sent to plug1: turned off by a timer');
+    expect(by('scene')).toBe('Sent to plug1: turned off by a scene');
+    expect(by('matter')).toBe('Sent to plug1: turned off from a Matter controller');
+    expect(by('reconcile')).toBe('Sent to plug1: turned off to restore its last setting');
+    expect(by('from_the_future')).toBe('Sent to plug1: turned off');
     const failed = describeEvent({ seq: 1, age: 0, kind: 'command_failed', what: 'unreachable', entity: 0x0100, attr: 1 }, home);
     expect(failed.text).toBe('plug1: power command failed (unreachable)');
     expect(failed.tone).toBe('bad');

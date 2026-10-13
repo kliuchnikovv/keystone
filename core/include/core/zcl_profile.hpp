@@ -271,4 +271,31 @@ inline hubproto::attr::ButtonEvent multistate_event(std::uint16_t v) noexcept {
   }
 }
 
+// A read response describes the device as it was when the device handled the read. If a command went out
+// after that read was sent, the answer may be older than the command: it can arrive after the command's
+// own confirmation and put the old value back (a plug that is on, shown as off until the next report).
+// The firmware keeps one of these per entity and drops such an answer, asking again instead.
+// Times are the chip's millisecond clock; wraparound is handled.
+struct ReadGuard {
+  static constexpr std::uint32_t kWindowMs = 5000;  // a read answer later than this after a command is not coming
+
+  // Plain members, zero means "never": the firmware keeps this inside structs it clears with memset.
+  bool has_cmd;
+  bool has_read;
+  std::uint32_t cmd_ms;
+  std::uint32_t read_ms;
+
+  void note_command(std::uint32_t now_ms) noexcept { has_cmd = true; cmd_ms = now_ms; }
+  void note_read(std::uint32_t now_ms) noexcept { has_read = true; read_ms = now_ms; }
+
+  // True for an answer of a read the firmware sent before its last command, received soon after that command.
+  // Only the clusters a command changes can be out of date this way.
+  bool stale(std::uint16_t cl, std::uint32_t now_ms) const noexcept {
+    if (!has_cmd || !has_read) return false;
+    if (cl != cluster::kOnOff && cl != cluster::kLevel && cl != cluster::kColor && cl != cluster::kThermostat) return false;
+    if (static_cast<std::uint32_t>(now_ms - cmd_ms) >= kWindowMs) return false;
+    return static_cast<std::int32_t>(cmd_ms - read_ms) >= 0;  // the command is not older than the read
+  }
+};
+
 }  // namespace core::zcl

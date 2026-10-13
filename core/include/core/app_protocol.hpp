@@ -430,6 +430,19 @@ inline const char* event_what(const Event& e) noexcept {
       }
       return "unknown";
     case EventKind::CmdFailed: return ack_name(static_cast<hubproto::CmdAckStatus>(e.code));
+    case EventKind::Command:  // who asked; a source this build does not know says nothing rather than something wrong
+      switch (static_cast<CmdSource>(e.code)) {
+        case CmdSource::Console: return "console";
+        case CmdSource::App: return "app";
+        case CmdSource::Rule: return "rule";
+        case CmdSource::Schedule: return "schedule";
+        case CmdSource::Timer: return "timer";
+        case CmdSource::Scene: return "scene";
+        case CmdSource::Matter: return "matter";
+        case CmdSource::Reconcile: return "reconcile";
+        case CmdSource::Unknown: break;
+      }
+      return nullptr;
     case EventKind::Scene:
       switch (static_cast<SceneVia>(e.code)) {
         case SceneVia::Console: return "console";
@@ -518,6 +531,18 @@ inline void encode_res_history(JsonWriter& w, std::int64_t id, std::int64_t wall
       .kv("now", wall_now).kv("latest", latest).kv("oldest", oldest).kv("more", more).key("events").begin_array();
   for (std::size_t i = 0; i < count; ++i) write_event(w, events[i], now_s, scene_name, scene_ctx);
   w.end_array().end_object().end_object();
+}
+
+// A live push of new events, newest first, the same shape as a `history` result's events:
+// {"type":"history","now":<wall or 0>,"latest":n,"events":[…]}. A client that does not know the type ignores
+// it (every message has a `type`); one that does folds it in like a first page and falls back to asking
+// when the events do not join what it has.
+inline void encode_history_push(JsonWriter& w, std::int64_t wall_now, std::uint32_t now_s, const Event* events,
+                                std::size_t count, std::uint32_t latest, SceneNameFn scene_name = nullptr,
+                                void* scene_ctx = nullptr) noexcept {
+  w.begin_object().kv("type", "history").kv("now", wall_now).kv("latest", latest).key("events").begin_array();
+  for (std::size_t i = 0; i < count; ++i) write_event(w, events[i], now_s, scene_name, scene_ctx);
+  w.end_array().end_object();
 }
 
 inline void encode_state(JsonWriter& w, std::uint16_t entity, std::uint8_t attr,

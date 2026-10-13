@@ -197,9 +197,9 @@ The hub keeps what happened in a fixed ring in RAM (last 256 events, `core/event
 console command prints the same list). Every producer makes an `Event` and hands it to an `EventSink`; the ring is
 one sink, a flash file or the SD recorder (SPEC Phase 7) would be another, with no change to the producers.
 
-`history` is a request, not a stream: a client fetches the newest page when it opens the screen and polls every few
-seconds (the app does it every 4 s while the History tab is open), pages back with `before`, and filters with `entity`.
-The reply:
+`history` is a request: a client fetches the newest page when it opens the screen, pages back with `before`, and
+filters with `entity`. New events also arrive **by themselves** (below), so a client that sees pushes only needs to
+ask again when a push does not join what it has; one that has seen none (an older hub) polls every few seconds. The reply:
 
 ```json
 {"type":"res","id":7,"ok":true,"result":{"now":1791885071,"latest":42,"oldest":3,"more":true,"events":[
@@ -219,13 +219,32 @@ The reply:
 |---|---|---|
 | `boot` | the hub (re)started — the gap marker | `what`: `power_on` `software` `panic` `watchdog` `brownout` `other` `unknown` |
 | `state` | a device's attribute changed (not the continuous measurements: power, energy, light level, chip telemetry; not a button's return to idle) | `entity`, `attr`, `value` |
-| `command` | the hub sent a command (from the app, a rule, a schedule, a scene, Matter, reconciliation) | `entity`, `attr`, `value` |
+| `command` | the hub sent a command | `entity`, `attr`, `value`, `what`: who asked — `console` `app` `rule` `schedule` `timer` `scene` `matter` (a Matter controller) `reconcile` (the hub restoring what it last set); absent when unknown (a newer source is shown as it is, or not at all) |
 | `command_failed` | …and it was not carried out | `entity`, `attr`, `what`: `fail` `unreachable` `unsupported` |
 | `rule` / `schedule` / `timer` | one fired, just before its commands | `ref` (its slot), `entity`, `attr`, `value`; for one that applies a scene no entity, but `scene` |
 | `scene` | a scene was applied | `ref` (its id), `scene` (its name, unless it was deleted since), `what`: `console` `app` `rule` `schedule` `timer` |
 | `chip` | a co-processor changed health | `ref` (chip id), `what`: `lost` `resumed` `rebooted` `flapping`, `value` (seconds silent, or the reboot count) |
 | `reconcile` | the hub found a device differing from what it last set (`corrected`: a corrective command follows) or changed outside the hub (`adopted`) | `entity`, `attr`, `value` (what the device has), `what` |
 | `pairing` | the Zigbee network | `what`: `opened` (`ref` = seconds), `unpair` / `identify` (`entity`) |
+
+**Live push.** About 250 ms after events are recorded the hub sends every authenticated client one message with
+what is new, newest first, each event in the shape above:
+
+```json
+{"type":"history","now":1791885071,"latest":43,"events":[{"seq":43,"age":0,"kind":"state","entity":256,"attr":1,"value":false},
+  {"seq":42,"age":0,"kind":"command","what":"app","entity":256,"attr":1,"value":false}]}
+```
+
+At most 24 events per message (a burst continues in the next one); nothing is sent while no client is connected, so a
+client that arrives later fetches the newest page itself. A client folds a push on top of its list when the events join
+what it has (`seq` right after its `latest`); when they do not (it missed one, the hub restarted) it asks with `history`.
+A client that does not know the type ignores it. A device filter is the hub's, so a filtered view asks instead of
+guessing which pushed events mention the device.
+
+**What is not recorded.** A history wants changes, so a `state` that repeats the last recorded value of that
+attribute is dropped (a restarted co-processor re-reports everything it knows; a button's `event` is exempt: two presses
+are two events). A co-processor in a crash loop records one `rebooted` and one `flapping` a minute, not one per
+restart; the reboot count in `value` still tells how many there were.
 
 The `command` → `state` order is the causal one: a command is recorded when it is sent, the change when the device's
 report arrives. A change with **no command, rule, schedule or timer before it** is the device changing by itself
@@ -478,7 +497,8 @@ code).
    a History tab (newest first, grouped by day, tap a row to see one device, "load older"), the brain's `events`
    console command. Verified on the brain: `hub-check --mutate` over wss 41/41 (2 history checks), the tab driven in a
    browser against the real hub (a click on a switch shows as `Sent to …` then the change). The mock hub keeps the
-   same ring.
+   same ring. Later: `command` events say who asked (`what`), new events are pushed (`type: "history"`), repeated
+   `state` and crash-loop `chip` events are not recorded again.
 
 Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

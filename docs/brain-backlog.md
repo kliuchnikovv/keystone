@@ -135,11 +135,16 @@ or on an SD card on the brain would do as well, without a second board. Still op
 
 - **A persistent sink** — the ring is empty after a reboot. Decide where (flash wear: batch writes, e.g. once a
   minute and on `boot`/`panic`; or the CAM over the bus, or an SD card) and whether the app should read it with the same `history`.
-- **Live push** instead of polling (a `{"type":"events","latest":n}` nudge would be enough).
+- ✅ **Live push** — done: the main loop sends what is new every 250 ms as a `history` message (§5.1); the app polls
+  only as a safety net once it has seen one.
 - **Rule/schedule/timer names** in events: they carry the slot number, which is reused, so "Rule 2 ran" can name a
   different rule later; the action it took is in the event, which is what people read.
-- **Why a command was sent**: the cause is the event just before it (a rule, a schedule, the app does not leave one
-  yet — an app command shows as a bare `command`). Tagging `command` events with their source would close that.
+- ✅ **Why a command was sent** — done: `command` events carry their source (`core::CmdSource`: console, app, rule,
+  schedule, timer, scene, matter, reconcile). The brain sets it per task around the send (`CmdSrcScope`); a rule's
+  fire hook sets it for the engine's own send. A scene's commands say `scene`, the `scene` event says which and via what.
+- **Noise control** (done): `core::StateDedup` drops a `state` equal to the last recorded value, and
+  `core::ChipEventGate` records `rebooted` / `flapping` once a minute per chip (a thread-c6 crash loop had pushed
+  ~1900 events through a 256-event ring in an hour).
 
 ## 8. Human-facing surface (beyond console)
 

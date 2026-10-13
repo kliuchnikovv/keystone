@@ -7,6 +7,7 @@ import {
   type AckStatus,
   type ClientMessage,
   type ErrorCode,
+  type HistoryPush,
   type ServerMessage,
   type Value,
   PROTOCOL_VERSION,
@@ -101,6 +102,7 @@ type Listener = () => void;
 export class HubClient {
   private state: HomeState = initialState;
   private listeners = new Set<Listener>();
+  private historyListeners = new Set<(push: HistoryPush) => void>();
   private socket: SocketLike | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -133,6 +135,12 @@ export class HubClient {
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  };
+
+  /** New hub events as they happen (a hub that does not push never calls this). Not part of the home state. */
+  subscribeHistory = (fn: (push: HistoryPush) => void): (() => void) => {
+    this.historyListeners.add(fn);
+    return () => this.historyListeners.delete(fn);
   };
 
   private set(next: HomeState): void {
@@ -307,6 +315,9 @@ export class HubClient {
       case 'snapshot':
         this.set(reduce(this.state, m));
         if (this.state.status === 'ready') this.attempt = 0; // handshake fully done
+        return;
+      case 'history':
+        for (const fn of [...this.historyListeners]) fn(m);
         return;
       default:
         this.set(reduce(this.state, m));

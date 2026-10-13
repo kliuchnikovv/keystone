@@ -41,6 +41,8 @@ export interface MockHubOptions {
   /** Delay before the chip's ACK follows `accepted`. */
   ackDelayMs?: number;
   lockoutMs?: number;
+  /** Push new events as they happen (the real hub does); false behaves like a hub from before live history. */
+  pushHistory?: boolean;
   name?: string;
   /** Entities per snapshot frame (0 = everything in one frame), to exercise parts. */
   snapshotChunk?: number;
@@ -146,6 +148,8 @@ export class MockHub {
   private timers: TimerEntry[] = [];
   private events: MockEvent[] = [];
   private eventSeq = 1;
+  private pushedSeq = 0;
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private clients = new Set<ClientInfo>();
   private failures = new Map<string, { count: number; until: number }>();
   private wss: WebSocketServer;
@@ -177,6 +181,7 @@ export class MockHub {
       helloTimeoutMs: 5000,
       ackDelayMs: 20,
       lockoutMs: 60_000,
+      pushHistory: true,
       name: 'mock-home',
       snapshotChunk: 0,
       tls: null,
@@ -210,6 +215,7 @@ export class MockHub {
 
   async close(): Promise<void> {
     if (this.heartbeat) clearInterval(this.heartbeat);
+    if (this.pushTimer) clearTimeout(this.pushTimer);
     for (const t of this.timers) clearTimeout(t.handle);
     this.timers = [];
     for (const c of this.clients) {
@@ -254,6 +260,23 @@ export class MockHub {
   private record(e: Omit<HistoryEvent, 'seq' | 'age'>): void {
     this.events.push({ ...e, seq: this.eventSeq++, at: Date.now() });
     if (this.events.length > RING_SIZE) this.events.shift();
+    if (this.opts.pushHistory && this.pushTimer === null) this.pushTimer = setTimeout(() => this.pushHistory(), 5);
+  }
+
+  /** What the real hub's main loop does every 250 ms: the events nobody has been told about go out in one message. */
+  private pushHistory(): void {
+    this.pushTimer = null;
+    const fresh = this.events.filter((e) => e.seq > this.pushedSeq).slice(-HISTORY_PAGE);
+    const latest = this.events[this.events.length - 1]?.seq ?? 0;
+    this.pushedSeq = latest;
+    if (fresh.length === 0) return;
+    const now = Date.now();
+    this.broadcast({
+      type: 'history',
+      now: Math.floor(now / 1000),
+      latest,
+      events: fresh.reverse().map(({ at, ...e }): HistoryEvent => ({ ...e, age: Math.max(0, Math.round((now - at) / 1000)) })),
+    });
   }
 
   /** A device reports a new value (as if a STATE arrived from a chip). */
@@ -434,7 +457,7 @@ export class MockHub {
     this.sendTo(c.ws, { type: 'accepted', id, seq: this.seq++ });
     const chip = this.chips.find((x) => x.id === entity.chip);
     const status: AckStatus = this.forceAck ?? (chip && chip.status === 'ready' ? 'ok' : 'unreachable');
-    this.record({ kind: 'command', entity: entity.id, attr: a.id, value: msg.value as Value });
+    this.record({ kind: 'command', what: 'app', entity: entity.id, attr: a.id, value: msg.value as Value });
     if (status !== 'ok') this.record({ kind: 'command_failed', what: status, entity: entity.id, attr: a.id });
     setTimeout(() => {
       if (status === 'ok') this.setValue(entity.id, a.id, msg.value as Value);

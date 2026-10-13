@@ -23,7 +23,7 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.
 - `src/protocol/mdns.ts`, `tools/discover.ts` — find hubs on the LAN (mDNS `_keystone._tcp`).
 - `src/ui/ScenesBar.tsx`, `SceneForm` in `AutomationForms.tsx` — scenes (named groups of settings): apply with one tap on the Devices tab, create from the current state in Automations, edit them in place (`SceneEditor`).
-- `src/model/history.ts`, `src/hooks/useHistory.ts`, `src/ui/HistoryScreen.tsx` — the History tab: pages of the hub's event ring (`history`, docs/app-protocol.md §5.1) merged into one list, each event said in words, polled every 4 s while the tab is open.
+- `src/model/history.ts`, `src/hooks/useHistory.ts`, `src/ui/HistoryScreen.tsx` — the History tab: pages of the hub's event ring (`history`, docs/app-protocol.md §5.1) merged into one list, each event said in words (a command says who asked: app, rule, schedule …); new events are pushed by the hub (`type: "history"`) and folded in at once, with a 4 s poll only for a hub that does not push (30 s safety poll otherwise).
 - `src/ui/PairingPanel.tsx` — "Add a device" (opens the Zigbee network); Blink / Remove device live in a Zigbee device's pencil menu.
 - `modules/keystone-net/` — the native Expo module (Kotlin + Swift): certificate-pinned WebSocket
   and mDNS browsing for phones; `src/native/` is its TypeScript side. **Never built on a device.**

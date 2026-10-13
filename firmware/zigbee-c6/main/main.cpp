@@ -131,6 +131,8 @@ struct ZbEntity {
   bool have_x, have_y;
   bool rearmed;               // reporting re-established this run (boot lookup answered, or it announced)
   std::uint8_t lookup_tries;  // failed boot NWK lookups so far (drives the retry back-off)
+  zcl::ReadGuard guard;       // when we last read / commanded it: spots an answer that predates a command
+  bool reread_pending;        // a fresh read is scheduled after a stale answer was dropped
 };
 
 ZbEntity g_ent[kMaxEntities] = {};
@@ -643,6 +645,7 @@ void handle_command(const hubproto::Header& h, const std::uint8_t* payload,
     send_ack(h, entity_id, hubproto::CmdAckStatus::Fail);
     return;
   }
+  s->guard.note_command(now_ms());  // before the frame can be answered: a read still in flight is now out of date
   switch (attr) {
     case A::kOnOff: {
       esp_zb_zcl_on_off_cmd_t req{};
@@ -1070,6 +1073,7 @@ void write_cie_address(std::uint16_t short_addr, std::uint8_t endpoint) {
 // has a fresh STATE even when reporting is not configured or the device missed a report.
 // `color_caps`: also ask a lamp which colour modes it supports.
 void read_device_state(ZbEntity& e, bool color_caps) {
+  e.guard.note_read(now_ms());
   static std::uint16_t basic_attrs[2] = {kAttrManufacturerName, kAttrModelIdentifier};
   read_attrs(e, kBasicCluster, basic_attrs, 2);
 
@@ -1129,6 +1133,21 @@ void read_device_state(ZbEntity& e, bool color_caps) {
     };
     read_attrs(e, ESP_ZB_ZCL_CLUSTER_ID_METERING, metering_attrs, 3);
   }
+}
+
+// A read answer that predates a command was dropped (zcl::ReadGuard): ask again a moment later, when
+// the device has long since acted on the command, so the entity does not stay "unknown".
+void reread_cb(std::uint8_t idx) {
+  if (idx >= kMaxEntities) return;
+  ZbEntity& e = g_ent[idx];
+  e.reread_pending = false;
+  if (e.in_use) read_device_state(e, false);
+}
+
+void schedule_reread(ZbEntity& e) {
+  if (e.reread_pending) return;
+  e.reread_pending = true;
+  esp_zb_scheduler_alarm(reread_cb, static_cast<std::uint8_t>(&e - g_ent), 1500);
 }
 
 // Boot NWK lookup retry: 30 s, 60 s, 120 s, then every 5 min until the device answers or announces.
@@ -1653,6 +1672,13 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
         }
         ZbEntity* e = find_by_addr(src, m->info.src_endpoint);
         if (e == nullptr) continue;
+        if (e->guard.stale(m->info.cluster, now_ms())) {
+          ESP_LOGW(kTag, "entity 0x%04x: dropped a read answer (cluster 0x%04x attr 0x%04x) asked before the last command",
+                   static_cast<unsigned>(e->entity_id), static_cast<unsigned>(m->info.cluster),
+                   static_cast<unsigned>(v->attribute.id));
+          schedule_reread(*e);
+          continue;
+        }
         handle_attr(*e, m->info.cluster, v->attribute.id, raw, value_size_of(v->attribute.data));
       }
       break;
