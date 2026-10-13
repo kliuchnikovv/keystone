@@ -382,3 +382,64 @@ TEST_CASE("load rejects corrupt buffers and leaves the rules untouched") {
   CHECK(b.load(buf, n));
   CHECK(b.rule_count() == 1);
 }
+
+TEST_CASE("the fire hook is told which rule acts, before its action goes out") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  declare_one(reg, 0x01, 0x0010, DeviceType::Occupancy, 0x50, ValueType::Bool);
+  declare_one(reg, 0x01, 0x0020, DeviceType::Light, 0x01, ValueType::Bool);
+
+  core::StateMachine<Registry> sm(brain, reg);
+  Dispatcher disp(brain, reg);
+  Clock clock;
+  Rules rules(disp, &Clock::now, &clock);
+  Rule never{};  // slot 0: another trigger, must stay silent
+  never.trigger_entity = 0x0099;
+  never.trigger_attr = 0x01;
+  never.action_entity = 0x0020;
+  never.action_attr = 0x01;
+  never.action_value = Value::make_bool(false);
+  REQUIRE(rules.add_rule(never));
+  Rule r{};
+  r.trigger_entity = 0x0010;
+  r.trigger_attr = 0x50;
+  r.match = &truthy;
+  r.action_entity = 0x0020;
+  r.action_attr = 0x01;
+  r.action_value = Value::make_bool(true);
+  REQUIRE(rules.add_rule(r));
+  sm.on_change(&Rules::on_state_change, &rules);
+
+  LightChip light{&chip};
+  chip.subscribe(&LightChip::on, &light);
+
+  struct Seen {
+    int fired = 0;
+    std::size_t slot = 99;
+    std::uint16_t target = 0;
+    int commands_at_fire = -1;
+    LightChip* light = nullptr;
+  } seen;
+  seen.light = &light;
+  rules.set_fire_hook(
+      [](void* ctx, std::size_t slot, const Rule& rule) {
+        auto* s = static_cast<Seen*>(ctx);
+        ++s->fired;
+        s->slot = slot;
+        s->target = rule.action_entity;
+        s->commands_at_fire = s->light->commands;
+      },
+      &seen);
+
+  publish_state(chip, 0x0010, 0x50, Value::make_bool(false));  // predicate false: no fire
+  CHECK(seen.fired == 0);
+  publish_state(chip, 0x0010, 0x50, Value::make_bool(true));
+  CHECK(seen.fired == 1);
+  CHECK(seen.slot == 1);
+  CHECK(seen.target == 0x0020);
+  CHECK(seen.commands_at_fire == 0);  // told first
+  CHECK(light.commands == 1);
+}

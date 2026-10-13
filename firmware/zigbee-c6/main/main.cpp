@@ -765,7 +765,14 @@ void read_device_state(ZbEntity& e, bool color_caps);
 // context, so we don't need to acquire it explicitly).
 void refresh_states_cb(std::uint8_t /*unused*/) {
   for (auto& e : g_ent) {
-    if (e.in_use) read_device_state(e, false);
+    if (!e.in_use) continue;
+    // The brain has just (re)declared us and knows no values. Unchanged values are normally not
+    // sent again, so say what we last heard first (a sleepy sensor may not answer a read at all),
+    // then ask for fresh ones.
+    for (auto& c : e.cache) {
+      if (c.valid) publish_attr(e, c.attr, c.v, true);
+    }
+    read_device_state(e, false);
   }
 }
 

@@ -207,6 +207,43 @@ export interface WifiNetwork {
   secure: boolean;
 }
 
+/** What kinds of things the hub records (`history`). A newer hub may send a kind this app does not know. */
+export type HistoryKind =
+  | 'boot' // the hub (re)started: `what` = why
+  | 'state' // an attribute changed
+  | 'command' // the hub sent a command
+  | 'command_failed' // …and it was not carried out: `what` = ack status
+  | 'rule' // a rule fired: `ref` = its slot
+  | 'schedule'
+  | 'timer'
+  | 'scene' // a scene was applied: `what` = via, `ref` = id, `scene` = name (if it still exists)
+  | 'chip' // a co-processor changed health: `what`, `ref` = chip id, `value` = seconds or reboot count
+  | 'reconcile' // desired state vs reality: `what` = corrected | adopted
+  | 'pairing'; // `what` = opened | unpair | identify
+
+/** One recorded event, as it arrives: `age` is seconds before the reply. */
+export interface HistoryEvent {
+  seq: number;
+  age: number;
+  kind: HistoryKind | string;
+  what?: string;
+  entity?: number;
+  attr?: number;
+  ref?: number;
+  value?: Value;
+  scene?: string;
+}
+
+/** A page of the hub's event ring, newest first. `now` is the hub's wall clock (0 = not synced). */
+export interface HistoryPage {
+  now: number;
+  latest: number;
+  oldest: number;
+  /** Events older than the last one here exist (for the same device filter). */
+  more: boolean;
+  events: HistoryEvent[];
+}
+
 export interface HubEvent {
   type: 'hub';
   hub: HubInfo;

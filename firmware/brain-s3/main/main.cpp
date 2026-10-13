@@ -53,6 +53,7 @@
 #include "esp_console.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 
 #include "esp_uart_link.hpp"
 #include "core/uart_transport.hpp"
@@ -77,6 +78,7 @@
 #include "core/app_protocol.hpp"
 #include "core/zcl_profile.hpp"
 #include "core/app_requests.hpp"
+#include "core/event_log.hpp"
 #include "ota_job.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
@@ -396,9 +398,58 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // Background events are noisy, so they're at DEBUG level by default (off).
 // Toggle with the `log` console command. Command results and one-shot events
 // (a chip declared, a chip lost) stay at INFO so they aren't drowned out.
+// ---- Event history (core/event_log.hpp) ------------------------------------------------
+// One producer path for "what happened": everything that used to be only a log line also builds an
+// Event here. The ring answers the app's `history` and the console's `events`; another sink (a flash
+// file, the SD recorder) would join the fanout. Producers run in the UART RX tasks and the main loop,
+// readers in the main loop and the console task, hence the mutex.
+core::EventRing<256> g_ev_ring;
+core::EventFanout<4> g_ev_out;
+SemaphoreHandle_t g_ev_mu = nullptr;
+
+void ev_emit(core::Event e) {
+  if (g_ev_mu == nullptr) return;
+  e.t_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
+  xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+  g_ev_out.emit(e);
+  xSemaphoreGive(g_ev_mu);
+}
+
+void ev_attr(core::EventKind kind, std::uint16_t entity, std::uint8_t attr, const hubproto::Value* v,
+             std::uint8_t code = 0, std::uint16_t ref = 0) {
+  core::Event e;
+  e.kind = kind;
+  e.entity = entity;
+  e.attr = attr;
+  e.code = code;
+  e.ref = ref;
+  if (v != nullptr) {
+    e.has_value = true;
+    e.value = *v;
+  }
+  ev_emit(e);
+}
+
+void ev_plain(core::EventKind kind, std::uint8_t code, std::uint16_t ref, std::uint16_t entity = 0) {
+  core::Event e;
+  e.kind = kind;
+  e.code = code;
+  e.ref = ref;
+  e.entity = entity;
+  ev_emit(e);
+}
+
+core::SceneVia scene_via(const char* kind) {
+  if (std::strcmp(kind, "rule") == 0) return core::SceneVia::Rule;
+  if (std::strcmp(kind, "schedule") == 0) return core::SceneVia::Schedule;
+  if (std::strcmp(kind, "timer") == 0) return core::SceneVia::Timer;
+  return std::strcmp(kind, "app") == 0 ? core::SceneVia::App : core::SceneVia::Console;
+}
+
 void on_state_change(void* /*ctx*/, std::uint16_t entity_id, std::uint8_t attr_id,
                      const hubproto::Value& v) {
   app_on_state(nullptr, entity_id, attr_id, v);
+  if (core::state_is_historic(entity_id, attr_id, v)) ev_attr(core::EventKind::State, entity_id, attr_id, &v);
   ESP_LOGD(kTag, "STATE entity=0x%04x attr=0x%02x value=%u",
            static_cast<unsigned>(entity_id), static_cast<unsigned>(attr_id),
            static_cast<unsigned>(v.raw[0]));
@@ -421,6 +472,16 @@ const char* chip_label(std::uint8_t id) {
 
 void on_chip_event(void* /*ctx*/, std::uint8_t chip, core::ChipMonitor::Event ev,
                    std::uint32_t value) {
+  {
+    // Seconds of silence for Lost/Resumed, the reboot count for Rebooted/Flapping.
+    const bool secs = ev == core::ChipMonitor::Event::Lost || ev == core::ChipMonitor::Event::Resumed;
+    const hubproto::Value arg = hubproto::Value::make_u32(secs ? value / 1000 : value);
+    const core::ChipEv code = ev == core::ChipMonitor::Event::Lost       ? core::ChipEv::Lost
+                              : ev == core::ChipMonitor::Event::Resumed  ? core::ChipEv::Resumed
+                              : ev == core::ChipMonitor::Event::Rebooted ? core::ChipEv::Rebooted
+                                                                         : core::ChipEv::Flapping;
+    ev_attr(core::EventKind::Chip, 0, 0, &arg, static_cast<std::uint8_t>(code), chip);
+  }
   switch (ev) {
     case core::ChipMonitor::Event::Lost:
       ESP_LOGW(kTag, "chip 0x%02x (%s) LOST: silent for %lu s — commands to it fail fast",
@@ -459,6 +520,9 @@ void on_cmd_result(void* /*ctx*/, std::uint16_t seq, std::uint16_t entity_id,
   ESP_LOGI(kTag, "COMMAND result seq=%u entity=0x%04x attr=0x%02x status=%d",
            static_cast<unsigned>(seq), static_cast<unsigned>(entity_id),
            static_cast<unsigned>(attr_id), static_cast<int>(status));
+  if (status != hubproto::CmdAckStatus::Ok) {
+    ev_attr(core::EventKind::CmdFailed, entity_id, attr_id, nullptr, static_cast<std::uint8_t>(status));
+  }
   app_on_cmd_result(seq, status);
 }
 
@@ -473,6 +537,7 @@ SemaphoreHandle_t g_rec_mu = nullptr;
 
 void rec_note_command(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr,
                       const hubproto::Value& v) {
+  ev_attr(core::EventKind::Command, entity, attr, &v);
   xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
   g_rec->note_command(entity, attr, v);
   xSemaphoreGiveRecursive(g_rec_mu);
@@ -492,6 +557,9 @@ void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
   fmt_value(a, sizeof(a), actual.type, actual);
   fmt_value(d, sizeof(d), desired.type, desired);
   const char* an = attr_name(attr);
+  ev_attr(core::EventKind::Reconcile, entity, attr, &actual,
+          static_cast<std::uint8_t>(kind == Reconciler::Kind::Corrected ? core::ReconcileEv::Corrected
+                                                                         : core::ReconcileEv::Adopted));
   if (kind == Reconciler::Kind::Corrected) {
     ESP_LOGW(kTag, "reconcile: 0x%04x %s is %s but the hub last set %s -> corrective COMMAND sent",
              static_cast<unsigned>(entity), an ? an : "attr", a, d);
@@ -917,6 +985,10 @@ void wifi_service(std::uint32_t now) {
 // Rules fire in the UART task, so they only queue the scene id (g_scene_q) and the main loop applies it.
 Scenes* g_scenes = nullptr;
 QueueHandle_t g_scene_q = nullptr;
+
+void rule_fire_hook(void* /*ctx*/, std::size_t slot, const core::Rule& r) {
+  ev_attr(core::EventKind::Rule, r.action_entity, r.action_attr, &r.action_value, 0, static_cast<std::uint16_t>(slot));
+}
 
 bool rule_action_hook(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& /*v*/,
                       std::uint32_t /*now*/) {
@@ -1426,6 +1498,7 @@ void run_scene(Dispatcher& disp, Registry& reg, std::uint8_t scene_id, std::uint
                                             std::uint16_t seq = 0;
                                             return disp.send(e, a, v, now, seq);
                                           });
+  ev_plain(core::EventKind::Scene, static_cast<std::uint8_t>(scene_via(kind)), scene_id);
   ESP_LOGI(kTag, "%s applied scene %s: %u sent, %u skipped", kind, sc->name,
            static_cast<unsigned>(res.sent), static_cast<unsigned>(res.skipped));
 }
@@ -1433,7 +1506,9 @@ void run_scene(Dispatcher& disp, Registry& reg, std::uint8_t scene_id, std::uint
 void run_action(Dispatcher& disp, Registry& reg, std::uint32_t now, const char* kind,
                 std::size_t slot, std::uint16_t entity_id, std::uint8_t attr_id,
                 const hubproto::Value& val) {
+  const core::EventKind trigger = std::strcmp(kind, "timer") == 0 ? core::EventKind::Timer : core::EventKind::Schedule;
   if (entity_id == core::kSceneTarget) {
+    ev_attr(trigger, entity_id, attr_id, nullptr, 0, static_cast<std::uint16_t>(slot));
     run_scene(disp, reg, attr_id, now, kind);
     return;
   }
@@ -1447,6 +1522,7 @@ void run_action(Dispatcher& disp, Registry& reg, std::uint32_t now, const char* 
     }
     v = hubproto::Value::make_bool(!cur.as_bool());
   }
+  ev_attr(trigger, entity_id, attr_id, &v, 0, static_cast<std::uint16_t>(slot));
   std::uint16_t seq = 0;
   disp.send(entity_id, attr_id, v, now, seq);
   ESP_LOGI(kTag, "%s #%u fired: entity 0x%04x attr 0x%02x (seq=%u)", kind,
@@ -1560,6 +1636,55 @@ int cmd_at(int argc, char** argv) {
 // Free internal heap right now, the lowest it has been since boot, and the largest
 // contiguous block (what a single big allocation can still get). Safe to call from
 // the console task: the heap API is thread-safe.
+// events [<n>] - the newest events of the history ring (what `history` gives the app), newest first.
+int cmd_events(int argc, char** argv) {
+  std::size_t want = 20;
+  if (argc >= 2) {
+    char* end = nullptr;
+    const long v = std::strtol(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0' || v < 1 || v > 256) {
+      printf("usage: events [<1..256>]\n");
+      return 1;
+    }
+    want = static_cast<std::size_t>(v);
+  }
+  static core::Event page[24];
+  std::uint32_t before = 0, latest = 0, oldest = 0;
+  const std::uint32_t now_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
+  std::size_t shown = 0;
+  while (shown < want) {
+    xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+    const std::size_t n = g_ev_ring.read(before, want - shown < 24 ? want - shown : 24, page);
+    latest = g_ev_ring.latest();
+    oldest = g_ev_ring.oldest();
+    xSemaphoreGive(g_ev_mu);
+    if (n == 0) break;
+    for (std::size_t i = 0; i < n; ++i) {
+      const core::Event& e = page[i];
+      char val[24] = "";
+      if (e.has_value) fmt_value(val, sizeof(val), e.value.type, e.value);
+      const char* what = core::app::event_what(e);
+      const char* an = e.attr != 0 ? attr_name(e.attr) : nullptr;
+      printf("#%-4u -%-6us %-14s", static_cast<unsigned>(e.seq), static_cast<unsigned>(now_s - e.t_s),
+             core::app::event_kind_name(e.kind));
+      if (what != nullptr) printf(" %s", what);
+      if (e.entity != 0 && e.entity != core::kSceneTarget) printf(" 0x%04x", static_cast<unsigned>(e.entity));
+      if (an != nullptr && e.entity != core::kSceneTarget) printf(" %s", an);
+      if (e.has_value) printf(" = %s", val);
+      if (e.kind == core::EventKind::Rule || e.kind == core::EventKind::Schedule || e.kind == core::EventKind::Timer ||
+          e.kind == core::EventKind::Scene || e.kind == core::EventKind::Chip) {
+        printf(" (#%u)", static_cast<unsigned>(e.ref));
+      }
+      printf("\n");
+    }
+    shown += n;
+    before = page[n - 1].seq;
+  }
+  printf("%u event(s) shown; ring holds #%u..#%u\n", static_cast<unsigned>(shown), static_cast<unsigned>(oldest),
+         static_cast<unsigned>(latest));
+  return 0;
+}
+
 int cmd_heap(int /*argc*/, char** /*argv*/) {
   printf("heap: free %u B, lowest since boot %u B, largest block %u B\n",
          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
@@ -2151,6 +2276,7 @@ void start_console() {
   reg_cmd("at", "at [<YYYY-MM-DD>] <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - local-time action, recurring or once on a date", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
   reg_cmd("inject", "dev: pretend a device of a type exists (Matter chip only); inject <kind>|set|clear", &cmd_inject);
+  reg_cmd("events", "events [<n>] - the newest hub events (what the app's history shows), newest first", &cmd_events);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
@@ -2518,6 +2644,13 @@ void note_unpair(std::uint16_t entity, std::uint32_t now) {
 // u16 value its argument. Mirrored in zigbee-c6 handle_meta.
 void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::uint16_t arg) {
   if (attr == core::app::kMetaUnpair) note_unpair(arg, now_ms(nullptr));
+  if (attr == core::app::kMetaPair) {
+    ev_plain(core::EventKind::Pairing, static_cast<std::uint8_t>(core::PairingEv::Opened), arg);
+  } else {
+    ev_plain(core::EventKind::Pairing,
+             static_cast<std::uint8_t>(attr == core::app::kMetaUnpair ? core::PairingEv::Unpair : core::PairingEv::Identify),
+             0, arg);
+  }
   const std::uint8_t payload[5] = {0, 0, attr, static_cast<std::uint8_t>(arg & 0xFF),
                                    static_cast<std::uint8_t>((arg >> 8) & 0xFF)};
   hubproto::Header h{};
@@ -2638,6 +2771,37 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     } else {
       o = Outcome::fail(Err::Internal, "scan failed");
     }
+  } else if (!std::strcmp(op, "history")) {
+    // Newest-first page of the event ring (core/event_log.hpp). Main loop only, so the buffers can be static.
+    core::app::HistoryQuery q;
+    o = core::app::history_parse(reader, m.args, q);
+    if (o.ok) {
+      static char hb[core::app::kMaxFrame];
+      static core::Event page[core::app::kHistoryPage + 1];
+      std::size_t n = 0;
+      std::uint32_t oldest = 0, latest = 0;
+      xSemaphoreTake(g_ev_mu, portMAX_DELAY);
+      n = g_ev_ring.read(q.before, q.limit + 1, page, q.entity_only, q.entity);  // one more than asked: is there more?
+      oldest = g_ev_ring.oldest();
+      latest = g_ev_ring.latest();
+      xSemaphoreGive(g_ev_mu);
+      const bool more = n > q.limit;
+      if (more) n = q.limit;
+      core::JsonWriter hw(hb, sizeof(hb));
+      encode_res_history(hw, in.id, s_time_synced ? static_cast<std::int64_t>(time(nullptr)) : 0,
+                         static_cast<std::uint32_t>(esp_timer_get_time() / 1000000), page, n, oldest, latest, more,
+                         [](void* sc, std::uint8_t id) -> const char* {
+                           const auto* found = static_cast<Scenes*>(sc)->find_by_id(id);
+                           return found != nullptr ? found->name : nullptr;
+                         },
+                         &scenes);
+      if (hw.ok()) {
+        appsrv::send(in.fd, hb, hw.size());
+        ESP_LOGI(kTag, "app: req history -> %u event(s)", static_cast<unsigned>(n));
+        return;
+      }
+      o = Outcome::fail(Err::Internal, "history too large");
+    }
   } else if (!std::strcmp(op, "location.set")) {
     double lat = 0, lon = 0;
     o = location_parse(reader, m.args, lat, lon);
@@ -2667,6 +2831,13 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
       std::uint16_t seq = 0;
       return disp.send(e, a, v, now, seq);
     });
+    if (o.ok) {
+      // The name was resolved inside scene_apply; read it again for the history.
+      char sname[24] = {};
+      if (reader.get_string(reader.find(m.args, "name"), sname, sizeof(sname))) {
+        if (const auto* sc = scenes.find(sname)) ev_plain(core::EventKind::Scene, static_cast<std::uint8_t>(core::SceneVia::App), sc->id);
+      }
+    }
   } else if (!std::strcmp(op, "pair") || !std::strcmp(op, "unpair") || !std::strcmp(op, "identify")) {
     // Zigbee chip operations, fire-and-forget like the console: the result is seen as an entity
     // appearing (pair), going away (unpair) or a device blinking (identify).
@@ -2988,6 +3159,23 @@ extern "C" void app_main(void) {
   // Инициализация Wi-Fi
   wifi_init();
 
+  // Event history first: everything below may emit.
+  g_ev_mu = xSemaphoreCreateMutex();
+  g_ev_out.add(&g_ev_ring);
+  {
+    core::app::ResetWhy why = core::app::ResetWhy::Other;
+    switch (esp_reset_reason()) {
+      case ESP_RST_POWERON: why = core::app::ResetWhy::PowerOn; break;
+      case ESP_RST_SW: case ESP_RST_EXT: why = core::app::ResetWhy::Software; break;
+      case ESP_RST_PANIC: why = core::app::ResetWhy::Panic; break;
+      case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: why = core::app::ResetWhy::Watchdog; break;
+      case ESP_RST_BROWNOUT: why = core::app::ResetWhy::Brownout; break;
+      case ESP_RST_UNKNOWN: why = core::app::ResetWhy::Unknown; break;
+      default: break;
+    }
+    ev_plain(core::EventKind::Boot, static_cast<std::uint8_t>(why), 0);
+  }
+
   // Zigbee link (UART1).
   static fw::EspUartLink link_zb([] {
     fw::EspUartLink::Config c;
@@ -3087,6 +3275,7 @@ extern "C" void app_main(void) {
   g_scenes = &scene_store;
   g_scene_q = xQueueCreate(8, sizeof(std::uint8_t));
   rules.set_action_hook(&rule_action_hook, nullptr);
+  rules.set_fire_hook(&rule_fire_hook, nullptr);
   rules.set_sun(&sun_cb, nullptr);
   restore_location();
 
@@ -3887,6 +4076,9 @@ extern "C" void app_main(void) {
                   std::uint16_t seq = 0;
                   return disp.send(e, a, v, now_ms(nullptr), seq);
                 });
+            if (res.found) {
+              if (const auto* sc = scene_store.find(argv[1])) ev_plain(core::EventKind::Scene, static_cast<std::uint8_t>(core::SceneVia::Console), sc->id);
+            }
             if (!res.found) say("%s: no such scene\n", argv[1]);
             else say("scene %s: %u sent, %u skipped\n", argv[1], static_cast<unsigned>(res.sent), static_cast<unsigned>(res.skipped));
           } else {

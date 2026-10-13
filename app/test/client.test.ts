@@ -687,3 +687,110 @@ describe('reconnecting', () => {
     expect(hub.clientCount).toBe(0);
   });
 });
+
+describe('history', () => {
+  type Page = { now: number; latest: number; oldest: number; more: boolean; events: { seq: number; age: number; kind: string; what?: string; entity?: number; attr?: number; value?: unknown }[] };
+  const hist = async (c: HubClient, args?: Record<string, unknown>) => (await c.req('history', args)) as unknown as Page;
+
+  it('starts with the hub starting, then records commands and the changes they cause, newest first', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    let p = await hist(c);
+    expect(p.events.map((e) => e.kind)).toEqual(['boot']);
+    expect(p.events[0]).toMatchObject({ seq: 1, what: 'power_on' });
+    expect(p.now).toBeGreaterThan(1_700_000_000);
+
+    await c.cmd(0x0101, 0x01, true); // lamp on
+    p = await hist(c);
+    expect(p.events.map((e) => e.kind)).toEqual(['state', 'command', 'boot']);
+    expect(p.events[0]).toMatchObject({ entity: 0x0101, attr: 1, value: true });
+    expect(p.events[1]).toMatchObject({ entity: 0x0101, attr: 1, value: true });
+    expect(p.latest).toBe(3);
+    expect(p.oldest).toBe(1);
+  });
+
+  it('a device changing by itself is recorded, the noisy measurements are not', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    hub.setValue(0x0102, 0x50, true); // motion
+    hub.setValue(0x0100, 0x13, 77); // power
+    hub.setValue(0x0100, 0x14, 9); // energy
+    const p = await hist(c);
+    expect(p.events.map((e) => e.kind)).toEqual(['state', 'boot']);
+    expect(p.events[0]).toMatchObject({ entity: 0x0102, attr: 0x50, value: true });
+  });
+
+  it('a command that fails is recorded as failed, with why', async () => {
+    hub.forceAck = 'unreachable';
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.cmd(0x0101, 0x01, true);
+    const p = await hist(c);
+    expect(p.events.map((e) => e.kind)).toEqual(['command_failed', 'command', 'boot']);
+    expect(p.events[0]).toMatchObject({ what: 'unreachable', entity: 0x0101 });
+  });
+
+  it('chips going quiet and coming back, and timers that ran, are in it', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    hub.setChipStatus(1, 'silent');
+    hub.setChipStatus(1, 'ready');
+    const t = await c.req('timer.add', { entity: 0x0100, action: 'off', delay_s: 1 });
+    expect(t.index).toBe(0);
+    await until(() => hub.timersCount() === 0, 'timer fired', 3000);
+    const p = await hist(c);
+    expect(p.events.map((e) => `${e.kind}${e.what ? ':' + e.what : ''}`)).toEqual(['state', 'timer', 'chip:resumed', 'chip:lost', 'boot:power_on']);
+  });
+
+  it('pages back with `before`, and `limit` caps a page', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    for (let i = 0; i < 6; i++) hub.setValue(0x0102, 0x50, i % 2 === 0);
+    const first = await hist(c, { limit: 4 });
+    expect(first.events.map((e) => e.seq)).toEqual([7, 6, 5, 4]);
+    expect(first.more).toBe(true);
+    const second = await hist(c, { limit: 4, before: 4 });
+    expect(second.events.map((e) => e.seq)).toEqual([3, 2, 1]);
+    expect(second.more).toBe(false);
+    expect((await hist(c, { limit: 3, before: 4 })).more).toBe(false); // exactly the rest: nothing beyond
+    expect((await hist(c, { before: 1 })).events).toEqual([]);
+  });
+
+  it('only one device: its changes and commands, not the others', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    await c.cmd(0x0101, 0x01, true);
+    hub.setValue(0x0102, 0x50, true);
+    hub.setChipStatus(1, 'silent');
+    const p = await hist(c, { entity: 0x0101 });
+    expect(p.events.map((e) => e.kind)).toEqual(['state', 'command']);
+    expect(p.more).toBe(false); // the ring has older events, but none about this device
+    expect((await hist(c, { entity: 0x0777 })).events).toEqual([]);
+  });
+
+  it('refuses arguments the hub would refuse', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    for (const bad of [{ limit: 0 }, { limit: 25 }, { limit: '5' }, { before: -1 }, { entity: 70000 }, { entity: 'x' }]) {
+      await expect(c.req('history', bad)).rejects.toMatchObject({ code: 'bad_args' });
+    }
+  });
+
+  it('holds the last 256 events; older ones are overwritten and `oldest` moves', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    for (let i = 0; i < 300; i++) hub.setValue(0x0102, 0x50, i % 2 === 0);
+    const p = await hist(c);
+    expect(p.latest).toBe(301);
+    expect(p.oldest).toBe(46);
+    expect(p.events).toHaveLength(24);
+  });
+});

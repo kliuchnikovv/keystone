@@ -275,7 +275,7 @@ hub, and we can add the flasher any time.
 > a pinned self-signed certificate — not a PWA served from the brain. See
 > [app-protocol.md](app-protocol.md) and [../app/README.md](../app/README.md). Done: local API
 > with auth, mDNS discovery, entity list/toggle/live values, rule/schedule/timer/scene editor,
-> hub health, pairing. Not done: remote access, push notifications, event history, Wi-Fi
+> hub health, pairing, event history. Not done: remote access, push notifications, Wi-Fi
 > provisioning, and the phone build of the native pinning module (never run on a device). The
 > text below is the original option analysis, kept for the parts still open.
 

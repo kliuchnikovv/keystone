@@ -541,6 +541,60 @@ if (process.argv.includes('--mutate')) {
       ];
       return bad.every((x) => x === 'bad_args') ? true : bad.join(',');
     });
+    // History: what the hub records. The device is switched twice (and put back), so there is something to find.
+    await check('history: a command and the change it causes are recorded, newest first, with consistent bounds', async () => {
+      const onoff = () => c.getSnapshot().entities.find((e) => e.id === ent)?.attrs.find((a) => a.id === 0x01)?.value;
+      const v0 = onoff();
+      if (typeof v0 !== 'boolean') return 'no on_off value';
+      await c.cmd(ent, 0x01, !v0);
+      await waitFor(() => onoff() === !v0);
+      await c.cmd(ent, 0x01, v0);
+      await waitFor(() => onoff() === v0);
+      await sleep(300);
+      const res = (await c.req('history')) as { now: number; latest: number; oldest: number; events: { seq: number; age: number; kind: string; entity?: number; attr?: number; value?: unknown }[] };
+      const ev = res.events;
+      if (!Array.isArray(ev) || ev.length < 4) return `expected at least 4 events, got ${ev?.length}`;
+      if (ev.some((e, i) => i > 0 && e.seq >= ev[i - 1]!.seq)) return 'not newest first';
+      if (ev.some((e, i) => i > 0 && e.age < ev[i - 1]!.age)) return 'ages do not grow going back';
+      if (res.latest !== ev[0]!.seq) return `latest ${res.latest} is not the newest event ${ev[0]!.seq}`;
+      if (res.oldest > res.latest || res.oldest < 1) return `bad bounds ${res.oldest}..${res.latest}`;
+      if (ev.length > 24) return `a page of ${ev.length}`;
+      // Newest first, so: the change back, the command back, … the change away, the command away. Other things
+      // may happen in between (a report that arrives late, someone at the wall), so look for the order, not for
+      // exactly four events.
+      const mine = ev.filter((e) => e.entity === ent && e.attr === 0x01).map((e) => `${e.kind}:${e.value}`);
+      const at = (what: string, from = 0) => mine.indexOf(what, from);
+      const cmdBack = at(`command:${v0}`);
+      const cmdAway = cmdBack < 0 ? -1 : at(`command:${!v0}`, cmdBack + 1);
+      if (cmdBack < 0 || cmdAway < 0) return `the two commands are not both there: ${mine.join(' ')}`;
+      const changeBack = mine.slice(0, cmdBack).includes(`state:${v0}`);
+      const changeAway = mine.slice(cmdBack + 1, cmdAway).includes(`state:${!v0}`);
+      return changeBack && changeAway ? true : `commands without their changes: ${mine.join(' ')}`;
+    });
+    await check('history: paging with `before`, a device filter, and argument validation', async () => {
+      const all = (await c.req('history')) as { latest: number; oldest: number; events: { seq: number; entity?: number }[] };
+      const first = (await c.req('history', { limit: 2 })) as typeof all;
+      if (first.events.length !== 2 || first.events[0]!.seq !== all.events[0]!.seq) return 'limit 2 did not give the newest two';
+      const next = (await c.req('history', { limit: 2, before: first.events[1]!.seq })) as typeof all;
+      if (next.events.length > 0 && next.events[0]!.seq !== first.events[1]!.seq - 1) return `page two starts at ${next.events[0]?.seq}, not just below ${first.events[1]!.seq}`;
+      if (((await c.req('history', { before: all.oldest })) as typeof all).events.length !== 0) return 'something older than the oldest';
+      if ((first as { more?: boolean }).more !== true) return 'limit 2 of a longer history did not say more';
+      const mineOnly = (await c.req('history', { entity: ent })) as typeof all & { more?: boolean };
+      const past = (await c.req('history', { entity: ent, before: mineOnly.events[mineOnly.events.length - 1]!.seq })) as typeof all & { more?: boolean };
+      if (past.more !== false) return 'a device filter past its last event still said more';
+      const mine = (await c.req('history', { entity: ent })) as typeof all;
+      if (mine.events.length === 0 || mine.events.some((e) => e.entity !== ent)) return 'the device filter let something else through';
+      const none = (await c.req('history', { entity: 0xfff0 })) as typeof all;
+      if (none.events.length !== 0) return 'events for a device that does not exist';
+      const bad = [
+        await code(c.req('history', { limit: 0 })),
+        await code(c.req('history', { limit: 25 })),
+        await code(c.req('history', { before: -1 })),
+        await code(c.req('history', { entity: 70000 })),
+        await code(c.req('history', { entity: 'x' })),
+      ];
+      return bad.every((x) => x === 'bad_args') ? true : bad.join(',');
+    });
     await check('everything the tests created is gone again', async () => {
       const ok = await waitFor(() => {
         const s = c.getSnapshot();

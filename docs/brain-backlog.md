@@ -121,16 +121,25 @@ We started this with `chips`. To finish:
   EN via a MOSFET) before the soldered rev freezes, so the brain can
   hard-reset a wedged co-processor.
 
-## 7. Recorder / event log (Phase 7 groundwork)
+## 7. Event history (and the recorder, Phase 7)
 
-We already know Phase 7 puts a passive listener on the CAM writing STATE
-history to SD. Brain-side hooks that make that easy:
+✅ **Structured events — done** (`core/event_log.hpp`, [app-protocol.md §5.1](app-protocol.md)). Every producer
+(state machine, dispatcher, rules, schedules, timers, scenes, chip monitor, reconciler, pairing, boot) builds a typed
+`Event` and hands it to an `EventSink`; the sink today is a 256-event RAM ring, served to the app as `history` and
+printed by the console's `events [n]`. The `boot` event is the gap marker (the reset reason is in it), `chip` events
+mark a co-processor going silent or restarting. Producers do not know about sinks, so more can be added to the fanout.
 
-- **Structured event emission** — instead of `ESP_LOGI` prose, emit
-  typed events (`type=STATE, entity=..., value=..., ts=...`) on an
-  internal channel that the recorder subscribes to (and the console can
-  optionally render).
-- **Gap markers** on reboot — see recovery item in `../backlog.md`.
+The ESP32-CAM recorder is **not required** for any of this: it is one more possible sink, nothing more. SPEC Phase 7
+asks for "a simple event log on SD"; a sink on the brain's own flash (a rotating file in a small LittleFS partition)
+or on an SD card on the brain would do as well, without a second board. Still open:
+
+- **A persistent sink** — the ring is empty after a reboot. Decide where (flash wear: batch writes, e.g. once a
+  minute and on `boot`/`panic`; or the CAM over the bus, or an SD card) and whether the app should read it with the same `history`.
+- **Live push** instead of polling (a `{"type":"events","latest":n}` nudge would be enough).
+- **Rule/schedule/timer names** in events: they carry the slot number, which is reused, so "Rule 2 ran" can name a
+  different rule later; the action it took is in the event, which is what people read.
+- **Why a command was sent**: the cause is the event just before it (a rule, a schedule, the app does not leave one
+  yet — an app command shows as a bare `command`). Tagging `command` events with their source would close that.
 
 ## 8. Human-facing surface (beyond console)
 
@@ -169,8 +178,8 @@ persistent rules + `rule` console command, chip health watchdog, `self` entities
 that apply them), the app protocol + client ([app-protocol.md](app-protocol.md)): wss + token + pinning, mDNS,
 management requests, pair/unpair/identify.
 
-1. **Structured event stream** — precondition for the recorder (Phase 7).
-2. **First-time Wi-Fi setup without a console** — SoftAP/BLE (§3).
+1. ✅ **Structured event stream** — done (§7); a persistent sink and the recorder are open.
+2. **First-time Wi-Fi setup without a console** — SoftAP/BLE (§3): done on the hub, not verified over the air.
 3. **Phone build** of the app's native module (not verified on a device) — see app-protocol §10.
 
 Related backlogs: [Zigbee](zigbee-backlog.md), [Matter](matter-backlog.md).

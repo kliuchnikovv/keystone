@@ -402,13 +402,16 @@ debug one new thing at a time.
   Zigbee device; write the Zigbee-attribute → DECLARE/STATE translator using the
   capability model. Fake entities from Phase 3 are now real.
 - **Phase 7 — Recorder.** CAM passively logs STATE events to SD with timestamps;
-  also logs `boot_id` changes and any detected gaps as history annotations.
+  also logs `boot_id` changes and any detected gaps as history annotations. The brain now emits typed
+  events through an `EventSink` (core/event_log.hpp) and keeps the last 256 in RAM for the app's History
+  tab; the CAM is one possible further sink, not a prerequisite (docs/brain-backlog.md §7).
 - **Phase 8 — Matter-over-WiFi bridge (outbound).** `esp-matter` on the brain:
   expose registry entities as Matter accessories, generated from the capability
   descriptors. Dev/test certificates only.
 
 MVP = Phases 0–6. Phase 8 exists as a Matter *bridge* on its own chip (thread-c6, esp-matter
-on the C6, not on the brain). Phase 7 (recorder) is not started.
+on the C6, not on the brain). Phase 7 (recorder): the event stream exists (RAM ring, app History tab); the SD
+sink on the CAM is not started.
 
 - **Phase 9 — App protocol and client (added later).** WebSocket+JSON over TLS with a
   token and a pinned certificate, mDNS discovery, snapshot + live events, commands and

@@ -177,6 +177,7 @@ so they also update the desired state (reconciler).
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
+| `history` | all optional: `before` (a `seq`: only events strictly older), `limit` (1..24, default 24), `entity` (only events about this device, also one that has since been removed) | a newest-first page of the event history (§5.1): `result: {now, latest, oldest, more, events}` |
 
 Error codes: a missing or ill-typed argument is `bad_args` (the `message` names it);
 an entity or attribute that does not exist, or an index with nothing behind it, is
@@ -189,6 +190,49 @@ clients. Anything that changes who may control the hub is **not** available to a
 the token is set on the console, or by the first-time setup (§11) from a client that
 proved it knows the setup code; OTA is not available at all. (A normal client may change the
 Wi-Fi network, with the rollback described under `wifi.set`.)
+
+### 5.1 History
+
+The hub keeps what happened in a fixed ring in RAM (last 256 events, `core/event_log.hpp`; the brain's `events [n]`
+console command prints the same list). Every producer makes an `Event` and hands it to an `EventSink`; the ring is
+one sink, a flash file or the SD recorder (SPEC Phase 7) would be another, with no change to the producers.
+
+`history` is a request, not a stream: a client fetches the newest page when it opens the screen and polls every few
+seconds (the app does it every 4 s while the History tab is open), pages back with `before`, and filters with `entity`.
+The reply:
+
+```json
+{"type":"res","id":7,"ok":true,"result":{"now":1791885071,"latest":42,"oldest":3,"more":true,"events":[
+  {"seq":42,"age":3,"kind":"state","entity":256,"attr":1,"value":true},
+  {"seq":41,"age":3,"kind":"command","entity":256,"attr":1,"value":true}]}}
+```
+
+- `seq` counts up from 1 since the hub booted and is never reused; the ring holds `oldest..latest`. **A reboot starts
+  the numbers again** (the first event is then `boot`), so a client that sees `latest` go down starts over.
+- `age` is seconds before the reply; `now` is the hub's wall clock (0 = not synced). A client computes `now - age`, so
+  events from before the clock synced still get a right time.
+- `more` is true while events older than the last one returned exist **for the same filter**; page back with
+  `before = <seq of the last event>` until it is false.
+- A page is at most 24 events so that the worst case fits one frame (tested).
+
+| `kind` | what happened | fields besides `seq`, `age`, `kind` |
+|---|---|---|
+| `boot` | the hub (re)started — the gap marker | `what`: `power_on` `software` `panic` `watchdog` `brownout` `other` `unknown` |
+| `state` | a device's attribute changed (not the continuous measurements: power, energy, light level, chip telemetry; not a button's return to idle) | `entity`, `attr`, `value` |
+| `command` | the hub sent a command (from the app, a rule, a schedule, a scene, Matter, reconciliation) | `entity`, `attr`, `value` |
+| `command_failed` | …and it was not carried out | `entity`, `attr`, `what`: `fail` `unreachable` `unsupported` |
+| `rule` / `schedule` / `timer` | one fired, just before its commands | `ref` (its slot), `entity`, `attr`, `value`; for one that applies a scene no entity, but `scene` |
+| `scene` | a scene was applied | `ref` (its id), `scene` (its name, unless it was deleted since), `what`: `console` `app` `rule` `schedule` `timer` |
+| `chip` | a co-processor changed health | `ref` (chip id), `what`: `lost` `resumed` `rebooted` `flapping`, `value` (seconds silent, or the reboot count) |
+| `reconcile` | the hub found a device differing from what it last set (`corrected`: a corrective command follows) or changed outside the hub (`adopted`) | `entity`, `attr`, `value` (what the device has), `what` |
+| `pairing` | the Zigbee network | `what`: `opened` (`ref` = seconds), `unpair` / `identify` (`entity`) |
+
+The `command` → `state` order is the causal one: a command is recorded when it is sent, the change when the device's
+report arrives. A change with **no command, rule, schedule or timer before it** is the device changing by itself
+(someone at the wall, a power cut). A new `kind` may appear in a later hub; clients show it as it is.
+
+What this is not: long-term storage (it is RAM, a reboot empties it — the `boot` event says so), nor a log of every
+reading. For that, add a sink.
 
 ## 6. Rule / schedule objects
 
@@ -429,6 +473,12 @@ code).
 
 7. ✅ **First-time setup** (hub + app + tool): §11. Setup access point, setup-code sign-in, `setup.apply`,
    `SetupScreen`, `npm run setup-check`. Hub verified over the LAN; the access point and the phone are not.
+
+8. ✅ **History** (hub + app + tools): §5.1. Typed events from every producer into a RAM ring, the `history` request,
+   a History tab (newest first, grouped by day, tap a row to see one device, "load older"), the brain's `events`
+   console command. Verified on the brain: `hub-check --mutate` over wss 41/41 (2 history checks), the tab driven in a
+   browser against the real hub (a click on a switch shows as `Sent to …` then the change). The mock hub keeps the
+   same ring.
 
 Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

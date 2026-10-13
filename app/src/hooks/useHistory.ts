@@ -1,0 +1,85 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { describeError } from '../model/format';
+import { emptyHistory, mergeNewest, mergeOlder, parseHistoryPage, type HistoryList } from '../model/history';
+import type { HubClient } from '../protocol/client';
+import type { ConnectionStatus } from '../protocol/store';
+
+export interface History extends HistoryList {
+  /** The first page has arrived (an empty history is then really empty). */
+  loaded: boolean;
+  /** An older page is being fetched. */
+  loadingOlder: boolean;
+  error: string | null;
+  loadOlder(): Promise<void>;
+  refresh(): Promise<void>;
+}
+
+const POLL_MS = 4000;
+
+/**
+ * The hub's event history, newest first, optionally about one device. Fetches the newest page when the
+ * connection (re)opens and every few seconds while mounted, and older pages on demand. The hub restarts
+ * its sequence numbers when it reboots, so the list is dropped on every reconnect.
+ */
+export function useHistory(client: HubClient, status: ConnectionStatus, entity: number | null, pollMs: number = POLL_MS): History {
+  const [list, setList] = useState<HistoryList>(emptyHistory);
+  const [loaded, setLoaded] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listRef = useRef(list);
+  listRef.current = list;
+  const epoch = useRef(0); // bumped when what we are listing changes: a late answer for the old list is dropped
+  const ready = status === 'ready';
+
+  const args = useCallback((before?: number) => ({ ...(entity !== null ? { entity } : {}), ...(before ? { before } : {}) }), [entity]);
+
+  const refresh = useCallback(async () => {
+    if (!ready) return;
+    const mine = epoch.current;
+    try {
+      const page = parseHistoryPage(await client.req('history', args()));
+      if (mine !== epoch.current) return;
+      if (page === null) return setError('The hub sent a history this app does not understand');
+      setList((l) => mergeNewest(l, page, Date.now()));
+      setLoaded(true);
+      setError(null);
+    } catch (e) {
+      if (mine === epoch.current) setError(describeError(e));
+    }
+  }, [client, ready, args]);
+
+  const loadOlder = useCallback(async () => {
+    const last = listRef.current.events[listRef.current.events.length - 1];
+    if (!ready || !last) return;
+    const mine = epoch.current;
+    setLoadingOlder(true);
+    try {
+      const page = parseHistoryPage(await client.req('history', args(last.seq)));
+      if (mine !== epoch.current) return;
+      if (page !== null) setList((l) => mergeOlder(l, page, Date.now()));
+    } catch (e) {
+      if (mine === epoch.current) setError(describeError(e));
+    } finally {
+      if (mine === epoch.current) setLoadingOlder(false);
+    }
+  }, [client, ready, args]);
+
+  // A different device, or a new connection: start over.
+  useEffect(() => {
+    epoch.current += 1;
+    setList(emptyHistory);
+    setLoaded(false);
+    setLoadingOlder(false);
+    setError(null);
+  }, [entity, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    void refresh();
+    if (pollMs <= 0) return;
+    const t = setInterval(() => void refresh(), pollMs);
+    return () => clearInterval(t);
+  }, [ready, refresh, pollMs]);
+
+  return { ...list, loaded, loadingOlder, error, loadOlder, refresh };
+}

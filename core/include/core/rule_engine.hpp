@@ -142,6 +142,11 @@ class RuleEngine {
   void set_clock(MinuteFn fn, void* ctx) noexcept { clock_fn_ = fn; clock_ctx_ = ctx; }
   void set_sun(SunFn fn, void* ctx) noexcept { sun_fn_ = fn; sun_ctx_ = ctx; }
   void set_action_hook(ActionFn fn, void* ctx) noexcept { action_fn_ = fn; action_ctx_ = ctx; }
+
+  // Told that rule `slot` is about to act (every constraint passed, cool-down over), before its
+  // action is dispatched. For the event history; same context rules are evaluated in.
+  using FireFn = void (*)(void* ctx, std::size_t slot, const Rule& rule);
+  void set_fire_hook(FireFn fn, void* ctx) noexcept { fire_fn_ = fn; fire_ctx_ = ctx; }
   void set_state_reader(ReadFn fn, void* ctx) noexcept { read_fn_ = fn; read_ctx_ = ctx; }
 
   // Is `minute` inside the rule's time window? No window = always; window set but
@@ -321,6 +326,8 @@ class RuleEngine {
   void* sun_ctx_ = nullptr;
   ActionFn action_fn_ = nullptr;
   void* action_ctx_ = nullptr;
+  FireFn fire_fn_ = nullptr;
+  void* fire_ctx_ = nullptr;
   Rule rules_[MaxRules];
   bool fired_[MaxRules] = {};                // cool-down bookkeeping, not persisted
   std::uint32_t last_fire_ms_[MaxRules] = {};
@@ -371,6 +378,7 @@ void RuleEngine<Dispatcher, MaxRules>::evaluate(
             static_cast<std::uint32_t>(r.cooldown_s) * 1000u) {
       continue;
     }
+    if (fire_fn_ != nullptr) fire_fn_(fire_ctx_, static_cast<std::size_t>(i), r);
     std::uint16_t seq = 0;
     if (action_fn_ == nullptr || !action_fn_(action_ctx_, r.action_entity, r.action_attr, r.action_value, now)) {
       disp_.send(r.action_entity, r.action_attr, r.action_value, now, seq);

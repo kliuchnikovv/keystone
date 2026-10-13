@@ -14,6 +14,7 @@ import {
   type Days,
   type Entity,
   type ErrorCode,
+  type HistoryEvent,
   type HubInfo,
   type WifiNetwork,
   type Rule,
@@ -29,6 +30,8 @@ const MAX_RULES = 16;
 const MAX_SCHEDULES = 8;
 const MAX_TIMERS = 8;
 const AUTH_FAILURES_BEFORE_LOCKOUT = 5;
+const RING_SIZE = 256; // the real hub's event ring
+const HISTORY_PAGE = 24;
 
 export interface MockHubOptions {
   /** 0 = pick a free port. */
@@ -51,6 +54,9 @@ export interface MockHubOptions {
    */
   setupCode?: string | null;
 }
+
+/** An event as the mock keeps it: the wire event with an absolute time instead of an age. */
+type MockEvent = Omit<HistoryEvent, 'age'> & { at: number };
 
 interface TimerEntry {
   entity: number;
@@ -138,6 +144,8 @@ export class MockHub {
   schedules: Schedule[] = [];
   scenes: Scene[] = [];
   private timers: TimerEntry[] = [];
+  private events: MockEvent[] = [];
+  private eventSeq = 1;
   private clients = new Set<ClientInfo>();
   private failures = new Map<string, { count: number; until: number }>();
   private wss: WebSocketServer;
@@ -154,6 +162,7 @@ export class MockHub {
     this.wss = wss;
     this.opts = opts;
     this.token = opts.token;
+    this.record({ kind: 'boot', what: 'power_on' });
     wss.on('connection', (ws, req) => this.onConnection(ws, req.socket.remoteAddress ?? '?'));
     if (opts.heartbeatMs > 0) {
       this.heartbeat = setInterval(() => this.broadcast({ type: 'time', time: Math.floor(Date.now() / 1000), tz: 'UTC', synced: true }), opts.heartbeatMs);
@@ -241,17 +250,30 @@ export class MockHub {
 
   // ---- simulated device-side changes ------------------------------------------
 
+  /** Put an event in the history ring, as the hub's producers do. */
+  private record(e: Omit<HistoryEvent, 'seq' | 'age'>): void {
+    this.events.push({ ...e, seq: this.eventSeq++, at: Date.now() });
+    if (this.events.length > RING_SIZE) this.events.shift();
+  }
+
   /** A device reports a new value (as if a STATE arrived from a chip). */
   setValue(entity: number, attrId: number, value: Value): void {
     const a = this.attrOf(entity, attrId);
     if (!a || a.value === value) return;
     a.value = value;
+    // Not the noisy measurements (power, energy, light level), and not a button's return to idle.
+    if (![0x12, 0x13, 0x14].includes(attrId) && !(a.name === 'event' && value === 0)) {
+      this.record({ kind: 'state', entity, attr: attrId, value });
+    }
     this.broadcast({ type: 'state', entity, attr: attrId, value });
   }
 
   setChipStatus(id: number, status: Chip['status']): void {
     const c = this.chips.find((x) => x.id === id);
     if (!c) return;
+    if (status !== c.status && (status === 'silent' || c.status === 'silent')) {
+      this.record({ kind: 'chip', what: status === 'silent' ? 'lost' : 'resumed', ref: c.id, value: 20 });
+    }
     c.status = status;
     this.broadcast({ type: 'chip', id: c.id, status: c.status, boot_id: c.boot_id, reboots: c.reboots, telemetry: c.telemetry });
   }
@@ -412,6 +434,8 @@ export class MockHub {
     this.sendTo(c.ws, { type: 'accepted', id, seq: this.seq++ });
     const chip = this.chips.find((x) => x.id === entity.chip);
     const status: AckStatus = this.forceAck ?? (chip && chip.status === 'ready' ? 'ok' : 'unreachable');
+    this.record({ kind: 'command', entity: entity.id, attr: a.id, value: msg.value as Value });
+    if (status !== 'ok') this.record({ kind: 'command_failed', what: status, entity: entity.id, attr: a.id });
     setTimeout(() => {
       if (status === 'ok') this.setValue(entity.id, a.id, msg.value as Value);
       this.sendTo(c.ws, { type: 'ack', id, status });
@@ -566,6 +590,24 @@ export class MockHub {
         if (!sc) return no('not_found', 'no such scene');
         return ok(this.applyScene(sc));
       }
+      case 'history': {
+        // Same arguments and limits as the real hub's core::app::history_parse; newest first, strictly older than `before`.
+        const { before, limit, entity } = args;
+        if (before !== undefined && (typeof before !== 'number' || !Number.isInteger(before) || before < 0 || before > 0xffffffff)) return no('bad_args', 'before');
+        if (limit !== undefined && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > HISTORY_PAGE)) return no('bad_args', 'limit: 1..24');
+        if (entity !== undefined && (typeof entity !== 'number' || !Number.isInteger(entity) || entity < 0 || entity > 0xffff)) return no('bad_args', 'entity');
+        const aboutEntity = (e: MockEvent) => ['state', 'command', 'command_failed', 'reconcile', 'pairing', 'rule'].includes(e.kind as string) && e.entity === entity;
+        const now = Date.now();
+        const matching = this.events.filter((e) => (before === undefined || before === 0 || e.seq < before) && (entity === undefined || aboutEntity(e)));
+        const take = limit ?? HISTORY_PAGE;
+        const page = matching
+          .slice(-take)
+          .reverse()
+          .map(({ at, ...e }): HistoryEvent => ({ ...e, age: Math.max(0, Math.round((now - at) / 1000)) }));
+        const oldest = this.events[0]?.seq ?? 0;
+        const latest = this.events[this.events.length - 1]?.seq ?? 0;
+        return ok({ now: Math.floor(now / 1000), latest, oldest, more: matching.length > take, events: page });
+      }
       case 'wifi.scan': {
         return ok({ networks: [...this.networks].sort((a, b) => b.rssi - a.rssi) });
       }
@@ -653,10 +695,15 @@ export class MockHub {
     if (i >= 0) this.timers.splice(i, 1);
     if (t.scene !== undefined) {
       const sc = this.scenes.find((s) => s.name === t.scene);
-      if (sc) this.applyScene(sc);
+      this.record({ kind: 'timer', ref: Math.max(i, 0), scene: t.scene });
+      if (sc) this.applyScene(sc, 'timer');
     } else {
       const a = this.attrOf(t.entity, t.attr);
-      if (a) this.setValue(t.entity, t.attr, t.action === 'toggle' ? !a.value : t.action === 'on');
+      if (a) {
+        const to = t.action === 'toggle' ? !a.value : t.action === 'on';
+        this.record({ kind: 'timer', ref: Math.max(i, 0), entity: t.entity, attr: t.attr, value: to });
+        this.setValue(t.entity, t.attr, to);
+      }
     }
     this.broadcast({ type: 'timers', timers: this.timerList() });
   }
@@ -784,7 +831,7 @@ export class MockHub {
   }
 
   /** Set every action of the scene; an action whose device is gone or whose chip is silent is skipped. */
-  private applyScene(sc: Scene): { sent: number; skipped: number } {
+  private applyScene(sc: Scene, via: 'app' | 'timer' = 'app'): { sent: number; skipped: number } {
     let sent = 0;
     let skipped = 0;
     for (const a of sc.actions) {
@@ -798,6 +845,7 @@ export class MockHub {
       }
     }
     this.scenesApplied.push(sc.name);
+    this.record({ kind: 'scene', what: via, ref: this.scenes.indexOf(sc) + 1, scene: sc.name });
     return { sent, skipped };
   }
 

@@ -253,6 +253,41 @@ Outcome name_clear(Reg& reg, const Reader& r, int args) {
   return Outcome::done();
 }
 
+// ---- history -------------------------------------------------------------------------
+
+// `history`: {"before": seq, "limit": n, "entity": id}, every member optional. `before` pages back
+// (events strictly older than it; 0 or absent = from the newest), `limit` is 1..kHistoryPage, `entity`
+// keeps only events about that entity (also one that has since been removed: its history stays).
+struct HistoryQuery {
+  std::uint32_t before = 0;
+  std::size_t limit = kHistoryPage;
+  bool entity_only = false;
+  std::uint16_t entity = 0;
+};
+
+template <typename Reader>
+Outcome history_parse(const Reader& r, int args, HistoryQuery& q) {
+  q = HistoryQuery{};
+  if (args < 0) return Outcome::done();
+  std::int64_t v = 0;
+  if (r.find(args, "before") >= 0) {
+    if (!detail::get_int(r, args, "before", v) || v < 0 || v > 0xFFFFFFFFll) return Outcome::fail(Err::BadArgs, "before");
+    q.before = static_cast<std::uint32_t>(v);
+  }
+  if (r.find(args, "limit") >= 0) {
+    if (!detail::get_int(r, args, "limit", v) || v < 1 || v > static_cast<std::int64_t>(kHistoryPage)) {
+      return Outcome::fail(Err::BadArgs, "limit: 1..24");
+    }
+    q.limit = static_cast<std::size_t>(v);
+  }
+  if (r.find(args, "entity") >= 0) {
+    if (!detail::get_int(r, args, "entity", v) || v < 0 || v > 0xFFFF) return Outcome::fail(Err::BadArgs, "entity");
+    q.entity_only = true;
+    q.entity = static_cast<std::uint16_t>(v);
+  }
+  return Outcome::done();
+}
+
 // ---- rules ---------------------------------------------------------------------------
 
 template <typename Reg, typename Scenes, typename Engine, typename Reader>

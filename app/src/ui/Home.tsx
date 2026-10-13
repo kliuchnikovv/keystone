@@ -7,10 +7,11 @@ import type { Settings } from '../settings';
 import { Banner } from './Banner';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
+import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
 import { useTheme } from './theme';
 
-type Tab = 'devices' | 'automations' | 'hub';
+type Tab = 'devices' | 'automations' | 'history' | 'hub';
 
 export interface HomeProps {
   settings: Settings;
@@ -42,6 +43,8 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
           <DevicesScreen home={home} commands={commands} />
         ) : tab === 'automations' ? (
           <AutomationsScreen home={home} commands={commands} />
+        ) : tab === 'history' ? (
+          <HistoryScreen home={home} client={client} />
         ) : (
           <HubScreen home={home} url={settings.url} onChangeHub={onChangeHub} commands={commands} />
         )}
@@ -54,6 +57,7 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
       <View style={[styles.tabs, { backgroundColor: t.card, borderTopColor: t.border }]}>
         <TabButton label="Devices" active={tab === 'devices'} onPress={() => setTab('devices')} />
         <TabButton label="Automations" active={tab === 'automations'} onPress={() => setTab('automations')} />
+        <TabButton label="History" active={tab === 'history'} onPress={() => setTab('history')} />
         <TabButton label="Hub" active={tab === 'hub'} onPress={() => setTab('hub')} />
       </View>
     </SafeAreaView>

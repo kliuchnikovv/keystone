@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "core/event_log.hpp"
 #include "core/json.hpp"
 #include "core/rule_engine.hpp"
 #include "core/scene_table.hpp"
@@ -386,6 +387,137 @@ inline void encode_res_error(JsonWriter& w, std::int64_t id, Err code, const cha
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", false).kv("code", err_name(code));
   if (message != nullptr) w.kv("message", message);
   w.end_object();
+}
+
+// ---- history ------------------------------------------------------------------------
+// `history` (a request) answers with the newest-first page of the hub's event ring. Times go out as
+// `age` (seconds before the reply) next to the hub's wall clock `now` (0 = not synced), so the client
+// computes `now - age` and events from before the clock synced still get a real time.
+
+inline constexpr std::size_t kHistoryPage = 24;  // the worst case of this many events fits one 4 KB frame (tested)
+
+enum class ResetWhy : std::uint8_t { Unknown = 0, PowerOn = 1, Software = 2, Panic = 3, Watchdog = 4, Brownout = 5, Other = 6 };
+
+inline const char* event_kind_name(EventKind k) noexcept {
+  switch (k) {
+    case EventKind::Boot: return "boot";
+    case EventKind::State: return "state";
+    case EventKind::Command: return "command";
+    case EventKind::CmdFailed: return "command_failed";
+    case EventKind::Rule: return "rule";
+    case EventKind::Schedule: return "schedule";
+    case EventKind::Timer: return "timer";
+    case EventKind::Scene: return "scene";
+    case EventKind::Chip: return "chip";
+    case EventKind::Reconcile: return "reconcile";
+    case EventKind::Pairing: return "pairing";
+  }
+  return "unknown";
+}
+
+// The kind-specific `code` as a word, or nullptr when the kind has none.
+inline const char* event_what(const Event& e) noexcept {
+  switch (e.kind) {
+    case EventKind::Boot:
+      switch (static_cast<ResetWhy>(e.code)) {
+        case ResetWhy::PowerOn: return "power_on";
+        case ResetWhy::Software: return "software";
+        case ResetWhy::Panic: return "panic";
+        case ResetWhy::Watchdog: return "watchdog";
+        case ResetWhy::Brownout: return "brownout";
+        case ResetWhy::Other: return "other";
+        case ResetWhy::Unknown: break;
+      }
+      return "unknown";
+    case EventKind::CmdFailed: return ack_name(static_cast<hubproto::CmdAckStatus>(e.code));
+    case EventKind::Scene:
+      switch (static_cast<SceneVia>(e.code)) {
+        case SceneVia::Console: return "console";
+        case SceneVia::App: return "app";
+        case SceneVia::Rule: return "rule";
+        case SceneVia::Schedule: return "schedule";
+        case SceneVia::Timer: return "timer";
+      }
+      return "unknown";
+    case EventKind::Chip:
+      switch (static_cast<ChipEv>(e.code)) {
+        case ChipEv::Lost: return "lost";
+        case ChipEv::Resumed: return "resumed";
+        case ChipEv::Rebooted: return "rebooted";
+        case ChipEv::Flapping: return "flapping";
+      }
+      return "unknown";
+    case EventKind::Reconcile:
+      return static_cast<ReconcileEv>(e.code) == ReconcileEv::Corrected ? "corrected" : "adopted";
+    case EventKind::Pairing:
+      switch (static_cast<PairingEv>(e.code)) {
+        case PairingEv::Opened: return "opened";
+        case PairingEv::Unpair: return "unpair";
+        case PairingEv::Identify: return "identify";
+      }
+      return "unknown";
+    default: return nullptr;
+  }
+}
+
+// One event. Fields appear only where the kind has them: entity/attr/value for what happened to an
+// attribute (a rule, schedule or timer that applies a scene names no entity: the Scene event that
+// follows says which; `scene` is that scene's name when it still exists), ref for a slot / scene id /
+// chip id / pairing seconds.
+// The name of a scene by id, or nullptr once it is gone. The ring keeps ids, not names, so the hub
+// resolves them when it answers.
+using SceneNameFn = const char* (*)(void* ctx, std::uint8_t id);
+
+inline void write_event(JsonWriter& w, const Event& e, std::uint32_t now_s, SceneNameFn scene_name = nullptr,
+                        void* scene_ctx = nullptr) noexcept {
+  w.begin_object().kv("seq", e.seq).kv("age", static_cast<std::uint32_t>(now_s - e.t_s)).kv("kind", event_kind_name(e.kind));
+  if (const char* what = event_what(e)) w.kv("what", what);
+  bool entity = false, attr = false, ref = false;
+  switch (e.kind) {
+    case EventKind::State: case EventKind::Command: case EventKind::CmdFailed: case EventKind::Reconcile:
+      entity = attr = true;
+      break;
+    case EventKind::Rule: case EventKind::Schedule: case EventKind::Timer:
+      ref = true;
+      entity = attr = e.entity != kSceneTarget;
+      break;
+    case EventKind::Pairing:
+      entity = static_cast<PairingEv>(e.code) != PairingEv::Opened;
+      ref = !entity;
+      break;
+    case EventKind::Scene: case EventKind::Chip:
+      ref = true;
+      break;
+    case EventKind::Boot:
+      break;
+  }
+  if (entity) w.kv("entity", static_cast<std::int64_t>(e.entity));
+  if (attr) w.kv("attr", static_cast<std::int64_t>(e.attr));
+  if (ref) w.kv("ref", static_cast<std::int64_t>(e.ref));
+  if (e.has_value && (attr || e.kind == EventKind::Chip)) {
+    w.key("value");
+    write_value(w, e.value);
+  }
+  // A scene's id: the Scene event's ref, or the attr of a rule/schedule/timer that targets a scene.
+  const bool scene_target = e.entity == kSceneTarget && (e.kind == EventKind::Rule || e.kind == EventKind::Schedule || e.kind == EventKind::Timer);
+  if (scene_name != nullptr && (e.kind == EventKind::Scene || scene_target)) {
+    const char* name = scene_name(scene_ctx, static_cast<std::uint8_t>(e.kind == EventKind::Scene ? e.ref : e.attr));
+    if (name != nullptr) w.kv("scene", name);
+  }
+  w.end_object();
+}
+
+// {"now":<wall epoch or 0>,"latest":n,"oldest":n,"more":bool,"events":[…]} — `oldest` and `latest` are the
+// ring's bounds (0,0 = nothing yet); `more` says whether events older than the last one returned exist (for
+// the same device filter): a client pages back with `before = <seq of its last event>` while it is true.
+inline void encode_res_history(JsonWriter& w, std::int64_t id, std::int64_t wall_now, std::uint32_t now_s,
+                               const Event* events, std::size_t count, std::uint32_t oldest,
+                               std::uint32_t latest, bool more, SceneNameFn scene_name = nullptr,
+                               void* scene_ctx = nullptr) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true).key("result").begin_object()
+      .kv("now", wall_now).kv("latest", latest).kv("oldest", oldest).kv("more", more).key("events").begin_array();
+  for (std::size_t i = 0; i < count; ++i) write_event(w, events[i], now_s, scene_name, scene_ctx);
+  w.end_array().end_object().end_object();
 }
 
 inline void encode_state(JsonWriter& w, std::uint16_t entity, std::uint8_t attr,
