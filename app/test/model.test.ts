@@ -35,7 +35,7 @@ describe('formatValue', () => {
   });
   it('labels fall back to a readable form of the name', () => {
     expect(attrLabel('on_off')).toBe('Power');
-    expect(attrLabel('color_temp')).toBe('Color temp');
+    expect(attrLabel('fan_speed')).toBe('Fan speed');
   });
   it('uptime and energy helpers', () => {
     expect(formatUptime(45)).toBe('45s');

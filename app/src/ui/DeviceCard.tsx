@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { nameProblem } from '../model/automation';
 import { Button, ConfirmDelete, ErrorText, Input } from './controls';
-import { attrLabel, brightnessPercent, formatValue } from '../model/format';
-import { deviceIcon, deviceLabel, deviceTitle, primarySwitch, stepped, stepperFor } from '../model/devices';
+import { attrLabel, formatValue } from '../model/format';
+import { deviceIcon, deviceLabel, deviceTitle, modeOptions, primarySwitch, stepped, stepperFor } from '../model/devices';
 import type { Attr, Entity, Value } from '../protocol/messages';
 import { useTheme } from './theme';
 
@@ -24,7 +24,9 @@ export function DeviceCard({ entity, reachable, isPending, onSet, onRename, onId
   const [renaming, setRenaming] = useState(false);
   const sw = primarySwitch(entity);
   const title = deviceTitle(entity);
-  const rows = entity.attrs.filter((a) => a !== sw);
+  // A button's `event` is a 0.4 s pulse: nothing worth showing on a card, so say what it is for.
+  const isButton = entity.device === 'button';
+  const rows = entity.attrs.filter((a) => a !== sw && a.name !== 'event');
 
   return (
     <View
@@ -69,6 +71,11 @@ export function DeviceCard({ entity, reachable, isPending, onSet, onRename, onId
       )}
       {renaming && (onIdentify || onRemove) && (
         <DeviceActions title={title} onIdentify={onIdentify} onRemove={onRemove} />
+      )}
+      {isButton && (
+        <Text style={{ color: t.muted, fontSize: 13, marginTop: 8 }}>
+          Press it to start automations (rules can react to this button).
+        </Text>
       )}
       {rows.length > 0 && (
         <View style={[styles.rows, { borderTopColor: t.border }]}>
@@ -128,19 +135,40 @@ function DeviceActions({ title, onIdentify, onRemove }: { title: string; onIdent
 function AttrRow(props: { attr: Attr; title: string; reachable: boolean; pending: boolean; onSet(attr: number, v: Value): void }) {
   const t = useTheme();
   const { attr: a, title, reachable, pending, onSet } = props;
-  const canStep = stepperFor(a) !== null && reachable && !pending;
+  const stepper = stepperFor(a);
+  const modes = modeOptions(a);
+  const canStep = stepper !== null && reachable && !pending;
   const down = stepped(a, -1);
   const up = stepped(a, 1);
   return (
     <View style={styles.row}>
       <Text style={[styles.rowLabel, { color: t.muted }]}>{attrLabel(a.name)}</Text>
-      {stepperFor(a) !== null ? (
+      {stepper !== null ? (
         <View style={styles.stepper}>
-          <StepButton label="−" a11y={`${title} dimmer`} disabled={!canStep || down === null} onPress={() => down !== null && onSet(a.id, down)} />
-          <Text style={[styles.stepValue, { color: t.text }]} accessibilityLabel={`${title} brightness`}>
-            {typeof a.value === 'number' ? `${brightnessPercent(a.value)} %` : '—'}
+          <StepButton label="−" a11y={`${title} ${stepper.down}`} disabled={!canStep || down === null} onPress={() => down !== null && onSet(a.id, down)} />
+          <Text style={[styles.stepValue, { color: t.text }]} accessibilityLabel={`${title} ${stepper.noun}`}>
+            {formatValue(a)}
           </Text>
-          <StepButton label="+" a11y={`${title} brighter`} disabled={!canStep || up === null} onPress={() => up !== null && onSet(a.id, up)} />
+          <StepButton label="+" a11y={`${title} ${stepper.up}`} disabled={!canStep || up === null} onPress={() => up !== null && onSet(a.id, up)} />
+        </View>
+      ) : modes !== null ? (
+        <View style={styles.modes}>
+          {modes.map((m) => {
+            const on = a.value === m.value;
+            return (
+              <Pressable
+                key={m.value}
+                accessibilityRole="button"
+                accessibilityLabel={`${title} mode ${m.label.toLowerCase()}`}
+                accessibilityState={{ selected: on, disabled: !reachable || pending }}
+                disabled={!reachable || pending}
+                onPress={() => onSet(a.id, m.value)}
+                style={[styles.chip, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accent : 'transparent' }]}
+              >
+                <Text style={{ color: on ? '#ffffff' : t.text, fontSize: 13 }}>{m.label}</Text>
+              </Pressable>
+            );
+          })}
         </View>
       ) : (
         <Text style={[styles.rowValue, { color: t.text }]}>{formatValue(a)}</Text>
@@ -176,12 +204,14 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rowLabel: { fontSize: 14 },
   rowValue: { fontSize: 15, fontWeight: '500', textAlign: 'right' },
-  stepValue: { fontSize: 15, fontWeight: '500', minWidth: 56, textAlign: 'center' },
+  stepValue: { fontSize: 15, fontWeight: '500', minWidth: 72, textAlign: 'center' },
   offline: { opacity: 0.6 },
   edit: { paddingHorizontal: 10, paddingVertical: 6 },
   rename: { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
   actions: { marginTop: 4 },
   renameButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  modes: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 1 },
+  chip: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 5 },
   step: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

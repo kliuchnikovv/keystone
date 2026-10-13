@@ -237,16 +237,49 @@ exposed as a Matter accessory with no second modeling pass.
 
 | device_type | value | Matter Device Type | Typical attributes (attr_id) |
 |-------------|-------|--------------------|------------------------------|
-| light       | 0x01  | On/Off + Dimmable + Color Light | on_off(0x01), brightness(0x02), color_xy(0x03), color_temp(0x04) |
-| sensor      | 0x02  | Sensor (temp/humidity/etc.) | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
-| switch      | 0x03  | On/Off Plug-in Unit | on_off(0x01), power_w(0x13), energy_wh(0x14) |
-| cover       | 0x04  | Window Covering     | position(0x20), state(0x21) |
-| lock        | 0x05  | Door Lock          | locked(0x30) |
-| climate     | 0x06  | Thermostat         | setpoint(0x40), mode(0x41), current_temp(0x10) |
+| light       | 0x01  | On/Off, Dimmable, Color-Temperature or Extended Color Light | on_off(0x01), brightness(0x02), color_xy(0x03), color_temp(0x04) |
+| sensor      | 0x02  | Temperature / Humidity / Light Sensor | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
+| switch      | 0x03  | On/Off Light (a plug-in unit today) | on_off(0x01), power_w(0x13), energy_wh(0x14) |
+| cover       | 0x04  | Window Covering     | position(0x20), state(0x21) — not implemented yet |
+| lock        | 0x05  | Door Lock          | locked(0x30) — not implemented yet |
+| climate     | 0x06  | Thermostat (heating) | temperature(0x10), setpoint(0x40), mode(0x41) |
 | occupancy   | 0x07  | Occupancy Sensor   | occupied(0x50) |
 | contact     | 0x08  | Contact Sensor     | contact(0x51) |
 | button      | 0x09  | Generic Switch     | event(0x60) |
 | chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16) |
+
+**Attribute units** (`libhubproto/include/hubproto/attrs.hpp`; Zigbee and Matter agree on most of
+them, the rest are converted by `hubproto/units.hpp`):
+
+| attr | value_type | meaning |
+|------|------------|---------|
+| on_off | bool | |
+| brightness | u8 | 0..254 (ZCL/Matter CurrentLevel) |
+| color_temp | u16 | mireds |
+| color_xy | xy | CIE 1931, Zigbee ColorX/ColorY (0..65279) |
+| temperature | i16 | 0.1 °C (Zigbee/Matter use 0.01 °C) |
+| humidity | u16 | 0.1 % (Zigbee/Matter 0.01 %) |
+| illuminance | u16 | lux, saturating (Zigbee/Matter use 10000·log10(lux)+1) |
+| battery | u8 | percent 0..100 (Zigbee/Matter half-percent) |
+| power_w / energy_wh | u16 / u32 | W / Wh |
+| setpoint | i16 | 0.1 °C, occupied heating setpoint, writable |
+| mode | enum8 | thermostat SystemMode: 0 off, 1 auto, 3 cool, 4 heat (same numbers in Zigbee and Matter) |
+| occupied | bool | true = someone is there |
+| contact | bool | true = **closed** (Matter BooleanState StateValue); an IAS "alarm" is "opened" |
+| event | enum8 | button: 0 idle, 1 press, 2 double, 3 hold, 4 release, 5 on, 6 off, 7 up, 8 down |
+
+A button press is a *pulse*: STATE(event=N), then STATE(event=0) 0.4 s later. The brain's state
+machine is edge-triggered, so a rule `event == 1` fires on every press although two presses carry
+the same code.
+
+**One entity per Zigbee application endpoint** (identity: IEEE address + endpoint). The primary
+cluster picks the type (thermostat > light > occupancy > IAS > sensor > button > plug); every other
+cluster of the endpoint adds attributes, so a motion sensor that also reports temperature is one
+`occupancy` entity with a `temperature` attribute. `battery` is only declared on devices that are
+not plugs or lamps (those carry Power Configuration for the mains voltage). The mapping is
+`core/zcl_profile.hpp`, host-tested. On the Matter side `core/matter_plan.hpp` turns an entity into one
+endpoint: the device type from its primary attributes plus extra clusters (temperature, humidity,
+illuminance, battery as Power Source, power and energy metering) on the same endpoint.
 
 The `chip` device_type is the co-processor itself, declared as a self entity
 whose `entity_id` equals the chip's own `chip_id` (0x01, 0x02, … — the registry

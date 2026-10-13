@@ -199,6 +199,11 @@ export function switchTargets(entities: Entity[]): Entity[] {
 const SCALES: Record<string, { unit: string; toWire: (n: number) => number; fromWire: (n: number) => number }> = {
   brightness: { unit: '%', toWire: (n) => Math.round((n / 100) * 254), fromWire: (n) => Math.round((n / 254) * 100) },
   temperature: { unit: '°C', toWire: (n) => Math.round(n * 10), fromWire: (n) => n / 10 },
+  setpoint: { unit: '°C', toWire: (n) => Math.round(n * 10), fromWire: (n) => n / 10 },
+  humidity: { unit: '%', toWire: (n) => Math.round(n * 10), fromWire: (n) => n / 10 },
+  illuminance: { unit: 'lx', toWire: (n) => n, fromWire: (n) => n },
+  battery: { unit: '%', toWire: (n) => n, fromWire: (n) => n },
+  color_temp: { unit: 'mireds', toWire: (n) => n, fromWire: (n) => n },
   power_w: { unit: 'W', toWire: (n) => n, fromWire: (n) => n },
   energy_wh: { unit: 'Wh', toWire: (n) => n, fromWire: (n) => n },
 };

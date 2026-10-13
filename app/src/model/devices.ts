@@ -47,11 +47,23 @@ export interface Stepper {
   step: number;
   min: number;
   max: number;
+  /** Accessibility words: "<title> dimmer", "<title> brighter", and the noun for the value text. */
+  down: string;
+  up: string;
+  noun: string;
 }
-/** Writable numeric attributes we know how to nudge with +/-. Brightness: 10 % steps. */
+/** Writable numeric attributes we know how to nudge with +/-: brightness 10 % steps, colour
+ * temperature (mireds, so "−" is cooler), target temperature 0.5 °C. */
 export function stepperFor(a: Attr): Stepper | null {
-  if (a.name === 'brightness' && a.flags.includes('w') && a.vt === 'u8') {
-    return { step: 25, min: 1, max: 254 };
+  if (!a.flags.includes('w')) return null;
+  if (a.name === 'brightness' && a.vt === 'u8') {
+    return { step: 25, min: 1, max: 254, down: 'dimmer', up: 'brighter', noun: 'brightness' };
+  }
+  if (a.name === 'color_temp' && a.vt === 'u16') {
+    return { step: 25, min: 153, max: 500, down: 'cooler', up: 'warmer', noun: 'color temperature' };
+  }
+  if (a.name === 'setpoint' && a.vt === 'i16') {
+    return { step: 5, min: 50, max: 350, down: 'lower', up: 'higher', noun: 'target temperature' };
   }
   return null;
 }
@@ -59,6 +71,21 @@ export function stepped(a: Attr, dir: 1 | -1): number | null {
   const s = stepperFor(a);
   if (!s || typeof a.value !== 'number') return null;
   return Math.max(s.min, Math.min(s.max, a.value + dir * s.step));
+}
+
+export interface ModeOption {
+  value: number;
+  label: string;
+}
+/** A thermostat's writable mode: the choices the hub models (Heat first, it is the common one). */
+export function modeOptions(a: Attr): ModeOption[] | null {
+  if (a.name !== 'mode' || !a.flags.includes('w') || a.vt !== 'enum8') return null;
+  return [
+    { value: 4, label: 'Heat' },
+    { value: 1, label: 'Auto' },
+    { value: 3, label: 'Cool' },
+    { value: 0, label: 'Off' },
+  ];
 }
 
 /** Named devices first (alphabetical), then unnamed ones by id. */

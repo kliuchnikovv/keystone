@@ -15,6 +15,27 @@ const LABELS: Record<string, string> = {
   contact: 'Contact',
   locked: 'Lock',
   position: 'Position',
+  setpoint: 'Target temperature',
+  mode: 'Mode',
+  color_temp: 'Color temperature',
+  color_xy: 'Color',
+  event: 'Button',
+};
+
+/** Thermostat SystemMode values the hub models (same numbers in Zigbee and Matter). */
+export const MODE_NAMES: Record<number, string> = { 0: 'Off', 1: 'Auto', 3: 'Cool', 4: 'Heat' };
+
+/** Button events (hubproto attrs.hpp). A press is a pulse: N, then 0 again after ~0.4 s. */
+export const EVENT_NAMES: Record<number, string> = {
+  0: 'Idle',
+  1: 'Pressed',
+  2: 'Double press',
+  3: 'Held',
+  4: 'Released',
+  5: 'On',
+  6: 'Off',
+  7: 'Brighter',
+  8: 'Dimmer',
 };
 
 export function attrLabel(name: string): string {
@@ -59,7 +80,22 @@ export function formatValue(a: Pick<Attr, 'name' | 'value'>): string {
     case 'occupied':
       return v ? 'Occupied' : 'Clear';
     case 'temperature':
+    case 'setpoint':
       return `${(Number(v) / 10).toFixed(1)} °C`; // SPEC §6.2: int16 in 0.1 °C
+    case 'humidity':
+      return `${(Number(v) / 10).toFixed(0)} %`; // u16 in 0.1 %
+    case 'illuminance':
+      return `${v} lx`;
+    case 'battery':
+      return `${v} %`;
+    case 'contact':
+      return v ? 'Closed' : 'Open'; // true = closed (Matter BooleanState)
+    case 'color_temp':
+      return `${Math.round(1_000_000 / Math.max(1, Number(v)))} K`; // mireds -> kelvin
+    case 'mode':
+      return MODE_NAMES[Number(v)] ?? String(v);
+    case 'event':
+      return EVENT_NAMES[Number(v)] ?? String(v);
   }
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
   return String(v);

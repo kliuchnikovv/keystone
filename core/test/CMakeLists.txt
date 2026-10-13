@@ -17,6 +17,8 @@ add_executable(core_tests
   test_schedule_table.cpp
   test_scene_table.cpp
   test_sun.cpp
+  test_zcl_profile.cpp
+  test_matter_plan.cpp
   test_wifi_policy.cpp
   test_setup_mode.cpp
   test_json.cpp

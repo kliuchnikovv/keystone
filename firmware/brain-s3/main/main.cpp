@@ -75,6 +75,7 @@
 #include "esp_app_desc.h"
 #include "app_server.hpp"
 #include "core/app_protocol.hpp"
+#include "core/zcl_profile.hpp"
 #include "core/app_requests.hpp"
 #include "ota_job.hpp"
 
@@ -519,7 +520,8 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
   // DECLAREs arrive, no batching required.
   if (h.chip_id == kZigbeeChipId &&
       (h.type == hubproto::MsgType::Declare ||
-       h.type == hubproto::MsgType::State)) {
+       h.type == hubproto::MsgType::State ||
+       h.type == hubproto::MsgType::Undeclare)) {  // a device left: drop its Matter endpoint
     hubproto::Header mirror = h;
     mirror.chip_id = kThreadChipId;
     bus->publish(mirror, p, len);
@@ -556,7 +558,7 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
-               REQ_RULE, REQ_DESIRED, REQ_SCENE };
+               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT };
 
 struct Req {
   ReqKind kind;
@@ -594,12 +596,9 @@ const char* dt_name(hubproto::DeviceType t) {
   return "?";
 }
 
-const char* attr_name(std::uint8_t id) {
-  return id == kOnOffAttr ? "on_off"
-         : id == 0x13     ? "power_w"
-         : id == 0x14     ? "energy_wh"
-                          : nullptr;
-}
+// The shared SPEC §6.1 table (core/app_protocol.hpp): the console, the app and the rules all use
+// the same names, so a new device type needs no change here.
+const char* attr_name(std::uint8_t id) { return core::app::attr_name(id); }
 
 // Format a bare value (e.g. "on", "200", "(1,2)").
 void fmt_value(char* buf, std::size_t cap, hubproto::ValueType vt,
@@ -1028,10 +1027,12 @@ void restore_rules(Rules& rules) {
 // ---- `rule` console command: parsing + handling (runs on the main loop) ----
 
 bool parse_attr(const char* s, std::uint8_t& out) {
-  static const struct { const char* n; std::uint8_t id; } kNames[] = {
-      {"on_off", kOnOffAttr}, {"power_w", 0x13}, {"energy_wh", 0x14}};
-  for (const auto& e : kNames) {
-    if (std::strcmp(s, e.n) == 0) { out = e.id; return true; }
+  for (unsigned id = 0; id < 256; ++id) {
+    const char* n = core::app::attr_name(static_cast<std::uint8_t>(id));
+    if (n != nullptr && std::strcmp(s, n) == 0) {
+      out = static_cast<std::uint8_t>(id);
+      return true;
+    }
   }
   char* end = nullptr;
   const long v = std::strtol(s, &end, 0);
@@ -1712,6 +1713,135 @@ int cmd_scene(int argc, char** argv) {
   return 0;
 }
 
+// ---- dev tool: pretend a device exists, towards the Matter chip only -------------------------
+// `inject <kind>` declares a made-up device (and sends a first STATE) to the Matter chip as if the
+// Zigbee chip had announced it, so the bridged endpoint of every device type can be exercised
+// without owning the hardware. The brain's own registry is untouched: it never sees these.
+//   inject <dimmer|ctlight|colorlight|sensor|motion|contact|thermostat|button>
+//   inject set <entity> <attr> <value>      a STATE (value in hub units; xy not supported)
+//   inject clear                            Undeclare every injected device
+constexpr std::uint16_t kInjectBase = 0x0F01;
+constexpr int kInjectKinds = 8;
+bool g_injected[kInjectKinds] = {};
+
+struct InjectSpec {
+  const char* name;
+  hubproto::DeviceType type;
+  std::uint32_t caps;
+};
+const InjectSpec kInject[kInjectKinds] = {
+    {"dimmer", hubproto::DeviceType::Light, core::zcl::kCapOnOff | core::zcl::kCapLevel},
+    {"ctlight", hubproto::DeviceType::Light,
+     core::zcl::kCapOnOff | core::zcl::kCapLevel | core::zcl::kCapColorTemp},
+    {"colorlight", hubproto::DeviceType::Light,
+     core::zcl::kCapOnOff | core::zcl::kCapLevel | core::zcl::kCapColorTemp | core::zcl::kCapColorXy},
+    {"sensor", hubproto::DeviceType::Sensor,
+     core::zcl::kCapTemperature | core::zcl::kCapHumidity | core::zcl::kCapIlluminance | core::zcl::kCapBattery},
+    {"motion", hubproto::DeviceType::Occupancy,
+     core::zcl::kCapOccupancy | core::zcl::kCapTemperature | core::zcl::kCapBattery},
+    {"contact", hubproto::DeviceType::Contact, core::zcl::kCapContact | core::zcl::kCapBattery},
+    {"thermostat", hubproto::DeviceType::Climate,
+     core::zcl::kCapThermostat | core::zcl::kCapTemperature | core::zcl::kCapBattery},
+    {"button", hubproto::DeviceType::Button, core::zcl::kCapButton | core::zcl::kCapBattery},
+};
+
+void inject_send(core::Bus& bus, hubproto::MsgType type, std::uint16_t entity,
+                 const std::uint8_t* payload, std::size_t len) {
+  hubproto::Header h{};
+  h.version = hubproto::kProtocolVersion;
+  h.type = type;
+  h.chip_id = kThreadChipId;
+  h.entity_id = entity;
+  bus.publish(h, payload, len);
+}
+
+void inject_state(core::Bus& bus, std::uint16_t entity, std::uint8_t attr, const hubproto::Value& v) {
+  const hubproto::StateEntry e[1] = {{attr, v}};
+  std::uint8_t buf[16];
+  const auto r = hubproto::encode_state(entity, e, 1, buf, sizeof(buf));
+  if (r.ok) inject_send(bus, hubproto::MsgType::State, entity, buf, r.len);
+}
+
+void handle_inject(core::Bus& bus, Req* r) {
+  namespace A = hubproto::attr;
+  if (r->argc < 2) {
+    std::snprintf(r->out, r->out_cap,
+                  "usage: inject <dimmer|ctlight|colorlight|sensor|motion|contact|thermostat|button>\n"
+                  "       inject set <entity> <attr> <value> | inject clear\n");
+    return;
+  }
+  const char* what = r->argv[1];
+  if (std::strcmp(what, "clear") == 0) {
+    int n = 0;
+    for (int i = 0; i < kInjectKinds; ++i) {
+      if (!g_injected[i]) continue;
+      inject_send(bus, hubproto::MsgType::Undeclare, static_cast<std::uint16_t>(kInjectBase + i), nullptr, 0);
+      g_injected[i] = false;
+      ++n;
+    }
+    std::snprintf(r->out, r->out_cap, "removed %d injected device(s)\n", n);
+    return;
+  }
+  if (std::strcmp(what, "set") == 0) {
+    std::uint8_t attr = 0;
+    hubproto::ValueType vt{};
+    hubproto::Value v{};
+    char* end = nullptr;
+    const long ent = r->argc >= 3 ? std::strtol(r->argv[2], &end, 0) : -1;
+    if (r->argc != 5 || ent < 0 || !parse_attr(r->argv[3], attr) ||
+        !core::zcl::attr_value_type(attr, vt) || !parse_value(r->argv[4], vt, v)) {
+      std::snprintf(r->out, r->out_cap, "usage: inject set <entity> <attr> <value>\n");
+      return;
+    }
+    inject_state(bus, static_cast<std::uint16_t>(ent), attr, v);
+    std::snprintf(r->out, r->out_cap, "sent STATE to the Matter chip\n");
+    return;
+  }
+  for (int i = 0; i < kInjectKinds; ++i) {
+    if (std::strcmp(what, kInject[i].name) != 0) continue;
+    const std::uint16_t id = static_cast<std::uint16_t>(kInjectBase + i);
+    hubproto::AttrDecl attrs[8];
+    const std::size_t n = core::zcl::attrs_for(kInject[i].caps, attrs, 8);
+    std::uint8_t buf[4 + 3 * 8];
+    const auto d = hubproto::encode_declare(id, kInject[i].type, attrs, static_cast<std::uint8_t>(n), buf, sizeof(buf));
+    if (!d.ok) break;
+    inject_send(bus, hubproto::MsgType::Declare, id, buf, d.len);
+    g_injected[i] = true;
+    // A plausible first reading for whatever the device has.
+    const std::uint32_t c = kInject[i].caps;
+    if (c & core::zcl::kCapOnOff) inject_state(bus, id, A::kOnOff, hubproto::Value::make_bool(true));
+    if (c & core::zcl::kCapLevel) inject_state(bus, id, A::kBrightness, hubproto::Value::make_u8(127));
+    if (c & core::zcl::kCapColorTemp) inject_state(bus, id, A::kColorTemp, hubproto::Value::make_u16(300));
+    if (c & core::zcl::kCapColorXy) inject_state(bus, id, A::kColorXy, hubproto::Value::make_xy(0x4000, 0x3000));
+    if (c & core::zcl::kCapTemperature) inject_state(bus, id, A::kTemperature, hubproto::Value::make_i16(215));
+    if (c & core::zcl::kCapHumidity) inject_state(bus, id, A::kHumidity, hubproto::Value::make_u16(551));
+    if (c & core::zcl::kCapIlluminance) inject_state(bus, id, A::kIlluminance, hubproto::Value::make_u16(320));
+    if (c & core::zcl::kCapBattery) inject_state(bus, id, A::kBattery, hubproto::Value::make_u8(87));
+    if (c & core::zcl::kCapOccupancy) inject_state(bus, id, A::kOccupied, hubproto::Value::make_bool(false));
+    if (c & core::zcl::kCapContact) inject_state(bus, id, A::kContact, hubproto::Value::make_bool(true));
+    if (c & core::zcl::kCapThermostat) {
+      inject_state(bus, id, A::kSetpoint, hubproto::Value::make_i16(210));
+      inject_state(bus, id, A::kMode, hubproto::Value::make_enum8(4));
+    }
+    std::snprintf(r->out, r->out_cap, "injected %s as entity 0x%04x (Matter chip only)\n", kInject[i].name,
+                  static_cast<unsigned>(id));
+    return;
+  }
+  std::snprintf(r->out, r->out_cap, "unknown kind '%s'\n", what);
+}
+
+int cmd_inject(int argc, char** argv) {
+  static char buf[256];
+  Req r{};
+  r.kind = REQ_INJECT;
+  r.argc = argc;
+  r.argv = argv;
+  r.out = buf;
+  r.out_cap = sizeof(buf);
+  printf(submit(r) ? "%s" : "timeout\n", buf);
+  return 0;
+}
+
 // loc                  show the location
 // loc <lat> <lon>      degrees, north and east positive (e.g. loc 50.08 14.43)
 // loc clear
@@ -2020,6 +2150,7 @@ void start_console() {
   reg_cmd("cancel", "cancel <n> - cancel a pending timer", &cmd_cancel);
   reg_cmd("at", "at [<YYYY-MM-DD>] <HH:MM> <on|off|toggle> <id> [daily|weekdays|weekends|mon,tue,..] - local-time action, recurring or once on a date", &cmd_at);
   reg_cmd("schedules", "list recurring time-of-day schedules", &cmd_schedules);
+  reg_cmd("inject", "dev: pretend a device of a type exists (Matter chip only); inject <kind>|set|clear", &cmd_inject);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
@@ -3655,6 +3786,9 @@ extern "C" void app_main(void) {
         }
         case REQ_RULE:
           handle_rule(r, reg, rules);
+          break;
+        case REQ_INJECT:
+          handle_inject(bus, r);
           break;
         case REQ_SCENE: {
           const int argc = r->argc;

@@ -15,6 +15,48 @@ under the Matter stack lock. Deliberately tied to the explicit request, not to "
 DECLARE frame must never delete an endpoint people have put in rooms and automations. Not covered: a device
 that leaves by itself (factory reset) and an unpair pending across a brain reboot.
 
+## Device types on the bridge
+
+Every hub entity becomes one bridged endpoint; `core/matter_plan.hpp` (host-tested) picks the Matter
+device type from its attributes and the extra clusters to add, and the choice rides in the endpoint's
+persisted "device type id" (low 16 bits the Matter device type, above them the extras), so a restored
+endpoint has exactly the clusters it was created with:
+
+| hub entity | Matter device type | extra clusters |
+|------------|--------------------|----------------|
+| plug / on-off only | On/Off Light | Electrical Power / Energy Measurement |
+| brightness | Dimmable Light | power, energy |
+| + colour temperature / + xy | Color-Temperature / Extended Color Light | power, energy |
+| temperature, humidity or illuminance | Temperature / Humidity / Light Sensor (first one present) | the other readings, Power Source |
+| occupancy | Occupancy Sensor (PIR) | temperature, humidity, illuminance, Power Source |
+| contact | Contact Sensor | temperature, Power Source |
+| thermostat (setpoint, mode) | Thermostat (heating) | Power Source |
+| button | Generic Switch (momentary, release, long press) | Power Source |
+
+Things learnt the hard way (all found by `inject`, the brain console tool that declares a made-up device to
+the Matter chip only: `inject dimmer|ctlight|colorlight|sensor|motion|contact|thermostat|button`, `inject set
+<entity> <attr> <value>`, `inject clear`):
+
+- `app_bridge_create_new_device`'s last argument is the device's *private data*, not an out-parameter.
+- The occupancy cluster aborts the chip unless a sensing feature (PIR) is set.
+- BooleanState and OccupancySensing are code-driven clusters: `attribute::update` is refused, the cluster
+  object (`registry().Get(path)`, then `SetStateValue` / `SetOccupancy`) has to be told.
+- Switching a lamp on makes the Matter stack move CurrentLevel to 1 by itself, and it initialises attributes
+  while an endpoint is created or restored. The bridge ignores level/colour/thermostat writes during endpoint
+  construction, for 8 s after boot and for 0.6 s after mirroring an "on", otherwise the real lamp would be
+  dimmed to 1 by its own mirror.
+- The cluster set of an endpoint cannot change after creation, so an entity whose attributes changed (a lamp
+  whose colour modes were read) gets a new endpoint; a bare legacy on/off-light id counts as matching so the
+  plug keeps its accessory (and, as before, its power/energy clusters are absent after a restore).
+- Clusters must be enabled in `sdkconfig.defaults` (`CONFIG_SUPPORT_THERMOSTAT_CLUSTER`, `..._SWITCH_...`,
+  `..._OCCUPANCY_SENSING_...`, `..._POWER_SOURCE_...`) or the link fails. 20 bridged devices fit
+  (`CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=22`).
+- A controller dragging a slider produces many writes: level, colour and thermostat commands are debounced
+  (150 ms, latest wins) before they go to the brain; on/off is immediate.
+
+Not verified: any of this against a real Zigbee device of that type, and with a controller (Apple Home) —
+only with the injected devices and the plug.
+
 Matter is a stack of independent pieces. Each has its own effort and its own
 failure mode; put together they let Apple Home / Google Home / Alexa see the
 home's devices as first-class Matter accessories.
