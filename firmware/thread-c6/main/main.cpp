@@ -707,6 +707,9 @@ void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& 
       NEMS ni, ne;
       ni.SetNonNull(imported);
       // ne stays null (no export measurement)
+      // The cluster registry is touched from here: without the stack lock the SDK aborts
+      // ("Chip stack locking error ... Code is unsafe/racy") on the first energy_wh, e.g. 0.
+      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
       ElectricalEnergyMeasurement::NotifyCumulativeEnergyMeasured(ep, ni, ne);
       ESP_LOGI(kTag, "STATE -> Matter ep=%u CumulativeEnergyImported=%u Wh",
                static_cast<unsigned>(ep), static_cast<unsigned>(wh));

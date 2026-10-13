@@ -150,6 +150,8 @@ The brain core (Phases 3–4) is a set of composable, radio-free components that
 
 - **zigbee-c6: boot NWK lookup retries (hardware-verified without the device)**: if a restored device does not answer the boot-time NWK address request (unplugged, battery out) the chip no longer waits for a single `DEVICE_ANNCE` that may be missed: it asks again after 30 s, 60 s, 120 s, then every 5 min until the device answers or announces (`ZbEntity::rearmed` / `lookup_tries`, runtime-only). Checked with the plug physically unplugged: the three back-off steps in the log. Not yet seen: the plug coming back and being re-armed by a retry (needs it plugged in).
 
+- **thread-c6: `energy_wh` crash fixed (built + flashed, runtime NOT yet confirmed)**: `apply_state` called `ElectricalEnergyMeasurement::NotifyCumulativeEnergyMeasured` without the Matter stack lock, so the first `STATE(energy_wh)` aborted the chip ("Chip stack locking error … Code is unsafe/racy") and thread-c6 crash-looped every ~2 s as soon as the plug was powered (the path had never run before: energy was unknown until the plug came back and the zigbee-c6 re-publish/read supplied `energy_wh=0`). The branch now takes `ScopedChipStackLock` like the occupancy/contact branches.
+
 ### ESP-IDF component layout
 
 Firmware apps pick up shared code via `EXTRA_COMPONENT_DIRS=../components`. The wrappers in `firmware/components/{hubproto,core}` reference the same sources as the host build (no duplication); `firmware/components/esp_uart_link` holds the only ESP-IDF-specific transport code. App `main` is C++ (`app_main` is `extern "C"`).
