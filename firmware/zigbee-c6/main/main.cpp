@@ -129,6 +129,8 @@ struct ZbEntity {
   Cached cache[kMaxCache];
   std::uint16_t color_x, color_y;
   bool have_x, have_y;
+  bool rearmed;               // reporting re-established this run (boot lookup answered, or it announced)
+  std::uint8_t lookup_tries;  // failed boot NWK lookups so far (drives the retry back-off)
 };
 
 ZbEntity g_ent[kMaxEntities] = {};
@@ -1129,6 +1131,32 @@ void read_device_state(ZbEntity& e, bool color_caps) {
   }
 }
 
+// Boot NWK lookup retry: 30 s, 60 s, 120 s, then every 5 min until the device answers or announces.
+std::uint32_t lookup_retry_ms(std::uint8_t tries) {
+  const std::uint32_t base = 30000u << (tries < 4 ? tries : 4);
+  return base > 300000u ? 300000u : base;
+}
+
+void on_nwk_addr_resp(esp_zb_zdp_status_t status, esp_zb_zdo_nwk_addr_rsp_t* resp, void* ctx);
+
+void send_nwk_lookup(std::size_t idx) {
+  const ZbEntity& s = g_ent[idx];
+  esp_zb_zdo_nwk_addr_req_param_t req{};
+  std::memcpy(req.ieee_addr_of_interest, s.ieee, sizeof(esp_zb_ieee_addr_t));
+  req.dst_nwk_addr = 0xFFFF;  // broadcast — device may have a different short addr
+  req.request_type = 0;       // single-device response
+  req.start_index = 0;
+  esp_zb_zdo_nwk_addr_req(&req, on_nwk_addr_resp,
+                          reinterpret_cast<void*>(static_cast<std::uintptr_t>(idx)));
+}
+
+void rearm_retry_cb(std::uint8_t idx) {
+  if (idx >= kMaxEntities || !g_ent[idx].in_use || g_ent[idx].rearmed) return;
+  ESP_LOGI(kTag, "retry NWK lookup for entity 0x%04x (attempt %u)",
+           static_cast<unsigned>(g_ent[idx].entity_id), static_cast<unsigned>(g_ent[idx].lookup_tries));
+  send_nwk_lookup(idx);
+}
+
 // Callback for boot-time NWK address lookup (esp_zb_zdo_nwk_addr_req).
 // ctx = index into g_ent (pointer-as-integer, same pattern as short_addr).
 // Runs in Zigbee stack context.
@@ -1141,11 +1169,16 @@ void on_nwk_addr_resp(esp_zb_zdp_status_t status, esp_zb_zdo_nwk_addr_rsp_t* res
 
   const std::uint16_t nwk_addr = (resp != nullptr) ? resp->nwk_addr : 0xFFFF;
   if (status != ESP_ZB_ZDP_STATUS_SUCCESS) {
-    // Device is currently offline. It will send DEVICE_ANNCE when it comes back;
-    // discover_device() will then update its short_addr and rearm it.
+    // Device is offline (unplugged, battery out). If it comes back it announces and discover_device()
+    // re-arms it; but an announce can be missed (it is a single broadcast), so also ask again with a
+    // growing back-off instead of waiting forever.
+    if (s.rearmed) return;
+    const std::uint32_t delay_ms = lookup_retry_ms(s.lookup_tries);
+    if (s.lookup_tries < 255) ++s.lookup_tries;
     ESP_LOGW(kTag,
-             "NWK addr lookup failed for entity 0x%04x (offline?) — will rearm on announce",
-             static_cast<unsigned>(s.entity_id));
+             "NWK addr lookup failed for entity 0x%04x (offline?) — retry in %us, or re-arm on announce",
+             static_cast<unsigned>(s.entity_id), static_cast<unsigned>(delay_ms / 1000));
+    esp_zb_scheduler_alarm(rearm_retry_cb, static_cast<std::uint8_t>(idx), delay_ms);
     return;
   }
 
@@ -1160,6 +1193,8 @@ void on_nwk_addr_resp(esp_zb_zdp_status_t status, esp_zb_zdo_nwk_addr_rsp_t* res
   // No cached STATE is published here: after a chip reboot the first value the brain sees must
   // be the device's real one (the read below), so its reconciler can tell a device that came
   // back in a different state from one that never changed.
+  s.rearmed = true;
+  s.lookup_tries = 0;
   setup_reporting(s);
   read_device_state(s, (s.caps & kColorBits) != 0);
   ESP_LOGI(kTag, "re-armed entity 0x%04x (device 0x%04x)",
@@ -1181,13 +1216,7 @@ void rearm_restored(std::uint8_t /*unused*/) {
              static_cast<unsigned>(s.entity_id),
              s.ieee[7], s.ieee[6], s.ieee[5], s.ieee[4],
              s.ieee[3], s.ieee[2], s.ieee[1], s.ieee[0]);
-    esp_zb_zdo_nwk_addr_req_param_t req{};
-    std::memcpy(req.ieee_addr_of_interest, s.ieee, sizeof(esp_zb_ieee_addr_t));
-    req.dst_nwk_addr = 0xFFFF;  // broadcast — device may have a different short addr
-    req.request_type = 0;       // single-device response
-    req.start_index = 0;
-    esp_zb_zdo_nwk_addr_req(&req, on_nwk_addr_resp,
-                             reinterpret_cast<void*>(static_cast<std::uintptr_t>(i)));
+    send_nwk_lookup(i);
     ++n;
   }
   if (n > 0)
@@ -1389,6 +1418,8 @@ void log_zcl_string(std::uint16_t src, const char* what,
 
 // An entity just became real (new, or a refreshed re-announce): arm it and tell the brain.
 void bring_up_entity(ZbEntity& e, bool color_caps) {
+  e.rearmed = true;  // a pending boot lookup retry has nothing left to do
+  e.lookup_tries = 0;
   setup_reporting(e);
   read_device_state(e, color_caps);
   send_hello();  // topology changed -> brain re-QUERYs and gets this entity
