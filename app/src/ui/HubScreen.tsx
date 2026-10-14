@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import { describeLocation, locationRequest } from '../model/automation';
 import { chipSummary } from '../model/health';
@@ -73,6 +73,63 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
   );
 }
 
+// The setup code is from the esp-matter test DAC baked into the thread-c6 firmware.
+// In a production build this would come from the hub via the protocol.
+const MATTER_SETUP_CODE = '3497-0112-332';
+
+function MatterBridgeCard({ home }: { home: HomeState }) {
+  const t = useTheme();
+  const tone = { good: t.good, warn: t.warn, bad: t.bad };
+  // thread-c6 is chip 0x02
+  const chip = home.chips.find((c) => c.id === 2);
+  const s = chip ? chipSummary(chip) : null;
+
+  const shareCode = () =>
+    void Share.share({ message: MATTER_SETUP_CODE, title: 'Matter setup code' });
+
+  const openHome = () => void Linking.openURL('x-apple-com-home://');
+
+  return (
+    <View accessibilityLabel="Apple Home bridge" style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+      <View style={styles.chipHead}>
+        <Text style={[styles.h2, { color: t.text }]}>Apple Home bridge</Text>
+        {s && <Text style={{ color: tone[s.tone], fontWeight: '600' }}>● {s.status}</Text>}
+        {!chip && <Text style={{ color: t.muted }}>Not seen yet</Text>}
+      </View>
+
+      <Text style={{ color: t.muted, fontSize: 13 }}>
+        Add this hub to Apple Home once — all Zigbee devices will appear inside it automatically.
+      </Text>
+
+      <Text style={[styles.step, { color: t.muted }]}>
+        Home app → + → Add Accessory → More options → enter code:
+      </Text>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Copy setup code"
+        onPress={shareCode}
+        style={[styles.codeBox, { backgroundColor: t.bg, borderColor: t.border }]}
+      >
+        <Text selectable style={[styles.code, { color: t.text }]}>{MATTER_SETUP_CODE}</Text>
+        <Text style={{ color: t.accent, fontSize: 13 }}>Share</Text>
+      </Pressable>
+
+      {Platform.OS === 'ios' && chip?.status === 'ready' && (
+        <View style={[styles.row, { marginTop: 4 }]}>
+          <Button label="Open Apple Home" onPress={openHome} />
+        </View>
+      )}
+
+      {chip?.status !== 'ready' && (
+        <Text style={{ color: t.muted, fontSize: 12 }}>
+          Wait for the bridge chip to come online before commissioning.
+        </Text>
+      )}
+    </View>
+  );
+}
+
 export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands }) {
   const t = useTheme();
   const hub = home.hub;
@@ -94,6 +151,7 @@ export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeStat
 
       <WifiCard home={home} commands={commands} />
       <LocationCard home={home} commands={commands} />
+      <MatterBridgeCard home={home} />
 
       <Text style={[styles.section, { color: t.muted }]}>CHIPS</Text>
       {home.chips.length === 0 && <Text style={{ color: t.muted }}>No chips reported yet.</Text>}
@@ -127,4 +185,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
   chipHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   change: { marginTop: 14, borderWidth: 1, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  step: { fontSize: 13, marginTop: 4 },
+  codeBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+             borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginTop: 4 },
+  code: { fontSize: 22, fontWeight: '700', letterSpacing: 2, fontVariant: ['tabular-nums'] },
 });
