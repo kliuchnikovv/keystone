@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "esp_console.h"
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -888,9 +889,40 @@ void event_cb(const ChipDeviceEvent* event, intptr_t) {
 
 }  // namespace
 
+static int cmd_factoryreset(int, char**) {
+  printf("Scheduling Matter factory reset...\n");
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+  chip::Server::GetInstance().ScheduleFactoryReset();
+  return 0;
+}
+
+static int cmd_reboot(int, char**) {
+  printf("Rebooting...\n");
+  vTaskDelay(pdMS_TO_TICKS(200));
+  esp_restart();
+  return 0;
+}
+
+static void start_console() {
+  esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+  repl_cfg.prompt = "thread>";
+  repl_cfg.max_cmdline_length = 128;
+  esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+  esp_console_repl_t* repl = nullptr;
+  if (esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl) != ESP_OK) return;
+  esp_console_register_help_command();
+  static const esp_console_cmd_t cmds[] = {
+      {"factoryreset", "Erase Matter commissioning data and reboot", nullptr, cmd_factoryreset, nullptr},
+      {"reboot",       "Reboot the chip",                           nullptr, cmd_reboot,        nullptr},
+  };
+  for (const auto& c : cmds) esp_console_cmd_register(&c);
+  esp_console_start_repl(repl);
+}
+
 extern "C" void app_main() {
   ESP_ERROR_CHECK(nvs_flash_init());
   g_boot_id = fw::next_boot_id();
+  start_console();
 
   // --- UART bridge to the brain ---
   static fw::EspUartLink link([] {
