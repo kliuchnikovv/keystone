@@ -384,22 +384,34 @@ ZbEntity* register_entity(std::uint16_t short_addr, const esp_zb_ieee_addr_t iee
     persist_entities();
     return e;
   }
+  // Prefer a previously-unpaired slot for the same IEEE+endpoint: restores the original entity_id
+  // so names and rules survive an unpair+re-pair cycle.
+  ZbEntity* reclaim = nullptr;
+  bool same_device = false;
   for (auto& e : g_ent) {
     if (e.in_use) continue;
-    std::memset(&e, 0, sizeof(e));
-    e.in_use = true;
-    e.type = type;
-    e.entity_id = g_next_entity_id++;
-    e.short_addr = short_addr;
-    std::memcpy(e.ieee, ieee, sizeof(esp_zb_ieee_addr_t));
-    e.endpoint = endpoint;
-    e.caps = caps;
-    e.ac_power_mul = e.ac_power_div = 1;
-    e.metering_mul = e.metering_div = 1;
-    persist_entities();
-    return &e;
+    if (reclaim == nullptr) reclaim = &e;
+    if (e.entity_id != 0 && e.endpoint == endpoint &&
+        std::memcmp(e.ieee, ieee, sizeof(esp_zb_ieee_addr_t)) == 0) {
+      reclaim = &e;
+      same_device = true;
+      break;
+    }
   }
-  return nullptr;  // table full
+  if (reclaim == nullptr) return nullptr;  // table full
+  const std::uint16_t restored_id = same_device ? reclaim->entity_id : g_next_entity_id++;
+  std::memset(reclaim, 0, sizeof(*reclaim));
+  reclaim->in_use = true;
+  reclaim->type = type;
+  reclaim->entity_id = restored_id;
+  reclaim->short_addr = short_addr;
+  std::memcpy(reclaim->ieee, ieee, sizeof(esp_zb_ieee_addr_t));
+  reclaim->endpoint = endpoint;
+  reclaim->caps = caps;
+  reclaim->ac_power_mul = reclaim->ac_power_div = 1;
+  reclaim->metering_mul = reclaim->metering_div = 1;
+  persist_entities();
+  return reclaim;
 }
 
 // ---- Bus (brain) side -----------------------------------------------------
