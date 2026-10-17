@@ -58,6 +58,7 @@ extern "C" {
 #include "hubproto/payload.hpp"
 #include "hubproto/units.hpp"
 #include "hubproto/version.hpp"
+#include "status_led.hpp"
 
 namespace zcl = core::zcl;
 namespace A = hubproto::attr;
@@ -435,6 +436,17 @@ void publish_locked(const hubproto::Header& h, const std::uint8_t* buf,
   xSemaphoreGive(g_bus_mtx);
 }
 
+void led_tick_cb(void* /*arg*/) {
+  status_led::tick(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+}
+
+void pair_led_end_cb(void* /*arg*/) {
+  if (status_led::current() == status_led::State::Pairing)
+    status_led::set(status_led::State::Ready);
+}
+
+esp_timer_handle_t g_pair_led_timer = nullptr;
+
 void heartbeat_cb(void* /*arg*/) {
   const std::uint32_t now_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
   hubproto::ChipSelf self{};
@@ -810,6 +822,12 @@ void handle_meta(std::uint8_t attr, std::uint16_t arg) {
         esp_zb_lock_release();
       }
       ESP_LOGI(kTag, "meta: pair (open network for %us)", static_cast<unsigned>(sec));
+      status_led::set(status_led::State::Pairing);
+      if (g_pair_led_timer != nullptr) {
+        esp_timer_stop(g_pair_led_timer);
+        esp_timer_start_once(g_pair_led_timer,
+                             static_cast<std::uint64_t>(sec) * 1000000);
+      }
       break;
     }
     case kMetaUnpair: {
@@ -1729,6 +1747,7 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
 
 // Kick rearm + open joins after the network is up (shared by formation and reboot paths).
 void network_ready() {
+  status_led::set(status_led::State::Ready);
   open_network_for_join();
   bool have_restored = false;
   for (const auto& s : g_ent) {
@@ -1861,6 +1880,7 @@ void esp_zb_task(void* /*pv*/) {
 
 extern "C" void app_main(void) {
   ESP_ERROR_CHECK(nvs_flash_init());
+  status_led::init();
   g_boot_id = fw::next_boot_id();  // persisted reboot counter (SPEC Phase 5)
   restore_entities();  // re-declare still-joined devices without a re-pair
 
@@ -1922,6 +1942,23 @@ extern "C" void app_main(void) {
   };
   ESP_ERROR_CHECK(esp_timer_create(&hb_args, &hb_timer));
   ESP_ERROR_CHECK(esp_timer_start_periodic(hb_timer, 5000000));  // 5 s
+
+  // LED tick (50 ms for smooth pulsing) + one-shot pair-end timer.
+  static esp_timer_handle_t led_timer;
+  const esp_timer_create_args_t led_args{
+      .callback = &led_tick_cb, .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK, .name = "led",
+      .skip_unhandled_events = true,
+  };
+  ESP_ERROR_CHECK(esp_timer_create(&led_args, &led_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(led_timer, 50000));  // 50 ms
+
+  const esp_timer_create_args_t pair_led_args{
+      .callback = &pair_led_end_cb, .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK, .name = "pair_led",
+      .skip_unhandled_events = true,
+  };
+  ESP_ERROR_CHECK(esp_timer_create(&pair_led_args, &g_pair_led_timer));
 
   // Then start the Zigbee coordinator.
   esp_zb_platform_config_t config{};
