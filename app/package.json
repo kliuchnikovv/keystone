@@ -12,6 +12,10 @@
     "hub-check": "tsx tools/hub-check.ts",
     "discover": "tsx tools/discover.ts",
     "setup-check": "tsx tools/setup-check.ts",
+    "console": "tsx tools/console.ts",
+    "relay-server": "tsx tools/relay-server.ts",
+    "cloud-relay": "tsx tools/cloud-relay.ts",
+    "relay-tunnel": "tsx tools/relay-tunnel.ts",
     "start": "expo start",
     "web": "expo start --web",
     "export:web": "expo export --platform web"

@@ -418,6 +418,11 @@ sink on the CAM is not started.
   management requests (names, rules, schedules, timers, scenes, pair/unpair/identify);
   an Expo app (devices, automations, scenes, hub health) and a mock hub. Design and
   status: [docs/app-protocol.md](docs/app-protocol.md). Not verified on a phone yet.
+- **Phase 10 — Remote access (relay).** The brain connects out to a relay server for
+  access from outside the LAN. A cloud relay exposes HTTP+SSE for the app; a tunnel agent
+  is the alternative for LAN-only deployments. The hub's token-based auth works end-to-end.
+  An interactive console tool speaks the app protocol. Design:
+  [docs/app-protocol.md §13](docs/app-protocol.md). Not verified on hardware.
 
 ---
 

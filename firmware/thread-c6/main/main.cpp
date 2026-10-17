@@ -50,6 +50,7 @@
 #include <app_bridged_device.h>
 #include "keystone_bridged_device.hpp"
 
+#include "hal/brownout_ll.h"
 #include "esp_ota_sink.hpp"
 #include "esp_timer.h"
 #include "esp_uart_link.hpp"
@@ -565,6 +566,10 @@ void emit_button_event(std::uint16_t ep, A::ButtonEvent ev) {
 
 void update_attr(std::uint16_t ep, std::uint32_t cluster_id, std::uint32_t attr_id,
                  esp_matter_attr_val_t v, const char* what, long shown) {
+  // attribute::update touches the Matter data model — must hold the stack lock
+  // when called from a non-Matter task (e.g. the UART RX task), otherwise the
+  // commissioning PASE handshake can corrupt state and crash.
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
   const esp_err_t err = attribute::update(ep, cluster_id, attr_id, &v);
   ESP_LOGI(kTag, "STATE -> Matter ep=%u %s=%ld%s", static_cast<unsigned>(ep), what, shown,
            err == ESP_OK ? "" : " (update failed)");
@@ -694,7 +699,10 @@ void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& 
       esp_matter_attr_val_t mv{};
       mv.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT64;
       mv.val.i64 = mw;
-      attribute::update(ep, kEpmClusterId, kEpmAttrActivePower, &mv);
+      {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        attribute::update(ep, kEpmClusterId, kEpmAttrActivePower, &mv);
+      }
       ESP_LOGI(kTag, "STATE -> Matter ep=%u ActivePower=%lld mW", static_cast<unsigned>(ep),
                static_cast<long long>(mw));
       break;
@@ -920,6 +928,8 @@ static void start_console() {
 }
 
 extern "C" void app_main() {
+  brownout_ll_bod_enable(false);
+  brownout_ll_ana_reset_enable(false);
   ESP_ERROR_CHECK(nvs_flash_init());
   g_boot_id = fw::next_boot_id();
   start_console();

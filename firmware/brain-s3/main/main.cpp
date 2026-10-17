@@ -81,6 +81,8 @@
 #include "core/app_requests.hpp"
 #include "core/event_log.hpp"
 #include "ota_job.hpp"
+#include "relay_client.hpp"
+#include "status_led.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
 #if __has_include("wifi_secrets.h")
@@ -638,12 +640,22 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
   } else if (h.type == hubproto::MsgType::Hello && h.chip_id == kThreadChipId) {
     // Matter just came up — kick Zigbee to re-DECLARE so the mirror can
     // create bridged endpoints for every entity we already know about.
-    hubproto::Header q{};
-    q.version = hubproto::kProtocolVersion;
-    q.type = hubproto::MsgType::Query;
-    q.chip_id = kZigbeeChipId;
-    bus->publish(q, nullptr, 0);
-    ESP_LOGI(kTag, "kick Zigbee QUERY because Matter came up");
+    // Debounce: if thread-c6 is crash-looping, don't QUERY zigbee on every
+    // reboot — that can cascade and crash zigbee too.
+    static std::uint32_t s_last_kick_ms = 0;
+    const std::uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    if (now_ms - s_last_kick_ms >= 10000u || s_last_kick_ms == 0) {
+      s_last_kick_ms = now_ms;
+      hubproto::Header q{};
+      q.version = hubproto::kProtocolVersion;
+      q.type = hubproto::MsgType::Query;
+      q.chip_id = kZigbeeChipId;
+      bus->publish(q, nullptr, 0);
+      ESP_LOGI(kTag, "kick Zigbee QUERY because Matter came up");
+    } else {
+      ESP_LOGD(kTag, "skip Zigbee QUERY (debounce, last kick %u ms ago)",
+               static_cast<unsigned>(now_ms - s_last_kick_ms));
+    }
   } else if (h.type == hubproto::MsgType::Command && h.chip_id == kThreadChipId) {
     // A Matter controller (Apple Home...) asked for this: the hub's intent.
     hubproto::ValueType vt{};
@@ -2289,6 +2301,37 @@ int cmd_ota(int argc, char** argv) {
 int cmd_webtoken(int argc, char** argv);  // defined with the app glue, below
 int cmd_setup(int argc, char** argv);
 int cmd_webplain(int argc, char** argv);
+int cmd_relay(int argc, char** argv);
+
+int cmd_led(int argc, char** argv) {
+  if (argc == 1) {
+    const auto s = status_led::current();
+    const char* name = "?";
+    switch (s) {
+      case status_led::State::Booting:  name = "booting (blue)"; break;
+      case status_led::State::Healthy:  name = "healthy (green)"; break;
+      case status_led::State::Degraded: name = "degraded (amber)"; break;
+      case status_led::State::Offline:  name = "offline (red)"; break;
+      case status_led::State::Setup:    name = "setup (blue pulse)"; break;
+      case status_led::State::Pairing:  name = "pairing (green pulse)"; break;
+      case status_led::State::Off:      name = "off"; break;
+    }
+    printf("status LED: %s\n", name);
+    return 0;
+  }
+  if (std::strcmp(argv[1], "off") == 0) {
+    status_led::set(status_led::State::Off);
+    printf("LED off (stays off until `led on` or reboot)\n");
+    return 0;
+  }
+  if (std::strcmp(argv[1], "on") == 0) {
+    status_led::set(status_led::State::Booting);
+    printf("LED back to automatic\n");
+    return 0;
+  }
+  printf("usage: led [on|off]\n");
+  return 1;
+}
 
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
@@ -2343,6 +2386,8 @@ void start_console() {
   reg_cmd("desired", "desired [clear <id_or_name>|all] - what the hub last asked each attribute to be", &cmd_desired);
   reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
+  reg_cmd("relay", "relay [<url> <secret> | clear] - remote access tunnel to a relay server", &cmd_relay);
+  reg_cmd("led", "led [on|off] - status LED (green=healthy, amber=degraded, red=offline)", &cmd_led);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }
@@ -2350,6 +2395,24 @@ void start_console() {
 }  // namespace
 
 namespace {
+
+// ---- Hub send/broadcast dispatch (local + relay) ------------------------------------
+// Replies and broadcasts go to local WebSocket clients (appsrv) AND relay-connected
+// remote clients (relay). The fd sign distinguishes them: real socket fds are ≥ 0,
+// relay virtual fds are ≤ relay::kFdBase (-100).
+constexpr int kBroadcastFd = -1;  // sentinel for app_send_snapshot's "send to everyone" mode
+
+void hub_send(int fd, const char* data, std::size_t len) {
+  if (relay::is_relay_fd(fd)) relay::send(fd, data, len);
+  else appsrv::send(fd, data, len);
+}
+void hub_broadcast(const char* data, std::size_t len) {
+  appsrv::broadcast(data, len);
+  relay::broadcast(data, len);
+}
+std::size_t hub_client_count() {
+  return appsrv::client_count() + relay::client_count();
+}
 
 // ---- App protocol glue (docs/app-protocol.md) ---------------------------------------
 // Everything here that touches core objects runs in the main loop. The two hooks that
@@ -2395,7 +2458,7 @@ void app_send_ack(int fd, std::int32_t id, hubproto::CmdAckStatus status) {
   char b[96];
   core::JsonWriter w(b, sizeof(b));
   core::app::encode_ack(w, id, status);
-  if (w.ok()) appsrv::send(fd, b, w.size());
+  if (w.ok()) hub_send(fd, b, w.size());
 }
 
 void app_on_cmd_result(std::uint16_t seq, hubproto::CmdAckStatus status) {
@@ -2615,8 +2678,8 @@ void app_send_snapshot(int fd, const AppSource& src) {
       ESP_LOGE(kTag, "app: snapshot part %u did not fit a frame", static_cast<unsigned>(cur.part));
       return;
     }
-    if (fd < 0) appsrv::broadcast(buf, w.size());
-    else appsrv::send(fd, buf, w.size());
+    if (fd == kBroadcastFd) hub_broadcast(buf, w.size());
+    else hub_send(fd, buf, w.size());
   }
 }
 
@@ -2626,7 +2689,7 @@ void app_handle_cmd(const appsrv::Inbound& in, const Registry& reg, Dispatcher& 
   core::JsonWriter w(b, sizeof(b));
   auto fail = [&](Err e, const char* msg = nullptr) {
     encode_error(w, in.id, e, msg);
-    appsrv::send(in.fd, b, w.size());
+    hub_send(in.fd, b, w.size());
   };
   const auto entity = static_cast<std::uint16_t>(in.entity);
   const auto attr = static_cast<std::uint8_t>(in.attr);
@@ -2655,7 +2718,7 @@ void app_handle_cmd(const appsrv::Inbound& in, const Registry& reg, Dispatcher& 
   if (!sent && !done.delivered) return fail(Err::Internal, "command queue full");
 
   encode_accepted(w, in.id, seq);
-  appsrv::send(in.fd, b, w.size());
+  hub_send(in.fd, b, w.size());
   ESP_LOGI(kTag, "app: cmd id=%d entity=0x%04x attr=0x%02x seq=%u", static_cast<int>(in.id),
            static_cast<unsigned>(entity), static_cast<unsigned>(attr), static_cast<unsigned>(seq));
   if (done.delivered) {
@@ -2729,7 +2792,7 @@ void history_push(Scenes& scenes, std::uint32_t now_ms) {
   xSemaphoreTake(g_ev_mu, portMAX_DELAY);
   const std::uint32_t latest = g_ev_ring.latest();
   std::size_t n = 0;
-  if (appsrv::client_count() == 0) {
+  if (hub_client_count() == 0) {
     g_ev_pushed = latest;
   } else {
     n = g_ev_ring.read_after(g_ev_pushed, core::app::kHistoryPage, page);
@@ -2747,7 +2810,7 @@ void history_push(Scenes& scenes, std::uint32_t now_ms) {
                                    return found != nullptr ? found->name : nullptr;
                                  },
                                  &scenes);
-  if (w.ok()) appsrv::broadcast(hb, w.size());
+  if (w.ok()) hub_broadcast(hb, w.size());
 }
 
 void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
@@ -2849,7 +2912,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
       core::JsonWriter sw(sb, sizeof(sb));
       encode_res_networks(sw, in.id, nets, n);
       if (sw.ok()) {
-        appsrv::send(in.fd, sb, sw.size());
+        hub_send(in.fd, sb, sw.size());
         ESP_LOGI(kTag, "app: req wifi.scan -> %u network(s)", static_cast<unsigned>(n));
         return;
       }
@@ -2882,7 +2945,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
                          },
                          &scenes);
       if (hw.ok()) {
-        appsrv::send(in.fd, hb, hw.size());
+        hub_send(in.fd, hb, hw.size());
         ESP_LOGI(kTag, "app: req history -> %u event(s)", static_cast<unsigned>(n));
         return;
       }
@@ -2946,7 +3009,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else {
     encode_res_error(w, in.id, o.err, o.msg[0] != '\0' ? o.msg : nullptr);
   }
-  appsrv::send(in.fd, b, w.size());
+  hub_send(in.fd, b, w.size());
   ESP_LOGI(kTag, "app: req %s -> %s%s%s", op, o.ok ? "ok" : err_name(o.err), o.msg[0] ? " " : "", o.msg);
 }
 
@@ -3069,6 +3132,42 @@ const char* app_mode_text() {
   return "stopped";
 }
 
+int cmd_relay(int argc, char** argv) {
+  if (argc == 1) {
+    static char buf[384];
+    relay::describe(buf, sizeof(buf));
+    printf("%s", buf);
+    return 0;
+  }
+  if (std::strcmp(argv[1], "clear") == 0) {
+    relay::stop();
+    relay::clear_config();
+    printf("relay credentials erased; tunnel stopped\n");
+    return 0;
+  }
+  if (argc != 3) {
+    printf("usage:\n"
+           "  relay                          show status\n"
+           "  relay <url> <secret>           save credentials and connect\n"
+           "  relay clear                    disconnect and erase credentials\n"
+           "  url example: wss://relay.example.com:9090/tunnel/my-hub\n");
+    return 1;
+  }
+  if (!relay::configure(argv[1], argv[2])) {
+    printf("bad relay credentials\n");
+    return 1;
+  }
+  char tok[core::app::kMaxToken + 1] = {};
+  const bool have = restore_webtoken(tok, sizeof(tok));
+  if (relay::running()) relay::stop();
+  if (relay::start(have ? tok : nullptr, &app_hub_info)) {
+    printf("relay configured and connecting to %s\n", argv[1]);
+  } else {
+    printf("relay configured but could not start (will retry on next boot)\n");
+  }
+  return 0;
+}
+
 // webplain [on|off]: development switch. With TLS available the app server speaks only
 // wss:// unless this is on; without a TLS identity in the firmware it is always plain.
 int cmd_webplain(int argc, char** argv) {
@@ -3100,13 +3199,14 @@ int cmd_webtoken(int argc, char** argv) {
   const bool have = restore_webtoken(cur, sizeof(cur));
   if (argc == 1) {
     printf("web token: %s; app server: %s on port %d, %u client(s) connected\n",
-           have ? "set" : "NOT set", app_mode_text(), appsrv::port(), static_cast<unsigned>(appsrv::client_count()));
+           have ? "set" : "NOT set", app_mode_text(), appsrv::port(), static_cast<unsigned>(hub_client_count()));
     if (appsrv::tls_available()) printf("certificate SHA-256 (what apps pin): %s\n", appsrv::cert_fingerprint());
     return 0;
   }
   if (std::strcmp(argv[1], "clear") == 0) {
     persist_webtoken(nullptr);
     appsrv::stop();
+    relay::set_token(nullptr);
     printf("web token cleared; app server stopped\n");
     return 0;
   }
@@ -3126,6 +3226,8 @@ int cmd_webtoken(int argc, char** argv) {
     printf("token saved, but the app server did not start\n");
     return 1;
   }
+  relay::set_token(argv[1]);
+  if (!relay::running()) relay::start(argv[1], &app_hub_info);
   printf("token set; app server (re)started: %s on port %d — existing connections were closed\n",
          app_mode_text(), appsrv::port());
   if (appsrv::mode() == appsrv::Mode::Tls) printf("certificate SHA-256: %s\n", appsrv::cert_fingerprint());
@@ -3202,6 +3304,8 @@ void setup_service(std::uint32_t now) {
   if (g_new_token.pending && static_cast<std::int32_t>(now - g_new_token.at) >= 0) {
     g_new_token.pending = false;
     if (!appsrv::start(g_new_token.token, &app_hub_info, restore_webplain())) ESP_LOGE(kTag, "setup: the app server did not restart");
+    relay::set_token(g_new_token.token);
+    if (!relay::running()) relay::start(g_new_token.token, &app_hub_info);
     std::memset(g_new_token.token, 0, sizeof(g_new_token.token));
   }
   const int f = g_setup_force.exchange(0);
@@ -3243,6 +3347,8 @@ int cmd_setup(int argc, char** argv) {
 }  // namespace
 
 extern "C" void app_main(void) {
+  status_led::init();
+
   // Инициализация Wi-Fi
   wifi_init();
 
@@ -3372,11 +3478,13 @@ extern "C" void app_main(void) {
   g_app_pending_mu = xSemaphoreCreateMutex();
   {
     char tok[core::app::kMaxToken + 1] = {};
-    if (restore_webtoken(tok, sizeof(tok))) {
+    bool have = restore_webtoken(tok, sizeof(tok));
+    if (have) {
       if (!appsrv::start(tok, &app_hub_info, restore_webplain())) ESP_LOGE(kTag, "app server failed to start");
     } else {
       ESP_LOGI(kTag, "app server off: no token (set one with `webtoken <token>`)");
     }
+    relay::start(have ? tok : nullptr, &app_hub_info);
   }
   std::uint32_t app_last_check_ms = 0;
   std::uint32_t app_last_fp = 0;
@@ -3459,17 +3567,17 @@ extern "C" void app_main(void) {
         core::JsonWriter w(b, sizeof(b));
         const char* tz = std::getenv("TZ");
         core::app::encode_time(w, static_cast<std::int64_t>(now), tz != nullptr ? tz : "UTC", true);
-        if (w.ok()) appsrv::broadcast(b, w.size());
+        if (w.ok()) hub_broadcast(b, w.size());
       }
       g_hub_dirty = true;  // today's sun becomes known with the clock
     }
-    if (g_hub_dirty.exchange(false) && appsrv::client_count() > 0) {
+    if (g_hub_dirty.exchange(false) && hub_client_count() > 0) {
       char b[320];
       core::JsonWriter w(b, sizeof(b));
       core::app::HubInfo info{};
       app_hub_info(info);
       core::app::encode_hub(w, info);
-      if (w.ok()) appsrv::broadcast(b, w.size());
+      if (w.ok()) hub_broadcast(b, w.size());
     }
 
     if (!announced_zb && coord.chip_ready(kZigbeeChipId)) {
@@ -3576,11 +3684,11 @@ extern "C" void app_main(void) {
       for (int n = 0; n < 16 && xQueueReceive(g_app_ev_q, &ev, 0) == pdTRUE; ++n) {
         const auto* e = reg.find(ev.entity);
         if (e == nullptr || e->device_type == hubproto::DeviceType::Chip) continue;
-        if (appsrv::client_count() == 0) continue;
+        if (hub_client_count() == 0) continue;
         char b[160];
         core::JsonWriter w(b, sizeof(b));
         core::app::encode_state(w, ev.entity, ev.attr, ev.value);
-        if (w.ok()) appsrv::broadcast(b, w.size());
+        if (w.ok()) hub_broadcast(b, w.size());
       }
       history_push(scene_store, t);
       mdns_sync();
@@ -3588,7 +3696,7 @@ extern "C" void app_main(void) {
       setup_service(t);
       if (appsrv::running()) {
         appsrv::tick(t);
-        if (appsrv::client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
+        if (hub_client_count() > 0 && (t - app_last_check_ms >= 1000 || g_app_force_check.exchange(false))) {
           app_last_check_ms = t;
           app_expire_pending(t);
           AppSource src(reg, rules, schedule_table, timer_table, scene_store, coord, t);
@@ -3608,7 +3716,7 @@ extern "C" void app_main(void) {
               char b[256];
               core::JsonWriter w(b, sizeof(b));
               core::app::encode_chip_event(w, cv);
-              if (w.ok()) appsrv::broadcast(b, w.size());
+              if (w.ok()) hub_broadcast(b, w.size());
               std::snprintf(cs.status, sizeof(cs.status), "%s", cv.status);
               cs.boot_id = cv.boot_id;
               cs.reboots = cv.reboots;
@@ -3617,8 +3725,7 @@ extern "C" void app_main(void) {
             }
           }
         }
-        appsrv::Inbound in;
-        while (appsrv::next(in)) {
+        auto drain_inbound = [&](appsrv::Inbound& in) {
           if (in.kind == appsrv::Inbound::Kind::Connected && in.setup_only) {
             // A setup client gets the welcome and nothing about the home.
           } else if (in.kind == appsrv::Inbound::Kind::Connected) {
@@ -3631,7 +3738,11 @@ extern "C" void app_main(void) {
           } else {
             app_handle_cmd(in, reg, disp, t);
           }
-        }
+        };
+        appsrv::Inbound in;
+        while (appsrv::next(in)) drain_inbound(in);
+        while (relay::next(in)) drain_inbound(in);
+        relay::tick(t);
       }
     }
 
@@ -4262,6 +4373,30 @@ extern "C" void app_main(void) {
       }
       xSemaphoreGive(r->done);
     }
+
+    // ---- Status LED: derive state from Wi-Fi + chip health ----
+    if (status_led::current() != status_led::State::Off) {
+      status_led::State ls;
+      if (g_ap_up && !s_wifi_up) {
+        ls = status_led::State::Setup;
+      } else {
+        const bool wifi = s_wifi_up.load();
+        const bool zb_ok = coord.chip_ready(kZigbeeChipId);
+        const bool th_ok = coord.chip_ready(kThreadChipId);
+        const auto* zi = g_monitor->info(kZigbeeChipId);
+        const auto* ti = g_monitor->info(kThreadChipId);
+        const bool zb_silent = zi != nullptr && zi->silent;
+        const bool th_silent = ti != nullptr && ti->silent;
+        if (wifi && zb_ok && th_ok)
+          ls = status_led::State::Healthy;
+        else if (!wifi && (zb_silent || !zb_ok) && (th_silent || !th_ok))
+          ls = status_led::State::Offline;
+        else
+          ls = status_led::State::Degraded;
+      }
+      status_led::set(ls);
+    }
+    status_led::tick(t);
 
     vTaskDelay(pdMS_TO_TICKS(100));
   }

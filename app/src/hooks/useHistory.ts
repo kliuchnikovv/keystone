@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeError } from '../model/format';
 import { emptyHistory, mergeNewest, mergeOlder, mergePush, parseHistoryPage, type HistoryList } from '../model/history';
-import type { HubClient } from '../protocol/client';
 import type { ConnectionStatus } from '../protocol/store';
+import type { HubConnection } from './useHub';
 
 export interface History extends HistoryList {
   /** The first page has arrived (an empty history is then really empty). */
@@ -25,7 +25,7 @@ const SAFETY_POLL_MS = 30_000;
  * come on demand. The hub restarts its sequence numbers when it reboots, so the list is dropped on every
  * reconnect.
  */
-export function useHistory(client: HubClient, status: ConnectionStatus, entity: number | null, pollMs: number = POLL_MS): History {
+export function useHistory(client: HubConnection, status: ConnectionStatus, entity: number | null, pollMs: number = POLL_MS): History {
   const [list, setList] = useState<HistoryList>(emptyHistory);
   const [loaded, setLoaded] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);

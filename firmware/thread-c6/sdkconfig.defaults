@@ -156,3 +156,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 # We drive the co-processor over our own UART bus, not the Matter shell.
 CONFIG_ENABLE_CHIP_SHELL=n
+# Lower brownout detector threshold to level 1 (~2.58 V) from the default
+# level 7 (~3.10 V). The C6-DevKitC on USB draws enough peak current during
+# BLE fast-advertising + Thread routing to hit the 3.10 V threshold.
+# Level 1 gives more headroom without risking NVS corruption on a USB dev board.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_1=y
+# Slow BLE fast-advertising from 25ms to 250ms: halves peak power draw
+# during the uncommissioned window, further reducing BOD tripping.
+CONFIG_BLE_FAST_ADVERTISING_INTERVAL_MIN=400
+CONFIG_BLE_FAST_ADVERTISING_INTERVAL_MAX=400

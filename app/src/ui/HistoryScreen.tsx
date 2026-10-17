@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useHistory } from '../hooks/useHistory';
 import { dayOf, describeEvent, entityName, formatEventTime, type Recorded } from '../model/history';
-import type { HubClient } from '../protocol/client';
+import type { HubConnection } from '../hooks/useHub';
 import type { HomeState } from '../protocol/store';
 import { Button } from './controls';
 import { useTheme } from './theme';
@@ -11,7 +11,7 @@ import { useTheme } from './theme';
  * What the hub has done and seen, newest first: device changes, the commands it sent, rules, schedules, timers
  * and scenes that ran, chips going quiet, restarts. Tap a row about a device to see only that device.
  */
-export function HistoryScreen({ home, client, pollMs }: { home: HomeState; client: HubClient; pollMs?: number }) {
+export function HistoryScreen({ home, client, pollMs }: { home: HomeState; client: HubConnection; pollMs?: number }) {
   const t = useTheme();
   const [entity, setEntity] = useState<number | null>(null);
   const h = useHistory(client, home.status, entity, pollMs);

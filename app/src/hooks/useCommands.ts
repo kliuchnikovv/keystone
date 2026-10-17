@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { HubClient } from '../protocol/client';
 import type { Value } from '../protocol/messages';
+import type { HubConnection } from './useHub';
 import { describeAck, describeError } from '../model/format';
 
 export interface Commands {
@@ -18,7 +18,7 @@ export interface Commands {
 
 const MESSAGE_MS = 4500;
 
-export function useCommands(client: HubClient): Commands {
+export function useCommands(client: HubConnection): Commands {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState(0);

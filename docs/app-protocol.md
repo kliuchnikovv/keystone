@@ -500,5 +500,103 @@ code).
    same ring. Later: `command` events say who asked (`what`), new events are pushed (`type: "history"`), repeated
    `state` and crash-loop `chip` events are not recorded again.
 
-Out of scope for v1: remote (outside-LAN) access, multiple users/roles, push
+9. **Remote access / relay** (hub + relay server + app + console; NOT hardware-verified):
+   §13. The brain connects out to a relay server (`esp_websocket_client`); a cloud relay
+   exposes HTTP+SSE for apps; a console tool gives a full REPL. The connect screen has
+   Local / Cloud / Relay modes. 299 vitest, 349 host tests. Not tested on hardware or
+   end-to-end through a live relay.
+
+## 13. Remote access (relay)
+
+Remote access lets a phone or web app reach the hub from outside the LAN through a
+relay server on a VPS.  Three deployment options exist; all share the hub's token-based
+auth end-to-end — the relay sees ciphertext, never the token.
+
+### 13.1 Architecture options
+
+| Option | How it works | Needs a LAN device? |
+|--------|-------------|---------------------|
+| **ESP relay client** (built into `brain-s3`) | The brain opens a WebSocket to the relay directly, using the Mozilla CA bundle for TLS.  Remote clients appear in the main loop exactly like local ones (negative `fd`). | No |
+| **Tunnel agent** (`npm run relay-tunnel`) | A Node.js process on the hub's LAN (e.g. the Pi) connects to the relay and opens a local WebSocket to the hub for each remote client. Transparent. | Yes |
+| **Cloud relay** (`npm run cloud-relay`) | A relay that exposes an HTTP API + SSE to the app instead of a WebSocket per client.  `POST /hub/:id/auth` authenticates, `POST /hub/:id/cmd` and `/req` forward commands, `GET /hub/:id/events` is a live SSE stream. | No (hub connects via ESP or tunnel) |
+
+### 13.2 Wire protocol (relay ↔ hub/tunnel)
+
+Text WebSocket frames, same for all three options:
+
+| Frame | Direction | Meaning |
+|-------|-----------|---------|
+| `!auth:<secret>` | hub/tunnel → relay | First message; shared secret |
+| `!ok` | relay → hub/tunnel | Auth accepted |
+| `!open:<cid>` | relay → hub/tunnel | A remote client connected |
+| `!ready:<cid>` | hub/tunnel → relay | Local connection ready, start forwarding |
+| `!close:<cid>` | either | Client disconnected |
+| `!error:<msg>` | relay → hub/tunnel | Error message |
+| `<cid>:<payload>` | either | A hub-protocol JSON frame for client `<cid>` |
+
+The relay assigns a numeric `cid` (client id) to each remote client.  The hub/tunnel
+matches it to a virtual or local socket.  The hub-protocol payload (`hello`, `welcome`,
+`cmd`, `state`, …) is forwarded as-is — the relay does not inspect it.
+
+### 13.3 ESP relay client (brain-s3)
+
+`firmware/brain-s3/main/relay_client.{hpp,cpp}`.  Console:
+
+- `relay` — show status (url, connected/disconnected, authenticated, remote client count)
+- `relay <url> <secret>` — save credentials to NVS (`relay_url`, `relay_sec`), connect
+- `relay clear` — disconnect, erase NVS credentials
+
+Credentials persist across reboots.  The relay client starts automatically on boot if
+credentials are saved.  Virtual client fds are `relay::kFdBase - cid` (≤ −100) so dispatch
+routes them to `relay::send` instead of the local WebSocket server.
+
+The hub's `webtoken` is shared: when it changes, both the local server and the relay client
+get the update; clearing the token stops the local server but the relay stays connected
+(it just won't authenticate anyone).
+
+Uses `esp_websocket_client` (managed component `espressif/esp_websocket_client ≥ 1.0.0`)
+with the Mozilla CA root bundle for TLS to public relays.  Reconnects automatically
+(10 s timeout).  Up to 3 virtual clients; a 4th gets `!close`.  Hello timeout 5 s.
+
+### 13.4 Cloud relay API
+
+`app/tools/cloud-relay.ts`.  Run: `npm run cloud-relay -- --port 9090 --secret <secret>`.
+
+The hub connects the tunnel WebSocket to `ws(s)://host:port/tunnel/<hub-id>`.
+App clients use the HTTP API:
+
+| Method | Path | Auth | Body / result |
+|--------|------|------|---------------|
+| `POST` | `/hub/:id/auth` | — | `{token}` → `{session, messages: [...]}` |
+| `GET`  | `/hub/:id/state` | Bearer session | `{messages: [...]}` (cached snapshot) |
+| `POST` | `/hub/:id/cmd` | Bearer session | `{entity, attr, value}` → `{status}` |
+| `POST` | `/hub/:id/req` | Bearer session | `{op, args?}` → `{ok, result?}` |
+| `GET`  | `/hub/:id/events` | Bearer or `?session=` | SSE stream of live events |
+
+Sessions expire after 10 min of inactivity (no SSE, no pending requests).
+
+### 13.5 App client
+
+`app/src/protocol/cloud-client.ts` — `CloudClient` class with the same public interface
+as `HubClient` (`subscribe`, `getSnapshot`, `cmd`, `req`, `subscribeHistory`).  The
+connect screen has a **Cloud** mode (server + hub ID) and a **Relay** mode (direct WebSocket
+to the relay's `/client/<hub-id>` endpoint, works with the existing `HubClient`).
+`useHubClient` picks `CloudClient` or `HubClient` based on the URL shape.
+
+### 13.6 Console
+
+`app/tools/console.ts` — an interactive CLI for the hub over the app protocol.
+Run: `npm run console -- --url ws://hub:8080/ws --token <token>`.
+Supports all device, automation, hub and management commands (type `help`).
+Live state updates are printed as they happen (`--quiet` to suppress).
+
+### 13.7 Not verified / not done
+
+- The ESP relay client has not been tested on hardware (needs a reachable relay).
+- The cloud relay has no persistent state (sessions are in memory).
+- No auth rate limiting on the cloud relay (the hub has its own lockout).
+- No TLS termination: put the relay behind nginx/caddy in production.
+- The app's Cloud mode has not been tested against a live cloud relay + hub.
+
+Out of scope for v1: multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

@@ -21,7 +21,8 @@ export type SettingsProblem = 'url' | 'token' | 'fingerprint' | null;
 
 /** What is wrong with a connection form, if anything. */
 export function validateSettings(s: Settings): SettingsProblem {
-  if (!/^wss?:\/\/[^\s/]+(:\d+)?(\/\S*)?$/i.test(s.url.trim())) return 'url';
+  const u = s.url.trim();
+  if (isCloudUrl(u) ? !/^https?:\/\//i.test(u) : !/^wss?:\/\/[^\s/]+(:\d+)?(\/\S*)?$/i.test(u)) return 'url';
   if (s.token.length < 8) return 'token';
   if (s.fingerprint !== undefined && s.fingerprint !== '' && normalizeFingerprint(s.fingerprint) === null) return 'fingerprint';
   return null;
@@ -33,6 +34,20 @@ export function isSecure(url: string): boolean {
 
 export function isPlaintext(url: string): boolean {
   return /^ws:\/\//i.test(url.trim());
+}
+
+export function isRelayUrl(url: string): boolean {
+  return /\/client\/[^\s/]+\s*$/i.test(url.trim());
+}
+
+export function isCloudUrl(url: string): boolean {
+  return /^https?:\/\/[^\s/]+(:\d+)?\/hub\/[^\s/]+\s*$/i.test(url.trim());
+}
+
+export function cloudUrl(server: string, hubId: string): string {
+  const s = server.trim().replace(/\/+$/, '');
+  const base = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  return `${base}/hub/${hubId.trim()}`;
 }
 
 /** Accept "192.168.0.202", "hub.local:8080" or a full ws:// URL; fill in the rest. */

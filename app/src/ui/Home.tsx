@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useCommands } from '../hooks/useCommands';
-import { useHome, useHubClient } from '../hooks/useHub';
+import { useHome, useHubClient, type HubConnection } from '../hooks/useHub';
 import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
 import { Banner } from './Banner';

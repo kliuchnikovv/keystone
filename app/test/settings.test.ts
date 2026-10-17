@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSettingsStore, isPlaintext, isSecure, normalizeUrl, validateSettings, type KeyValueStore } from '../src/settings';
+import { cloudUrl, createSettingsStore, isCloudUrl, isPlaintext, isRelayUrl, isSecure, normalizeUrl, validateSettings, type KeyValueStore } from '../src/settings';
 
 function memoryStore(initial: Record<string, string> = {}, failing = false): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -46,9 +46,35 @@ describe('connection form', () => {
     expect(normalizeUrl('wss://hub/ws')).toBe('wss://hub/ws');
     expect(normalizeUrl('10.0.0.5/custom')).toBe('ws://10.0.0.5:8080/custom');
   });
+  it('recognises relay URLs', () => {
+    expect(isRelayUrl('wss://relay.example.com/client/my-hub')).toBe(true);
+    expect(isRelayUrl('ws://relay:9090/client/my-hub')).toBe(true);
+    expect(isRelayUrl('ws://192.168.0.202:8080/ws')).toBe(false);
+    expect(isRelayUrl('wss://hub.local/ws')).toBe(false);
+    expect(isRelayUrl('')).toBe(false);
+  });
+  it('validates relay URLs', () => {
+    expect(validateSettings({ url: 'wss://relay.example.com/client/my-hub', token: '12345678' })).toBeNull();
+    expect(validateSettings({ url: 'ws://relay:9090/client/my-hub', token: '12345678' })).toBeNull();
+  });
   it('knows when the link is unencrypted', () => {
     expect(isPlaintext('ws://hub:8080/ws')).toBe(true);
     expect(isPlaintext('wss://hub/ws')).toBe(false);
+  });
+  it('recognises cloud URLs', () => {
+    expect(isCloudUrl('https://relay.example.com/hub/abc123')).toBe(true);
+    expect(isCloudUrl('http://localhost:9090/hub/home-5ef894')).toBe(true);
+    expect(isCloudUrl('wss://relay.example.com/client/my-hub')).toBe(false);
+    expect(isCloudUrl('ws://hub:8080/ws')).toBe(false);
+    expect(isCloudUrl('')).toBe(false);
+  });
+  it('builds a cloud URL from server and hub id', () => {
+    expect(cloudUrl('relay.example.com', 'abc123')).toBe('https://relay.example.com/hub/abc123');
+    expect(cloudUrl('https://relay.example.com/', 'abc123')).toBe('https://relay.example.com/hub/abc123');
+    expect(cloudUrl('http://localhost:9090', 'home')).toBe('http://localhost:9090/hub/home');
+  });
+  it('validates cloud URLs', () => {
+    expect(validateSettings({ url: 'https://relay.example.com/hub/abc123', token: '12345678' })).toBeNull();
   });
 });
 
