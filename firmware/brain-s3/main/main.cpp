@@ -4387,7 +4387,7 @@ extern "C" void app_main(void) {
         const auto* ti = g_monitor->info(kThreadChipId);
         const bool zb_silent = zi != nullptr && zi->silent;
         const bool th_silent = ti != nullptr && ti->silent;
-        if (wifi && zb_ok && th_ok)
+        if (wifi && zb_ok && !zb_silent && th_ok && !th_silent)
           ls = status_led::State::Healthy;
         else if (!wifi && (zb_silent || !zb_ok) && (th_silent || !th_ok))
           ls = status_led::State::Offline;
