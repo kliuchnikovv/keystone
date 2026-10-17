@@ -64,6 +64,7 @@
 #include "hubproto/payload.hpp"
 #include "hubproto/units.hpp"
 #include "hubproto/version.hpp"
+#include "status_led.hpp"
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -931,6 +932,7 @@ extern "C" void app_main() {
   brownout_ll_bod_enable(false);
   brownout_ll_ana_reset_enable(false);
   ESP_ERROR_CHECK(nvs_flash_init());
+  status_led::init();
   g_boot_id = fw::next_boot_id();
   start_console();
 
@@ -1060,6 +1062,21 @@ extern "C" void app_main() {
   // Send HELLO after bridge infra is ready — the brain replies with DECLAREs
   // that need app_bridge to be initialized.
   bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);
+  status_led::set(status_led::State::Ready);
+
+  // LED tick timer (50 ms for smooth pulsing during pairing).
+  static esp_timer_handle_t led_timer;
+  const esp_timer_create_args_t led_args{
+      .callback = [](void*) {
+        status_led::tick(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+      },
+      .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "led",
+      .skip_unhandled_events = true,
+  };
+  ESP_ERROR_CHECK(esp_timer_create(&led_args, &led_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(led_timer, 50000));
 
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(5000));

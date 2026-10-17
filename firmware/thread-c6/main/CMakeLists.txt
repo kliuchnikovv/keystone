@@ -2,7 +2,7 @@
 # Pulls in esp_matter's aggregator/bridged-endpoint machinery (app_bridge,
 # esp_matter_bridge live under $ESP_MATTER_PATH/examples/common — added via
 # EXTRA_COMPONENT_DIRS in the root CMakeLists).
-idf_component_register(SRCS "main.cpp" "keystone_bridged_device.cpp"
+idf_component_register(SRCS "main.cpp" "keystone_bridged_device.cpp" "status_led.cpp"
                        INCLUDE_DIRS "."
                        PRIV_INCLUDE_DIRS "${ESP_MATTER_PATH}/examples/common/utils"
                                          "${ESP_MATTER_PATH}/components/esp_matter"
