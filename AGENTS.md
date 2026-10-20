@@ -110,9 +110,18 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 ## Hardware gotchas
 
 - **Serial ports** enumerate as `/dev/cu.usbmodem*` (macOS) or `/dev/ttyACM*` (Linux); the number changes when a
-  board is re-plugged (e.g. `1101` → `2101`). Identify a board with
-  `esptool.py -p <PORT> chip_id`. If a flash says "port is busy or doesn't exist"
-  and `ls /dev/cu.usbmodem*` shows nothing, the board de-enumerated — re-plug it.
+  board is re-plugged (e.g. `1101` → `2101`). On Linux, **always verify by MAC**
+  before flashing: `dmesg | grep ttyACM` (the MAC is stable, the port number is
+  not). Flashing the wrong board once gave both C6s the same firmware and caused
+  88 000+ phantom reboots. `esptool.py -p <PORT> chip_id` also works but requires
+  the chip to be in download mode on C6.
+- **ESP32-C6 USB-Serial/JTAG** is an on-chip controller. DTR/RTS signals are NOT
+  wired to the Reset/Boot pins on the DevKitC, so you **cannot enter download mode
+  remotely** — the user must hold the BOOT button while resetting. `esptool.py
+  --before usb_reset` resets the chip but boots the app, not the bootloader.
+  The console REPL (`esp_console_new_repl_uart`) goes to the UART0 GPIO pins, not
+  to the USB port; use `esp_console_new_repl_usb_serial_jtag` for USB access
+  (needs `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, not yet enabled for thread-c6).
 - **Capturing the Zigbee console:** the C6 coordinator logs only on events (no
   periodic prints), so a plain reader that attaches after boot sees nothing. Open
   the port with pyserial and pulse `DTR=False; RTS=True` → `RTS=False` to reset
@@ -120,6 +129,10 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 - **Zigbee after a coordinator reboot:** an already-joined device stays in the network but
   does not re-announce, so join-triggered discovery does not re-run. Handled: the device
   table is persisted in NVS and re-discovered by IEEE address on boot (see CLAUDE.md § Status).
+- **thread-c6 crash-loop recovery:** if `boot_id` exceeds 50 (= the chip rebooted
+  50+ times without NVS being cleared), `app_main` wipes NVS automatically. This
+  handles stale Matter fabric data or a corrupt NVS. The chip needs
+  re-commissioning in Apple Home after a wipe.
 - **UART link wiring:** C6.TX GPIO5 → S3.RX GPIO6, C6.RX GPIO4 ← S3.TX GPIO7,
   common GND (crossed).
 
