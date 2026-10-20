@@ -72,6 +72,7 @@ constexpr int kUartTxGpio = 5;
 constexpr int kUartRxGpio = 4;
 constexpr std::uint8_t kOwnChipId = 0x01;
 std::uint8_t g_boot_id = 0;  // persisted reboot counter (SPEC Phase 5)
+std::uint16_t g_next_seq = 1;
 
 core::UartTransport* g_bus = nullptr;
 SemaphoreHandle_t g_bus_mtx = nullptr;
@@ -423,7 +424,7 @@ hubproto::Header make_header(hubproto::MsgType type, std::uint16_t entity_id,
   h.type = type;
   h.chip_id = kOwnChipId;
   h.boot_id = g_boot_id;
-  h.seq = seq;
+  h.seq = seq ? seq : g_next_seq++;
   h.entity_id = entity_id;
   return h;
 }
