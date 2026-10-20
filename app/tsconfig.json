@@ -3,14 +3,26 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "strict": true,
     "jsx": "react-jsx",
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["App.tsx", "index.ts", "src", "tools", "test"]
+  "include": [
+    "App.tsx",
+    "index.ts",
+    "src",
+    "tools",
+    "test"
+  ],
+  "extends": "expo/tsconfig.base"
 }
