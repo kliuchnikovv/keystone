@@ -939,6 +939,12 @@ extern "C" void app_main() {
   esp_ota_mark_app_valid_cancel_rollback();
   status_led::init();
   g_boot_id = fw::next_boot_id();
+  if (g_boot_id > 50) {
+    ESP_LOGW(kTag, "crash loop detected (boot_id=%u > 50): erasing NVS to recover", g_boot_id);
+    nvs_flash_erase();
+    nvs_flash_init();
+    g_boot_id = fw::next_boot_id();  // restarts at 1
+  }
   start_console();
 
   // --- UART bridge to the brain ---
