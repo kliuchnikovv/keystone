@@ -12,7 +12,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.keystone.app",
+      "bundleIdentifier": "com.kliuchnikovv.keystone",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Keystone talks to your hub on your home network.",
         "NSBonjourServices": [
@@ -20,6 +20,18 @@
         ],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
+        },
+        "LSApplicationQueriesSchemes": ["x-apple-com-home"],
+        "UIApplicationSceneManifest": {
+          "UIApplicationSupportsMultipleScenes": false,
+          "UISceneConfigurations": {
+            "UIWindowSceneSessionRoleApplication": [
+              {
+                "UISceneConfigurationName": "Default Configuration",
+                "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).AppDelegate"
+              }
+            ]
+          }
         }
       },
       "buildNumber": "1",
@@ -40,6 +52,7 @@
     },
     "icon": "./assets/icon.png",
     "plugins": [
+      "./plugins/withSceneLifecycle.cjs",
       [
         "expo-location",
         {

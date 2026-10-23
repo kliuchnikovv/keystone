@@ -9,6 +9,29 @@ Swift module against the Expo Modules API signatures (`Function`, `Events`, `OnD
 and a syntax check of the Swift. Expect to fix a compile error or two: send them to whoever maintains
 the module (see "If it does not compile").
 
+## Scene lifecycle (the first launch-time crash, Xcode 27)
+
+On Xcode 27 / iOS 27 the app **starts and is killed immediately**:
+
+```
+EXC_BREAKPOINT (code=1)
+_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption
+"Application failed to launch: UIScene lifecycle is required for apps built with this SDK."
+```
+
+The Expo template's `AppDelegate` is window-based — `ExpoAppDelegate` conforms to
+`UIApplicationDelegate` only and implements none of `configurationForConnecting`,
+`windowScene(_:willConnectTo:options:)`, so iOS refuses the launch. Two things are needed:
+
+1. `UIApplicationSceneManifest` in `app.json` → `ios.infoPlist` (present), and
+2. an AppDelegate that adopts scenes — `plugins/withSceneLifecycle.cjs` writes
+   `plugins/AppDelegate.swift.tmpl` over `ios/Keystone/AppDelegate.swift` on every prebuild.
+
+Note that `expo prebuild` **without `--clean` does not touch an existing `Info.plist`**, so a change
+made only in `app.json` will not reach the project until `ios/` is deleted or `--clean` is passed.
+Declaring the manifest alone is not enough and makes things worse: pointing
+`UISceneDelegateClassName` at an AppDelegate that cannot handle `willConnectTo` yields a black screen.
+
 ## Why a development build, not Expo Go
 
 Pinning the hub's certificate and browsing mDNS need native code (`app/modules/keystone-net`: a
