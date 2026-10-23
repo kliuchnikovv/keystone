@@ -7,11 +7,19 @@ import type { Settings } from '../settings';
 import { Banner } from './Banner';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
+import { Glyph, type GlyphName } from './Glyph';
 import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
 import { useTheme } from './theme';
 
 type Tab = 'devices' | 'automations' | 'history' | 'hub';
+
+const TABS: { id: Tab; label: string; glyph: GlyphName }[] = [
+  { id: 'devices', label: 'Devices', glyph: 'home' },
+  { id: 'automations', label: 'Automations', glyph: 'automation' },
+  { id: 'hub', label: 'Hub', glyph: 'hub' },
+  { id: 'history', label: 'History', glyph: 'history' },
+];
 
 export interface HomeProps {
   settings: Settings;
@@ -54,21 +62,27 @@ export function Home({ settings, onChangeHub, clientOptions }: HomeProps) {
           <Text style={{ color: t.bg, fontWeight: '600' }}>{commands.message}</Text>
         </Pressable>
       )}
-      <View style={[styles.tabs, { backgroundColor: t.card, borderTopColor: t.border }]}>
-        <TabButton label="Devices" active={tab === 'devices'} onPress={() => setTab('devices')} />
-        <TabButton label="Automations" active={tab === 'automations'} onPress={() => setTab('automations')} />
-        <TabButton label="History" active={tab === 'history'} onPress={() => setTab('history')} />
-        <TabButton label="Hub" active={tab === 'hub'} onPress={() => setTab('hub')} />
+      <View style={[styles.tabs, { backgroundColor: t.glass, borderColor: t.glassBorder }]}>
+        {TABS.map((x) => (
+          <TabButton key={x.id} label={x.label} glyph={x.glyph} active={tab === x.id} onPress={() => setTab(x.id)} />
+        ))}
       </View>
     </SafeAreaView>
   );
 }
 
-function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress(): void }) {
+function TabButton({ label, glyph, active, onPress }: { label: string; glyph: GlyphName; active: boolean; onPress(): void }) {
   const t = useTheme();
   return (
-    <Pressable accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ selected: active }} onPress={onPress} style={styles.tab}>
-      <Text style={{ color: active ? t.accent : t.muted, fontWeight: active ? '700' : '500', fontSize: 15 }}>{label}</Text>
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={styles.tab}
+    >
+      <Glyph name={glyph} size={21} color={active ? t.accent : t.muted} filled={active} />
+      <Text style={{ color: active ? t.accent : t.muted, fontWeight: active ? '700' : '500', fontSize: 11 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -77,7 +91,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   body: { flex: 1 },
   fix: { alignItems: 'center', paddingVertical: 10 },
-  toast: { position: 'absolute', left: 16, right: 16, bottom: 72, padding: 14, borderRadius: 12 },
-  tabs: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 14 },
+  toast: { position: 'absolute', left: 16, right: 16, bottom: 88, padding: 14, borderRadius: 14 },
+  tabs: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8 },
+  tab: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 8 },
 });

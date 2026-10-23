@@ -3,6 +3,7 @@
 import type { Entity, HistoryEvent, HistoryPage, Value } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
 import { deviceIcon, deviceTitle, hexId } from './devices';
+import type { GlyphName } from '../ui/Glyph';
 import { attrLabel, formatUptime, formatValue } from './format';
 
 /** The most the app keeps in memory: more than the hub's ring holds (256), so "load older" never grows without bound. */
@@ -150,7 +151,8 @@ const ATTR_BY_ID: Record<number, string> = {
 };
 
 export interface Described {
-  icon: string;
+  /** A stroke glyph to sit in front of the sentence; null when nothing fits. */
+  icon: GlyphName | null;
   text: string;
   /** How much it matters: failures are `bad`, hub/chip trouble `warn`, the rest `normal`. */
   tone: 'normal' | 'warn' | 'bad';
@@ -215,50 +217,50 @@ function actionWords(e: HistoryEvent, h: Home): string {
 
 export function describeEvent(e: HistoryEvent, h: Home): Described {
   const device = e.entity !== undefined ? entityName(e.entity, h.entities) : '';
-  const icon = e.entity !== undefined ? deviceIcon(h.entities.find((x) => x.id === e.entity)?.device ?? '') : '';
+  const icon = e.entity !== undefined ? deviceIcon(h.entities.find((x) => x.id === e.entity)?.device ?? '') : null;
   const name = e.entity !== undefined && e.attr !== undefined ? attrName(e.entity, e.attr, h.entities) : '';
   switch (e.kind) {
     case 'boot':
-      return { icon: '🔌', tone: e.what === 'panic' || e.what === 'watchdog' || e.what === 'brownout' ? 'bad' : 'normal', text: `Hub started${e.what && e.what !== 'unknown' ? ` (${e.what.replace('_', ' ')})` : ''}` };
+      return { icon: 'hub', tone: e.what === 'panic' || e.what === 'watchdog' || e.what === 'brownout' ? 'bad' : 'normal', text: `Hub started${e.what && e.what !== 'unknown' ? ` (${e.what.replace('_', ' ')})` : ''}` };
     case 'state':
       return { icon, tone: 'normal', text: `${device} ${changeWords(name, e.value)}` };
     case 'command': {
       const why = e.what ? COMMAND_VIA[e.what] : undefined; // an unknown source (newer hub) says nothing
-      return { icon: '➡️', tone: 'normal', text: `Sent to ${device}: ${changeWords(name, e.value)}${why ? ` ${why}` : ''}` };
+      return { icon: 'bolt', tone: 'normal', text: `Sent to ${device}: ${changeWords(name, e.value)}${why ? ` ${why}` : ''}` };
     }
     case 'command_failed':
-      return { icon: '⚠️', tone: 'bad', text: `${device}: ${attrLabel(name).toLowerCase()} command failed (${e.what ?? 'unknown'})` };
+      return { icon: 'signal', tone: 'bad', text: `${device}: ${attrLabel(name).toLowerCase()} command failed (${e.what ?? 'unknown'})` };
     case 'rule':
-      return { icon: '⚙️', tone: 'normal', text: `Rule ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
+      return { icon: 'automation', tone: 'normal', text: `Rule ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
     case 'schedule':
-      return { icon: '🕒', tone: 'normal', text: `Schedule ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
+      return { icon: 'history', tone: 'normal', text: `Schedule ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
     case 'timer':
-      return { icon: '⏱️', tone: 'normal', text: `Timer ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
+      return { icon: 'history', tone: 'normal', text: `Timer ${(e.ref ?? 0) + 1} ran: ${actionWords(e, h)}` };
     case 'scene':
-      return { icon: '🎬', tone: 'normal', text: `Applied ${sceneWords(e)} ${VIA[e.what ?? ''] ?? ''}`.trim() };
+      return { icon: 'play', tone: 'normal', text: `Applied ${sceneWords(e)} ${VIA[e.what ?? ''] ?? ''}`.trim() };
     case 'chip': {
       const label = chipLabel(e.ref, h.chips);
       const n = typeof e.value === 'number' ? e.value : 0;
       switch (e.what) {
         case 'lost':
-          return { icon: '📡', tone: 'warn', text: `The ${label} went silent (${formatUptime(n)} without a sign)` };
+          return { icon: 'chip', tone: 'warn', text: `The ${label} went silent (${formatUptime(n)} without a sign)` };
         case 'resumed':
-          return { icon: '📡', tone: 'normal', text: `The ${label} is back after ${formatUptime(n)}` };
+          return { icon: 'chip', tone: 'normal', text: `The ${label} is back after ${formatUptime(n)}` };
         case 'rebooted':
-          return { icon: '📡', tone: 'warn', text: `The ${label} restarted (restart ${n})` };
+          return { icon: 'chip', tone: 'warn', text: `The ${label} restarted (restart ${n})` };
         case 'flapping':
-          return { icon: '📡', tone: 'bad', text: `The ${label} keeps restarting (${n} times in 5 minutes)` };
+          return { icon: 'chip', tone: 'bad', text: `The ${label} keeps restarting (${n} times in 5 minutes)` };
       }
-      return { icon: '📡', tone: 'warn', text: `The ${label} changed: ${e.what ?? '?'}` };
+      return { icon: 'chip', tone: 'warn', text: `The ${label} changed: ${e.what ?? '?'}` };
     }
     case 'reconcile':
       return e.what === 'corrected'
-        ? { icon: '🔁', tone: 'warn', text: `${device} had ${changeWords(name, e.value)} behind the hub’s back; putting it back` }
-        : { icon: '🔁', tone: 'normal', text: `${device} ${changeWords(name, e.value)} outside the hub` };
+        ? { icon: 'check', tone: 'warn', text: `${device} had ${changeWords(name, e.value)} behind the hub’s back; putting it back` }
+        : { icon: 'signal', tone: 'normal', text: `${device} ${changeWords(name, e.value)} outside the hub` };
     case 'pairing':
-      if (e.what === 'opened') return { icon: '➕', tone: 'normal', text: `Network opened for new devices (${e.ref ?? '?'} s)` };
-      if (e.what === 'unpair') return { icon: '➖', tone: 'normal', text: `Removing ${device} from the network` };
-      return { icon: '💡', tone: 'normal', text: `Blinking ${device}` };
+      if (e.what === 'opened') return { icon: 'plus', tone: 'normal', text: `Network opened for new devices (${e.ref ?? '?'} s)` };
+      if (e.what === 'unpair') return { icon: 'signal', tone: 'normal', text: `Removing ${device} from the network` };
+      return { icon: 'light', tone: 'normal', text: `Blinking ${device}` };
   }
-  return { icon: '•', tone: 'normal', text: `${e.kind}${e.what ? ` ${e.what}` : ''}` };
+  return { icon: null, tone: 'normal', text: `${e.kind}${e.what ? ` ${e.what}` : ''}` };
 }

@@ -9,6 +9,8 @@ export default defineConfig({
   resolve: {
     alias: {
       'react-native': 'react-native-web',
+      // Flow-typed sources; the UI tests only need something that occupies the icon's box.
+      'react-native-svg': fileURLToPath(new URL('./test/stubs/react-native-svg.tsx', import.meta.url)),
       'expo-modules-core': fileURLToPath(new URL('./test/stubs/expo-modules-core.ts', import.meta.url)),
     },
   },

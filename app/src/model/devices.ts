@@ -1,4 +1,5 @@
-// Presenting entities as devices: titles, icons, which attribute is the main switch.
+// Presenting entities as devices: titles, glyphs, which attribute is the main switch.
+import type { GlyphName } from '../ui/Glyph';
 import type { Attr, Entity } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
 
@@ -13,16 +14,16 @@ const DEVICE_LABELS: Record<string, string> = {
   climate: 'Thermostat',
   button: 'Button',
 };
-const DEVICE_ICONS: Record<string, string> = {
-  light: '💡',
-  switch: '🔌',
-  sensor: '🌡️',
-  occupancy: '🚶',
-  contact: '🚪',
-  cover: '🪟',
-  lock: '🔒',
-  climate: '🌡️',
-  button: '🔘',
+const DEVICE_GLYPHS: Record<string, GlyphName> = {
+  light: 'light',
+  switch: 'switch',
+  sensor: 'sensor',
+  occupancy: 'occupancy',
+  contact: 'contact',
+  cover: 'cover',
+  lock: 'lock',
+  climate: 'climate',
+  button: 'button',
 };
 
 export function hexId(id: number): string {
@@ -31,8 +32,8 @@ export function hexId(id: number): string {
 export function deviceLabel(device: string): string {
   return DEVICE_LABELS[device] ?? device;
 }
-export function deviceIcon(device: string): string {
-  return DEVICE_ICONS[device] ?? '📟';
+export function deviceIcon(device: string): GlyphName {
+  return DEVICE_GLYPHS[device] ?? 'chip';
 }
 export function deviceTitle(e: Entity): string {
   return e.name ?? `${deviceLabel(e.device)} ${hexId(e.id)}`;
@@ -110,3 +111,31 @@ export function canManageDevice(s: HomeState, e: Entity): boolean {
 
 /** How long the Zigbee network stays open when the app asks to add a device. */
 export const PAIR_SECONDS = 120;
+
+export function attrOf(e: Entity, name: string): Attr | undefined {
+  return e.attrs.find((a) => a.name === name);
+}
+
+/** True while the device's main switch is on — what tints its glyph chip. */
+export function isPowered(e: Entity): boolean {
+  return primarySwitch(e)?.value === true;
+}
+
+/** The two metering attributes of a plug, in the order the card shows them. */
+export function meterAttrs(e: Entity): Attr[] {
+  return ['power_w', 'energy_wh'].map((n) => attrOf(e, n)).filter((a): a is Attr => a !== undefined);
+}
+
+// What a sensor *reports*. A thermostat's `setpoint` is a target, not a reading — it stays
+// in the rows so it keeps its stepper.
+const READINGS = ['temperature', 'humidity', 'illuminance', 'battery', 'occupied', 'contact'];
+
+/** A sensor's headline reading, and the rest to list under it.
+ * A measurement (a number) gets the big type; a plain state ("Occupied", "Open") does not —
+ * a word set at 34 pt reads as a mistake. */
+export function readingAttrs(e: Entity): { first: Attr | undefined; rest: Attr[] } {
+  const found = READINGS.map((n) => attrOf(e, n)).filter((a): a is Attr => a !== undefined);
+  const head = found[0];
+  if (head !== undefined && typeof head.value !== 'number') return { first: undefined, rest: found };
+  return { first: head, rest: found.slice(1) };
+}

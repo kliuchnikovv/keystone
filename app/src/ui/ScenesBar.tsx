@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import type { HomeState } from '../protocol/store';
-import { Chip, ChipRow } from './controls';
-import { useTheme } from './theme';
+import { Glyph } from './Glyph';
+import { radius, useTheme } from './theme';
 
-/** One tap per scene, above the device list. Says how many settings went out (and how many could not). */
+/** One tap per scene, above the rooms. Says how many settings went out (and how many could not). */
 export function ScenesBar({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
   const [note, setNote] = useState<string | null>(null);
@@ -25,18 +25,28 @@ export function ScenesBar({ home, commands }: { home: HomeState; commands: Comma
 
   return (
     <View style={styles.box} accessibilityLabel="Scenes">
-      <Text style={[styles.label, { color: t.muted }]}>SCENES</Text>
-      <ChipRow>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rail}>
         {home.scenes.map((s) => (
-          <Chip key={s.name} label={`▶ ${s.name}`} a11y={`Apply scene ${s.name}`} selected={false} onPress={() => void run(s.name)} />
+          <Pressable
+            key={s.name}
+            accessibilityRole="button"
+            accessibilityLabel={`Apply scene ${s.name}`}
+            onPress={() => void run(s.name)}
+            style={({ pressed }) => [styles.pill, { backgroundColor: pressed ? t.accentSoft : t.card, borderColor: t.border }]}
+          >
+            <Glyph name="play" size={11} color={t.accent} />
+            <Text style={[styles.pillText, { color: t.text }]}>{s.name}</Text>
+          </Pressable>
         ))}
-      </ChipRow>
-      {note && <Text style={{ color: t.muted, fontSize: 12, marginTop: 6 }}>{note}</Text>}
+      </ScrollView>
+      {note && <Text style={{ color: t.muted, fontSize: 12, marginTop: 8 }}>{note}</Text>}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  box: { marginBottom: 12 },
-  label: { fontSize: 12, fontWeight: '700', letterSpacing: 1, marginBottom: 6 },
+  box: { marginBottom: 8 },
+  rail: { gap: 8, paddingRight: 8 },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 14, paddingVertical: 9, borderRadius: radius.pill, borderWidth: 1 },
+  pillText: { fontSize: 14, fontWeight: '600' },
 });

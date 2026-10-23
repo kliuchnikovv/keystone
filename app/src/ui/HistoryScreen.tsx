@@ -5,6 +5,7 @@ import { dayOf, describeEvent, entityName, formatEventTime, type Recorded } from
 import type { HubConnection } from '../hooks/useHub';
 import type { HomeState } from '../protocol/store';
 import { Button } from './controls';
+import { Glyph } from './Glyph';
 import { useTheme } from './theme';
 
 /**
@@ -35,7 +36,7 @@ export function HistoryScreen({ home, client, pollMs }: { home: HomeState; clien
           onPress={() => about !== null && setEntity(about)}
           style={[styles.row, { borderBottomColor: t.border }]}
         >
-          <Text style={styles.icon}>{d.icon || '•'}</Text>
+          <View style={styles.icon}>{d.icon && <Glyph name={d.icon} size={17} color={tone[d.tone]} />}</View>
           <Text style={[styles.text, { color: tone[d.tone] }]}>{d.text}</Text>
           <Text style={[styles.time, { color: t.muted }]}>{formatEventTime(e, now)}</Text>
         </Pressable>
@@ -72,7 +73,7 @@ const styles = StyleSheet.create({
   filter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   day: { fontSize: 12, fontWeight: '700', letterSpacing: 1, marginTop: 12, marginBottom: 2 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
-  icon: { fontSize: 18, width: 26, textAlign: 'center' },
+  icon: { width: 26, alignItems: 'center' },
   text: { flex: 1, fontSize: 15 },
   time: { fontSize: 12 },
   note: { fontSize: 12, marginTop: 12 },
