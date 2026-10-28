@@ -27,8 +27,8 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] ?? '' : undefined;
 }
 
-const port = Number(arg('port') ?? '9090');
-const secret = arg('secret') ?? '';
+const port = Number(arg('port') ?? process.env.PORT ?? '9090');
+const secret = arg('secret') ?? process.env.RELAY_SECRET ?? '';
 const maxClientsPerHub = Number(arg('max-clients') ?? '3');
 
 if (!secret) {
@@ -201,7 +201,9 @@ function handleClient(ws: WebSocket, hubId: string): void {
 
 // ---- start --------------------------------------------------------------------------
 
-server.listen(port, () => {
+// Railway (and every other PaaS) hands the port over in the environment and
+// expects the service to listen on every interface.
+server.listen(port, '0.0.0.0', () => {
   log('relay', `listening on port ${port}`);
 });
 

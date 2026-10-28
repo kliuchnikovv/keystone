@@ -25,8 +25,8 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] ?? '' : undefined;
 }
 
-const port = Number(arg('port') ?? '9090');
-const secret = arg('secret') ?? '';
+const port = Number(arg('port') ?? process.env.PORT ?? '9090');
+const secret = arg('secret') ?? process.env.RELAY_SECRET ?? '';
 const sessionTtlMs = Number(arg('session-ttl') ?? String(10 * 60_000));
 const authTimeoutMs = 15_000;
 const reqTimeoutMs = 15_000;
@@ -428,7 +428,7 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-server.listen(port, () => log('relay', `cloud relay listening on port ${port}`));
+server.listen(port, '0.0.0.0', () => log('relay', `cloud relay listening on port ${port}`));
 
 process.on('SIGINT', () => {
   log('relay', 'shutting down');
