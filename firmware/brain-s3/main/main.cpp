@@ -1257,7 +1257,9 @@ void fmt_target(char* buf, std::size_t cap, const Registry& reg, std::uint16_t i
                 std::uint8_t attr) {
   const char* name = reg.name_of(id);
   const char* an = attr_name(attr);
-  char eb[24], ab[8];
+  // The name can be as long as the registry allows (32 bytes now) - the buffer has to
+  // keep up, or the compiler (rightly) refuses the truncation.
+  char eb[Registry::kMaxNameLen + 1], ab[8];
   if (name != nullptr) {
     std::snprintf(eb, sizeof(eb), "%s", name);
   } else {
@@ -2886,10 +2888,11 @@ void history_push(Scenes& scenes, std::uint32_t now_ms) {
 // ---- delayed hub actions -------------------------------------------------------------------
 //
 // A few requests change the hub itself: a reboot, a factory reset, a new app token, forgetting
-// the Wi-Fi network. The reply has to reach the client first, so the work happens a moment later,
-// in the main loop (the same pattern the setup code uses for the network and the token).
+// the Wi-Fi network, a new relay. The reply has to reach the client first, so the work happens a
+// moment later, in the main loop (the same pattern the setup code uses for the network and the
+// token).
 
-enum class HubAction : std::uint8_t { None, Reboot, FactoryReset, SetToken, ForgetWifi };
+enum class HubAction : std::uint8_t { None, Reboot, FactoryReset, SetToken, ForgetWifi, RestartRelay, ClearRelay };
 
 struct PendingHubAction {
   bool pending = false;
@@ -3178,19 +3181,14 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
       if (!relay::configure(relay_req.url, relay_req.secret)) {
         o = Outcome::fail(Err::Internal, "cannot store the relay credentials");
       } else {
-        char tok[core::app::kMaxToken + 1] = {};
-        const bool have = restore_webtoken(tok, sizeof(tok));
-        if (relay::running()) relay::stop();
-        if (!relay::start(have ? tok : nullptr, &app_hub_info)) {
-          ESP_LOGW(kTag, "app: the relay is configured but did not come up (it retries on the next boot)");
-        }
-        std::memset(tok, 0, sizeof(tok));
+        // Restarting the relay drops the clients that came through it, and closing the
+        // tunnel blocks for a moment - so it happens after the reply is on its way.
+        hub_action_request(HubAction::RestartRelay, now, kHubActionDelayMs);
       }
     }
     std::memset(relay_req.secret, 0, sizeof(relay_req.secret));
   } else if (!std::strcmp(op, "access.relay.clear")) {
-    relay::stop();
-    relay::clear_config();
+    hub_action_request(HubAction::ClearRelay, now, kHubActionDelayMs);
     o = Outcome::done();
   } else if (!std::strcmp(op, "wifi.forget")) {
     // The reply goes out first; the hub drops the network right after it.
@@ -3375,6 +3373,23 @@ void hub_action_service(std::uint32_t now) {
     case HubAction::ForgetWifi:
       ESP_LOGW(kTag, "app: forgetting the saved Wi-Fi network");
       wifi_forget();
+      break;
+    case HubAction::RestartRelay: {
+      // The URL and the secret are in NVS by now; the client picks them up there.
+      char tok[core::app::kMaxToken + 1] = {};
+      const bool have = restore_webtoken(tok, sizeof(tok));
+      if (relay::running()) relay::stop();
+      if (!relay::start(have ? tok : nullptr, &app_hub_info)) {
+        ESP_LOGW(kTag, "app: the relay is configured but did not come up (it retries on the next boot)");
+      }
+      std::memset(tok, 0, sizeof(tok));
+      ESP_LOGI(kTag, "app: the relay was reconfigured");
+      break;
+    }
+    case HubAction::ClearRelay:
+      relay::stop();
+      relay::clear_config();
+      ESP_LOGI(kTag, "app: the relay was removed");
       break;
     case HubAction::None:
       break;
