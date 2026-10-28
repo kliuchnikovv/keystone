@@ -33,7 +33,7 @@ struct EntityT {
 };
 
 template <std::size_t MaxEntities = 64, std::size_t MaxAttrs = 8,
-          std::size_t MaxNameLen = 24>
+          std::size_t MaxNameLen = 32>
 class EntityRegistry {
  public:
   using Entity = EntityT<MaxAttrs>;

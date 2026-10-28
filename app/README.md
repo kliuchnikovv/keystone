@@ -14,8 +14,8 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
   type into `req` arguments (units, ranges, wording of rules/schedules/timers).
 - `src/settings.ts`, `src/storage.ts` / `storage.web.ts` — remembering the hub
   address and token (OS keychain on a phone, `localStorage` in a browser).
-- `src/hooks/`, `src/ui/`, `App.tsx` — the screens: connect, Devices (switches,
-  brightness, live values, rename, scenes bar, add/identify/remove a Zigbee device),
+- `src/hooks/`, `src/ui/`, `App.tsx` — the screens: connect, Devices (device buttons, a sheet
+  on a long press, brightness, live values, rename, scenes bar, add/identify/remove a Zigbee device),
   Automations (scenes, schedules, timers, rules — each of the last three can apply a
   scene), History (what the hub did and saw, newest first; tap a row for one device), Hub (chip health).
 - `tools/mock-hub/` — a software hub speaking the protocol (3 clients max, hello
@@ -24,9 +24,46 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `src/protocol/mdns.ts`, `tools/discover.ts` — find hubs on the LAN (mDNS `_keystone._tcp`).
 - `src/ui/ScenesBar.tsx`, `SceneForm` in `AutomationForms.tsx` — scenes (named groups of settings): apply with one tap on the Devices tab, create from the current state in Automations, edit them in place (`SceneEditor`).
 - `src/model/history.ts`, `src/hooks/useHistory.ts`, `src/ui/HistoryScreen.tsx` — the History tab: pages of the hub's event ring (`history`, docs/app-protocol.md §5.1) merged into one list, each event said in words (a command says who asked: app, rule, schedule …); new events are pushed by the hub (`type: "history"`) and folded in at once, with a 4 s poll only for a hub that does not push (30 s safety poll otherwise).
-- `src/ui/PairingPanel.tsx` — "Add a device" (opens the Zigbee network); Blink / Remove device live in a Zigbee device's pencil menu.
+- `src/ui/AddDeviceSheet.tsx` — "Add a device" (a bottom sheet: opens the Zigbee network for two
+  minutes, counts down, lists what joined).
+- `src/ui/DeviceWidget.tsx` — a device as a button in the grid: the icon, the name, what it is
+  doing right now; tapping it turns the device on or off (there is no separate switch), a long
+  press opens the sheet. Three shapes, chosen from the data (`src/model/grid.ts`): a wide one
+  (a switchable device), a square one (a sensor with no switch) and a tall one (two or more
+  readings); the grid is three columns, so a button with little to say takes one cell, not
+  half the screen. While the finger rests, the button dims at once and lights up amber after
+  250 ms — that is the app counting the long press. `src/ui/DeviceSheet.tsx` — everything else
+  about one device: on/off, meters, brightness, colour, readings, rename, blink, remove.
+- `src/ui/Sheet.tsx` — the bottom sheet; `src/hooks/useKeyboardInset.ts` — how much of the
+  screen the keyboard takes (measured by hand: react-native-web's `KeyboardAvoidingView`
+  does nothing), so the sheet rides up over the keyboard and never covers the field being
+  typed into.
+- `src/model/names.ts` — the rules for a human-readable device name (up to 15 characters,
+  spaces and Cyrillic allowed, nothing that looks like an id); `src/model/rooms.ts` — the room
+  a device belongs to, taken from the beginning of its name.
+- `src/ui/theme.tsx` — the theme: two palettes (`sandstone`, `ember`) and the spacing/radius
+  scale. `src/palette.ts` — the palette as a setting of the phone (stored like the hub
+  address); the picker lives on the Hub tab, card "Appearance".
+- `src/ui/ConnectScreen.tsx` — the connect form in the room's language: a bar with "Back",
+  glass cards (hubs on this network / connection / token / certificate), mode chips as pills, the
+  eye inside the token field, a Connect button that comes alive when the address and the token are
+  filled, and the failures under the form (wrong token, unreachable + Retry, untrusted certificate).
 - `modules/keystone-net/` — the native Expo module (Kotlin + Swift): certificate-pinned WebSocket
   and mDNS browsing for phones; `src/native/` is its TypeScript side. **Never built on a device.**
+
+## Design system
+
+The visual source of truth is [`../docs/design/keystone-spec.html`](../docs/design/keystone-spec.html)
+(palette, type scale, radii, spacing, every screen). The tokens live in `src/ui/theme.ts`
+(`radius`, `space`) and are mirrored for designers in [`../docs/design/tokens.json`](../docs/design/tokens.json).
+Shared building blocks are in `src/ui/controls.tsx`:
+
+- `Button` — four kinds: `primary` (accent fill), `secondary` (quiet fill), `plain` (quiet text, no
+  frame), `danger` (red frame); three sizes — `default`, `compact` (inside a card), `mini` (inside a list row).
+- `Chip` — a pill for section tabs and choices (active: accent fill, 12.5 px / 700).
+- `Input`, `Field`, `Picker`, `ErrorText` — form fields (radius 12), errors under the field.
+
+Use these instead of one-off styles; a screen that needs its own shape asks for a token first.
 
 ## Commands
 
@@ -86,4 +123,5 @@ enough) and the token.
   native app for daily use.
 - `npm audit` reports vulnerabilities in the React Native / Expo build tooling; none
   of it ships in the app bundle, but keep the lockfile current.
-- Device icons are emoji, so a system without an emoji font shows empty boxes.
+- The icon set is the app's own (`src/ui/Glyph.tsx`); the design spec's icon sheet is generated
+  from it (`node ../docs/design/icons/build-icons.mjs`), so the two cannot drift apart.

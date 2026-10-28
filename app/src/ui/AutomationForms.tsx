@@ -95,7 +95,7 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
       {children}
       <ErrorText text={error} />
       <View style={styles.buttons}>
-        <Button kind="plain" label="Cancel" onPress={onCancel} />
+        <Button kind="secondary" label="Cancel" onPress={onCancel} />
         <Button label={saveLabel} onPress={onSave} disabled={busy} />
       </View>
     </View>
@@ -360,8 +360,15 @@ export function RuleFormView({ entities, scenes, hasLocation, busy, onSubmit, on
               </View>
             )}
           </Field>
-          <Field label="At most once per (minutes)" hint="Leave empty to allow every time it matches.">
-            <Input label="Cooldown (minutes)" value={cooldown} onChangeText={setCooldown} placeholder="e.g. 5" keyboardType="decimal-pad" />
+          <Field label="At most once per (seconds)" hint="Leave empty to allow every time it matches.">
+            <ChipRow>
+              {[30, 60, 300, 600].map((s) => (
+                <Chip key={s} label={s < 60 ? `${s} s` : `${s / 60} min`} a11y={`Preset ${s} seconds`} selected={cooldown === String(s)} onPress={() => setCooldown(String(s))} />
+              ))}
+            </ChipRow>
+            <View style={{ marginTop: 8 }}>
+              <Input label="Cooldown (seconds)" value={cooldown} onChangeText={setCooldown} placeholder="e.g. 300" keyboardType="number-pad" />
+            </View>
           </Field>
         </View>
       )}

@@ -1,0 +1,1885 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>keystone — iOS app design preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* ---------- Page (the design doc) ---------- */
+:root {
+  --paper: #f7f4ed;          /* warm cream — page background */
+  --paper-2: #efe9dc;
+  --ink: #15171c;             /* near-black text on cream */
+  --ink-2: #3a3e47;
+  --muted: #6b6457;
+  --line: #d9d2c1;
+  --line-soft: #e6dfce;
+  --ember: #c4512a;           /* keystone accent — terracotta */
+  --ember-2: #a23e1f;
+  --sage: #5a7560;            /* status / well */
+  --slate: #3a4654;           /* dark technical */
+  --slate-2: #57626f;
+
+  /* iOS app tokens (used inside the phone frames) */
+  --ios-bg: #f2efe9;
+  --ios-card: #ffffff;
+  --ios-text: #1a1c1f;
+  --ios-muted: #6f7077;
+  --ios-divider: rgba(0, 0, 0, 0.08);
+  --ios-accent: #c4512a;
+  --ios-good: #2f7a4d;
+  --ios-warn: #b07b1a;
+  --ios-bad: #b53b3b;
+
+  --ios-dark-bg: #161719;
+  --ios-dark-card: #1f2125;
+  --ios-dark-text: #f1eee7;
+  --ios-dark-muted: #98928a;
+  --ios-dark-divider: rgba(255, 255, 255, 0.08);
+  --ios-dark-accent: #d96f47;
+}
+
+* { box-sizing: border-box; }
+.fig, .fig > * { min-width: 0; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.55;
+  font-size: 16px;
+}
+
+/* Two corner radial gradients for the editorial feel */
+body::before, body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+body::before {
+  background: radial-gradient(900px 600px at 0% 0%, rgba(196, 81, 42, 0.06), transparent 60%);
+}
+body::after {
+  background: radial-gradient(900px 600px at 100% 100%, rgba(58, 70, 84, 0.05), transparent 60%);
+}
+
+main { position: relative; z-index: 1; }
+
+/* ---------- Typography ---------- */
+.serif { font-family: 'DM Serif Display', serif; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+h1, h2, h3, h4 { margin: 0; font-weight: 500; letter-spacing: -0.01em; }
+h1 { font-family: 'DM Serif Display', serif; font-size: clamp(48px, 8vw, 96px); line-height: 0.95; letter-spacing: -0.025em; }
+h2 { font-family: 'DM Serif Display', serif; font-size: clamp(28px, 4vw, 44px); line-height: 1.05; letter-spacing: -0.02em; }
+h3 { font-size: 20px; font-weight: 600; line-height: 1.25; }
+h4 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-2); font-weight: 600; }
+
+p { margin: 0; }
+.lead { font-size: 20px; line-height: 1.45; color: var(--ink-2); max-width: 620px; }
+.note { font-size: 13px; color: var(--muted); }
+.eyebrow { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ember); font-weight: 600; }
+
+/* ---------- Layout ---------- */
+.wrap { max-width: 1280px; margin: 0 auto; padding: 56px 32px 96px; }
+.section { margin: 96px 0; }
+.section-head { max-width: 720px; margin: 0 auto 36px; text-align: center; }
+.section-head h2 { margin-top: 10px; }
+.section-head p { color: var(--ink-2); margin-top: 14px; }
+
+hr.rule { border: none; border-top: 1px solid var(--line); margin: 96px 0; }
+
+/* ---------- Hero ---------- */
+.hero {
+  padding: 80px 32px 40px;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+.hero .mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.hero h1 { margin-top: 24px; }
+.hero h1 em { font-style: italic; color: var(--ember); }
+.hero .lead { margin: 24px auto 0; }
+.hero .meta { display: flex; justify-content: center; gap: 28px; margin-top: 28px; font-size: 13px; color: var(--muted); }
+.hero .meta span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Foundations — palette, type, glass ---------- */
+.foundations {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 48px;
+  align-items: start;
+}
+@media (max-width: 880px) { .foundations { grid-template-columns: 1fr; } }
+
+.swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 24px; }
+.swatch {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.swatch .chip { height: 96px; }
+.swatch .meta { padding: 10px 12px; font-size: 12px; }
+.swatch .meta b { display: block; font-weight: 600; color: var(--ink); }
+.swatch .meta span { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+.glass-stage {
+  position: relative;
+  height: 280px;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 25% 30%, #f4c19a 0%, transparent 40%),
+    radial-gradient(circle at 75% 60%, #5e7ea3 0%, transparent 45%),
+    radial-gradient(circle at 50% 90%, #d8a7c3 0%, transparent 50%),
+    linear-gradient(135deg, #2a1d3a 0%, #3d2940 50%, #4a2e2a 100%);
+  box-shadow: 0 24px 60px rgba(40, 25, 20, 0.18);
+}
+.glass-plate {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80%;
+  height: 100px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border-top: 1px solid rgba(255, 255, 255, 0.55);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+    0 12px 30px rgba(0, 0, 0, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+.glass-plate::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 18px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 40%);
+}
+
+.type-row { display: flex; align-items: baseline; gap: 24px; margin-top: 18px; flex-wrap: wrap; }
+.type-row > div { flex: 1 1 200px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.type-row .name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 6px; }
+.type-row .sample.ios { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui; }
+
+/* ---------- Mockups grid ---------- */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 36px;
+  align-items: start;
+}
+
+.feature { grid-column: 1 / -1; }
+.feature .phone { width: 360px; margin: 0 auto; }
+.feature .copy { max-width: 520px; margin: 24px auto 0; text-align: center; }
+.feature .copy h3 { font-size: 22px; margin-bottom: 8px; }
+
+.row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: start; justify-items: center; }
+.row2 .copy { padding: 56px 24px 0; }
+@media (max-width: 880px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; justify-items: center; }
+@media (max-width: 1080px) { .row3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+@media (max-width: 720px) { .row3 { grid-template-columns: minmax(0, 1fr); } }
+
+.fig { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.fig .label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.fig .label .num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--ember);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+}
+.fig .desc { font-size: 14px; color: var(--muted); max-width: 320px; }
+
+/* ---------- Phone frame ---------- */
+.phone {
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  margin: 0 auto;
+  aspect-ratio: 393 / 852;
+  position: relative;
+  border-radius: 48px;
+  background: #1a1c1f;
+  padding: 8px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 30px 80px -20px rgba(20, 20, 30, 0.35),
+    0 8px 22px -6px rgba(20, 20, 30, 0.4);
+}
+.phone.wide { width: 360px; }
+.phone .bezel {
+  position: absolute;
+  inset: 0;
+  border-radius: 48px;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.phone .island {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100px;
+  height: 28px;
+  background: #000;
+  border-radius: 999px;
+  z-index: 5;
+}
+.phone .screen {
+  width: 100%;
+  height: 100%;
+  border-radius: 41px;
+  overflow: hidden;
+  position: relative;
+  background: var(--ios-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui;
+  color: var(--ios-text);
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+.phone .screen.dark { background: var(--ios-dark-bg); color: var(--ios-dark-text); }
+
+/* ---------- Inside the iPhone ---------- */
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 28px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ios-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  background: transparent;
+}
+.statusbar.dark { color: var(--ios-dark-text); }
+.statusbar .right { display: inline-flex; align-items: center; gap: 5px; }
+.statusbar svg { width: 14px; height: 14px; }
+
+.scroll { flex: 1; overflow: hidden; position: relative; }
+
+.floating-bar {
+  position: absolute;
+  top: 56px;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.floating-bar .title { font-weight: 600; }
+.floating-bar .right { margin-left: auto; color: var(--ios-muted); font-size: 12px; }
+.floating-bar.dark {
+  background: rgba(30, 30, 33, 0.6);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(0, 0, 0, 0.4);
+  color: var(--ios-dark-text);
+}
+
+/* Tab bar — the new Liquid Glass floating pill */
+.tabbar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  height: 60px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-radius: 999px;
+  border-top: 1px solid rgba(255, 255, 255, 0.95);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 8px;
+  z-index: 4;
+}
+.tabbar.dark {
+  background: rgba(30, 30, 33, 0.62);
+  border-top-color: rgba(255, 255, 255, 0.1);
+  border-bottom-color: rgba(0, 0, 0, 0.5);
+}
+.tabbar .tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--ios-muted);
+  font-weight: 500;
+}
+.tabbar .tab.active { color: var(--ios-accent); }
+.tabbar .tab svg { width: 22px; height: 22px; }
+
+/* Cards, lists, chips inside the phone */
+.card-stack { padding: 70px 14px 90px; display: flex; flex-direction: column; gap: 10px; }
+.hero-block { padding: 18px 20px 8px; }
+.hero-block .greet { font-size: 13px; color: var(--ios-muted); font-weight: 500; }
+.hero-block .where { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin-top: 2px; line-height: 1.1; }
+.hero-block .summary { font-size: 13px; color: var(--ios-muted); margin-top: 4px; }
+.hero-block .weather {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ios-text);
+}
+.screen.dark .hero-block .weather { background: rgba(255, 255, 255, 0.06); color: var(--ios-dark-text); }
+.weather svg { width: 14px; height: 14px; }
+
+.section-title {
+  padding: 22px 20px 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ios-muted);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+}
+.section-title .count { font-size: 11px; color: var(--ios-muted); font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+.scene-row {
+  padding: 4px 16px 8px;
+  display: flex;
+  gap: 8px;
+  overflow: hidden;
+}
+.scene-pill {
+  flex-shrink: 0;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.screen.dark .scene-pill { background: rgba(255, 255, 255, 0.08); color: var(--ios-dark-text); }
+.scene-pill.active { background: var(--ios-accent); color: #fff; }
+.scene-pill svg { width: 12px; height: 12px; }
+
+/* Device cards — liquid glass list */
+.list { padding: 0 14px 6px; display: flex; flex-direction: column; gap: 8px; }
+.device {
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.screen.dark .device { background: rgba(45, 45, 48, 0.7); border-color: rgba(255, 255, 255, 0.08); }
+.device .icon {
+  width: 38px; height: 38px;
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.device .icon.on { background: var(--ember); color: #fff; }
+.device .icon svg { width: 20px; height: 20px; }
+.device .name { font-size: 14px; font-weight: 600; line-height: 1.2; }
+.device .sub { font-size: 11.5px; color: var(--ios-muted); margin-top: 1px; font-weight: 500; }
+.device .body { flex: 1; min-width: 0; }
+.device.dim .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.device .right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* iOS toggle */
+.toggle {
+  width: 44px; height: 26px;
+  border-radius: 999px;
+  background: #d8d4ca;
+  position: relative;
+  cursor: pointer;
+  transition: background 200ms;
+}
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  transition: left 200ms;
+}
+.toggle.on { background: #2f7a4d; }
+.toggle.on::after { left: 20px; }
+.toggle.on.bad { background: #b53b3b; }
+.toggle.disabled { opacity: 0.45; }
+
+/* Brightness slider */
+.slider {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 2px;
+  margin-top: 8px;
+  position: relative;
+}
+.slider .fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--ember);
+  border-radius: 2px;
+}
+.slider .knob {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.screen.dark .slider { background: rgba(255, 255, 255, 0.1); }
+
+/* Sparkline */
+.spark { height: 20px; display: block; }
+
+/* Sensor big-number card */
+.sensor {
+  padding: 18px 18px 14px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  display: flex; align-items: center; gap: 14px;
+}
+.sensor .num { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+.sensor .unit { font-size: 22px; color: var(--ios-muted); margin-left: 2px; font-weight: 500; }
+.sensor .label { font-size: 11.5px; color: var(--ios-muted); font-weight: 500; margin-top: 4px; }
+.sensor .icn { width: 38px; height: 38px; border-radius: 12px; background: rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: center; }
+.sensor .num-row { display: flex; align-items: baseline; }
+.screen.dark .sensor { background: rgba(45, 45, 48, 0.7); border-color: rgba(255, 255, 255, 0.08); }
+.screen.dark .sensor .icn { background: rgba(255,255,255,0.08); }
+
+/* Primary liquid-glass button */
+.btn-primary {
+  display: flex; align-items: center; justify-content: center;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: var(--ember);
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 6px 20px rgba(196, 81, 42, 0.35);
+}
+.btn-secondary {
+  display: flex; align-items: center; justify-content: center;
+  padding: 13px 18px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ios-text);
+  font-weight: 600;
+  font-size: 15px;
+}
+.screen.dark .btn-secondary { background: rgba(255, 255, 255, 0.08); color: var(--ios-dark-text); }
+
+/* Connection card */
+.hub-card {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  display: flex; align-items: center; gap: 12px;
+}
+.hub-card .signal { width: 18px; height: 18px; border-radius: 50%; background: var(--ios-good); box-shadow: 0 0 0 4px rgba(47, 122, 77, 0.18); }
+.hub-card .signal.warn { background: var(--ios-warn); box-shadow: 0 0 0 4px rgba(176, 123, 26, 0.18); }
+.hub-card .body { flex: 1; }
+.hub-card .body .nm { font-size: 14.5px; font-weight: 600; }
+.hub-card .body .meta { font-size: 11.5px; color: var(--ios-muted); margin-top: 1px; }
+.hub-card .chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(47, 122, 77, 0.12);
+  color: var(--ios-good);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.screen.dark .hub-card { background: rgba(45, 45, 48, 0.7); border-color: rgba(255, 255, 255, 0.08); }
+
+/* Forms inside the phone (Connect screen) */
+.field {
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 13.5px;
+  color: var(--ios-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.screen.dark .field { background: rgba(255, 255, 255, 0.05); color: var(--ios-dark-text); }
+.field .label { font-size: 11px; color: var(--ios-muted); text-transform: uppercase; letter-spacing: 0.08em; min-width: 96px; font-weight: 600; }
+.field .value { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.field.mono .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* Sheet (bottom modal) */
+.sheet {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+}
+.sheet .body {
+  width: 100%;
+  background: var(--ios-bg);
+  border-radius: 24px 24px 41px 41px;
+  padding: 18px 20px 36px;
+  position: relative;
+  max-height: 78%;
+  overflow: hidden;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.15);
+}
+.sheet .grabber {
+  width: 36px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+  margin: 0 auto 16px;
+}
+.screen.dark .sheet .body { background: var(--ios-dark-bg); color: var(--ios-dark-text); }
+
+/* Color picker — for color lights */
+.color-picker {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  margin: 18px auto 12px;
+  background:
+    conic-gradient(
+      from 0deg,
+      #ff5a5a, #ffc35a, #d4ff5a, #5aff8d, #5ad4ff, #5a6eff, #c75aff, #ff5ad4, #ff5a5a
+    );
+  border: 6px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.12);
+  position: relative;
+}
+.color-picker .dot {
+  position: absolute;
+  top: 22%;
+  left: 28%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Sonar pairing animation (static) */
+.sonar {
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(196, 81, 42, 0.18) 0%, transparent 70%);
+  margin: 24px auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sonar::before, .sonar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(196, 81, 42, 0.25);
+  animation: ping 2s linear infinite;
+}
+.sonar::after { animation-delay: 1s; }
+.sonar .icon {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--ember);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  box-shadow: 0 4px 18px rgba(196, 81, 42, 0.4);
+}
+.sonar .icon svg { width: 28px; height: 28px; }
+@keyframes ping { 0% { transform: scale(0.6); opacity: 1; } 100% { transform: scale(1.2); opacity: 0; } }
+
+/* Chip — soft tinted pill */
+.chip-soft {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--ios-text);
+}
+.screen.dark .chip-soft { background: rgba(255, 255, 255, 0.08); color: var(--ios-dark-text); }
+.chip-soft.tone-good { background: rgba(47, 122, 77, 0.14); color: var(--ios-good); }
+.chip-soft.tone-warn { background: rgba(176, 123, 26, 0.14); color: var(--ios-warn); }
+.chip-soft.tone-ember { background: rgba(196, 81, 42, 0.14); color: var(--ember); }
+
+/* Components grid */
+.atoms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.atom {
+  padding: 22px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.atom .name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 14px; font-weight: 600; }
+.atom .stage { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Discussion */
+.discuss {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 28px;
+  padding: 48px 40px;
+  max-width: 920px;
+  margin: 0 auto;
+}
+.discuss h2 { color: var(--paper); }
+.discuss h2 em { color: #d97c4a; font-style: italic; }
+.discuss ol { padding-left: 20px; }
+.discuss li { margin-bottom: 18px; color: #d8d2c1; line-height: 1.6; }
+.discuss li strong { color: var(--paper); font-weight: 600; }
+
+/* Footer */
+footer {
+  margin-top: 80px;
+  text-align: center;
+  padding: 32px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+</style>
+</head>
+<body>
+
+<main>
+
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <span class="mark">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg>
+    keystone · design preview
+  </span>
+  <h1>The home<br/>on <em>your</em> terms.</h1>
+  <p class="lead">An <strong>iOS app</strong> for a local-first smart home hub. Pin your own certificate, talk to your own Wi-Fi, no cloud required — wrapped in the quiet tactility of <strong>iOS&nbsp;26 Liquid&nbsp;Glass</strong>.</p>
+  <div class="meta">
+    <span><span style="width:6px;height:6px;border-radius:50%;background:var(--ember);display:inline-block"></span> 11 mocks</span>
+    <span>v0.1 · draft for discussion</span>
+    <span>RU · EN</span>
+  </div>
+  <p class="lead" style="margin-top:18px;font-size:15px">
+    Это — ранний черновик визуального языка. Рабочая <b>спецификация v1.0</b> (все экраны с состояниями,
+    токены, иконки, правки ТЗ по факту запущенного приложения) — в
+    <a href="keystone-spec.html" style="color:var(--ember)">keystone-spec.html</a>.
+  </p>
+</section>
+
+<div class="wrap">
+
+  <!-- ============================ FOUNDATIONS ============================ -->
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">1 · foundations</span>
+      <h2>The keystone idiom.</h2>
+      <p>Walls of warm sandstone. Inked details. One <em>keystone</em> — a single purposeful accent that ties every screen together. Modest, precise, built to last the decade your hub will live through.</p>
+    </div>
+
+    <div class="foundations">
+      <div>
+        <h4>Color</h4>
+        <p class="note" style="margin-top:6px">Sandstone neutrals, a single terracotta accent, slate for technical surfaces. The accent does only two jobs: <em>affordance</em> and <em>heat</em> (a live reading, a powered device).</p>
+        <div class="swatches">
+          <div class="swatch"><div class="chip" style="background:#f7f4ed"></div><div class="meta"><b>Sandstone</b><span>#F7F4ED</span></div></div>
+          <div class="swatch"><div class="chip" style="background:#15171c"></div><div class="meta"><b>Ink</b><span>#15171C</span></div></div>
+          <div class="swatch"><div class="chip" style="background:#c4512a"></div><div class="meta"><b>Ember</b><span>#C4512A</span></div></div>
+          <div class="swatch"><div class="chip" style="background:#5a7560"></div><div class="meta"><b>Sage</b><span>#5A7560</span></div></div>
+          <div class="swatch"><div class="chip" style="background:#3a4654"></div><div class="meta"><b>Slate</b><span>#3A4654</span></div></div>
+        </div>
+      </div>
+
+      <div>
+        <h4>Material · Liquid Glass</h4>
+        <p class="note" style="margin-top:6px">A spec-blurred plate layered over warm light. Specular at the top edge, deep-shadow underneath, refractive in the middle.</p>
+        <div class="glass-stage">
+          <div class="glass-plate">SPECULAR · REFRACTIVE · TINTED</div>
+        </div>
+        <div class="type-row">
+          <div>
+            <div class="name">Display · iOS</div>
+            <div class="sample ios" style="font-size:22px;font-weight:700;letter-spacing:-0.02em">SF Pro Display</div>
+          </div>
+          <div>
+            <div class="name">Text · iOS</div>
+            <div class="sample ios" style="font-size:14px;color:#444">SF Pro Text — readable</div>
+          </div>
+          <div>
+            <div class="name">Numeric</div>
+            <div class="mono" style="font-size:15px;color:#444">AA:BB:CC:DD…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ SCREENS — feature row 1 ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">2 · home & entry</span>
+      <h2>Welcoming, never fussy.</h2>
+      <p>The first 10&nbsp;seconds either trust or distrust. Connect earns trust by showing every byte the user cares about; Home earns trust by getting out of the way.</p>
+    </div>
+
+    <!-- CONNECT (feature) -->
+    <div class="gallery">
+      <div class="fig feature">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right">●●●● 5G <svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="scroll" style="background:linear-gradient(180deg,#f7f4ed 0%,#efe9dc 100%)">
+              <div style="padding:64px 28px 20px">
+                <div style="display:flex;align-items:center;gap:8px;color:var(--ember);font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase">keystone</div>
+                <div class="serif" style="font-size:36px;line-height:1;letter-spacing:-0.025em;margin-top:12px;color:var(--ink)">Welcome<br/><em style="color:var(--ember)">home.</em></div>
+                <p style="font-size:14px;color:var(--ink-2);margin-top:14px;line-height:1.4;max-width:280px">An offline-first hub lives next to your router. Tell us where.</p>
+              </div>
+
+              <div class="section-title">Discovered hubs</div>
+              <div class="list" style="padding-top:0">
+                <div class="hub-card">
+                  <div class="signal"></div>
+                  <div class="body">
+                    <div class="nm">Home Hub</div>
+                    <div class="meta">192.168.0.202 · wss:// · TLS</div>
+                  </div>
+                  <div class="chip">ready</div>
+                </div>
+                <div class="hub-card" style="opacity:0.65">
+                  <div class="signal warn"></div>
+                  <div class="body">
+                    <div class="nm">Garage Hub</div>
+                    <div class="meta">192.168.0.214 · wss://</div>
+                  </div>
+                  <div class="chip" style="background:rgba(176,123,26,0.14);color:var(--ios-warn)">silent</div>
+                </div>
+              </div>
+
+              <div class="section-title">Manual</div>
+              <div class="list" style="padding-top:0">
+                <div class="field mono"><span class="label">Address</span><span class="value">wss://keystone.local:8443/ws</span></div>
+                <div class="field mono"><span class="label">Fingerprint</span><span class="value" style="color:var(--ios-muted)">AA:7D:21:C9…</span></div>
+                <div class="field"><span class="label">Token</span><span class="mono" style="letter-spacing:0.18em;font-size:18px;color:var(--ios-muted)">••••••••••••</span></div>
+              </div>
+
+              <div style="padding:18px 14px 0;display:flex;flex-direction:column;gap:10px">
+                <div class="btn-primary">Connect securely</div>
+                <div style="font-size:11px;color:var(--muted);text-align:center;line-height:1.4;padding:0 16px">The token is never sent until the certificate matches the fingerprint you typed.</div>
+                <div style="font-size:13px;color:var(--ember);text-align:center;font-weight:500;margin-top:6px">Set up a new hub ›</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="copy">
+          <div class="label"><span class="num">1</span><span>Connect</span></div>
+          <h3>mDNS, fingerprint, never-in-URL token.</h3>
+          <p>Two hubs on the network — one ready, one silent. Their fingerprints are <em>never</em> on the wire; the user types it once and we promise not to send the token until TLS matches it.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOME / Devices (feature) -->
+    <div style="height:32px"></div>
+    <div class="gallery">
+      <div class="fig feature">
+        <div class="phone wide">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar dark"><span style="color:var(--ios-dark-text)">9:41</span><span class="right" style="color:var(--ios-dark-text)">●●●● 5G <svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="scroll" style="background:
+              radial-gradient(900px 600px at 20% 0%, rgba(225, 138, 84, 0.55) 0%, transparent 55%),
+              radial-gradient(900px 600px at 80% 60%, rgba(60, 96, 110, 0.6) 0%, transparent 55%),
+              linear-gradient(180deg, #2a1812 0%, #0e1014 50%, #0a0c10 100%);
+              padding:56px 0 90px">
+
+              <div style="padding:16px 20px 14px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                  <div style="font-size:13px;color:#d8c9b9;font-weight:500">Good evening, Valerii</div>
+                  <div style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.1);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;color:#f1eee7;font-weight:600;font-size:13px">V</div>
+                </div>
+                <div class="serif" style="font-size:30px;line-height:1.05;letter-spacing:-0.025em;margin-top:6px;color:#f4ead8"><em style="color:#d97c4a">Home</em> tonight</div>
+                <div style="display:flex;gap:6px;margin-top:12px">
+                  <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(12px);font-size:12px;color:#f1eee7">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                    18° · sunset 19:48
+                  </div>
+                  <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(12px);font-size:12px;color:#f1eee7">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
+                    4 rooms · 12 devices
+                  </div>
+                </div>
+              </div>
+
+              <!-- Scenes chip strip -->
+              <div style="padding-left:20px;display:flex;gap:8px;overflow:hidden">
+                <div style="flex-shrink:0;padding:7px 13px;border-radius:999px;background:#d97c4a;color:#fff;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>Evening</div>
+                <div style="flex-shrink:0;padding:7px 13px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(10px);color:#f1eee7;font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px">Movie</div>
+                <div style="flex-shrink:0;padding:7px 13px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(10px);color:#f1eee7;font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px">Away</div>
+                <div style="flex-shrink:0;padding:7px 13px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(10px);color:#f1eee7;font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px">Morning</div>
+              </div>
+
+              <!-- Living room card -->
+              <div style="padding:18px 14px 0">
+                <div style="font-size:13px;text-transform:uppercase;letter-spacing:0.1em;color:#b9aa92;font-weight:600;padding:0 8px;margin-bottom:10px">Living room · 5 devices</div>
+                <div style="padding:14px;border-radius:24px;background:rgba(255,255,255,0.08);backdrop-filter:blur(18px) saturate(180%);border:1px solid rgba(255,255,255,0.12)">
+                  <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+                    <div style="width:38px;height:38px;border-radius:11px;background:#d97c4a;display:flex;align-items:center;justify-content:center;color:#fff">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 2C8 2 5 5 5 9c0 3 2 5 4 6v5h6v-5c2-1 4-3 4-6 0-4-3-7-7-7z"/></svg>
+                    </div>
+                    <div style="flex:1">
+                      <div style="font-size:15px;font-weight:600;color:#f1eee7">Reading lamp</div>
+                      <div style="font-size:12px;color:#b9aa92;margin-top:1px">68% · warm 2700K</div>
+                    </div>
+                    <div class="toggle on"></div>
+                  </div>
+                  <div style="height:14px"></div>
+                  <div style="padding-top:6px">
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <div class="toggle on"></div>
+                      <div style="font-size:14px;color:#f1eee7;font-weight:500">Plug · 42W</div>
+                    </div>
+                    <div class="slider" style="background:rgba(255,255,255,0.12)"><div class="fill" style="width:68%;background:#d97c4a"></div><div class="knob" style="left:68%"></div></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Kitchen card -->
+              <div style="padding:8px 14px 0">
+                <div style="font-size:13px;text-transform:uppercase;letter-spacing:0.1em;color:#b9aa92;font-weight:600;padding:0 8px;margin-bottom:10px">Kitchen · 3 devices</div>
+                <div style="padding:12px 14px;border-radius:18px;background:rgba(255,255,255,0.08);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px">
+                  <div style="width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;color:#d97c4a">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M9 2v6L4 18a2 2 0 0 0 1.7 3h12.6A2 2 0 0 0 20 18L15 8V2M9 2h6"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14.5px;font-weight:600;color:#f1eee7">Kettle</div>
+                    <div style="font-size:12px;color:#b9aa92">Off · last used 2h ago</div>
+                  </div>
+                  <div class="toggle"></div>
+                </div>
+                <div style="height:8px"></div>
+                <div style="padding:14px 16px;border-radius:18px;background:rgba(255,255,255,0.08);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px">
+                  <div style="width:38px;height:38px;border-radius:11px;background:rgba(90,117,96,0.4);display:flex;align-items:center;justify-content:center;color:#9bc7a7">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M12 2a4 4 0 0 0-4 4v3M12 22a4 4 0 0 0 4-4v-3"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14.5px;font-weight:600;color:#f1eee7">Sensor · 22.4°</div>
+                    <div style="font-size:12px;color:#b9aa92">58% humidity · updated 3s ago</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bedroom room -->
+              <div style="padding:8px 14px 0">
+                <div style="font-size:13px;text-transform:uppercase;letter-spacing:0.1em;color:#b9aa92;font-weight:600;padding:0 8px;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 12l9-9 9 9v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></svg>
+                  Bedroom · 3 devices
+                </div>
+                <div style="padding:12px 14px;border-radius:18px;background:rgba(255,255,255,0.08);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px">
+                  <div style="width:38px;height:38px;border-radius:11px;background:#d97c4a;display:flex;align-items:center;justify-content:center;color:#fff">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M12 2l4 7h-8z"/><path d="M8 9h8v6H8z"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14.5px;font-weight:600;color:#f1eee7">Ceiling</div>
+                    <div style="font-size:12px;color:#b9aa92">On · lavender · 72%</div>
+                  </div>
+                  <div class="toggle on"></div>
+                </div>
+                <div style="height:8px"></div>
+                <div style="padding:12px 14px;border-radius:18px;background:rgba(255,255,255,0.08);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:12px">
+                  <div style="width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;color:#d97c4a">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="2" y="6" width="20" height="14" rx="3"/><path d="M6 10v6M10 8v8M14 11v5M18 9v7"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14.5px;font-weight:600;color:#f1eee7">Curtain</div>
+                    <div style="font-size:12px;color:#b9aa92">Closed · 24 % open</div>
+                  </div>
+                  <div class="toggle"></div>
+                </div>
+              </div>
+
+              <div style="padding:18px 14px 0;display:flex;align-items:center;justify-content:center;gap:6px;color:#9c8d77;font-size:13px;font-weight:500">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                Add a device
+              </div>
+            </div>
+
+            <!-- Floating glass tab bar -->
+            <div class="tabbar dark">
+              <div class="tab active">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></svg>
+                Home
+              </div>
+              <div class="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/></svg>
+                Automations
+              </div>
+              <div class="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7z"/><path d="M2 7l10 5 10-5"/></svg>
+                Hub
+              </div>
+              <div class="tab">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                History
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="copy">
+          <div class="label"><span class="num">2</span><span>Home</span></div>
+          <h3>A wall-length room view, set against the room itself.</h3>
+          <p>The wall behind your hub reads as a <em>photo</em>, not a flat color. Glass cards lift off it. Scenes sit on a rail. A plug card shows live power; a sensor card breathes every few seconds. The bottom is the new floating tab bar — one piece of glass, the home indicator underneath.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ DEVICE TYPES ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">3 · devices</span>
+      <h2>One card per entity.</h2>
+      <p>Same liquid-glass card, four different interiors — depending on what the hub tells us. Read-only sensors don't get a switch; metered plugs get a sparkline.</p>
+    </div>
+
+    <div class="row3">
+      <!-- Plug with metering -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <div class="floating-bar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <div class="title">Living room</div>
+              <div class="right">●</div>
+            </div>
+
+            <div style="padding:110px 18px 18px;flex:1;display:flex;flex-direction:column;gap:12px">
+              <div style="text-align:center;padding:18px 0 10px">
+                <div style="width:64px;height:64px;border-radius:18px;margin:0 auto;background:linear-gradient(135deg,#d97c4a,#c4512a);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 8px 24px rgba(217,124,74,0.4)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32"><path d="M9 2v6L4 18a2 2 0 0 0 1.7 3h12.6A2 2 0 0 0 20 18L15 8V2M9 2h6"/></svg>
+                </div>
+                <div class="serif" style="font-size:26px;line-height:1.05;letter-spacing:-0.025em;margin-top:14px">Plug · Kitchen</div>
+                <div style="font-size:13px;color:var(--ios-muted);margin-top:4px">On · 42 W</div>
+              </div>
+
+              <div style="padding:14px;border-radius:18px;background:var(--ios-card);display:flex;flex-direction:column;gap:6px;box-shadow:0 1px 0 rgba(0,0,0,0.03)">
+                <div style="display:flex;justify-content:space-between;align-items:baseline">
+                  <span style="font-size:12px;color:var(--ios-muted);font-weight:500;text-transform:uppercase;letter-spacing:0.06em">Now</span>
+                  <span class="mono" style="font-size:13px;color:var(--ios-good);font-weight:600">↑ live</span>
+                </div>
+                <div style="display:flex;align-items:baseline;gap:6px">
+                  <span style="font-size:32px;font-weight:700;letter-spacing:-0.025em">42</span>
+                  <span style="font-size:16px;color:var(--ios-muted);font-weight:500">W</span>
+                </div>
+                <!-- spark -->
+                <svg class="spark" viewBox="0 0 200 30" preserveAspectRatio="none" style="width:100%;height:30px">
+                  <defs>
+                    <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#c4512a" stop-opacity="0.4"/>
+                      <stop offset="100%" stop-color="#c4512a" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M0 22 L20 18 L40 21 L60 14 L80 16 L100 9 L120 12 L140 7 L160 11 L180 5 L200 8" fill="none" stroke="#c4512a" stroke-width="1.5"/>
+                  <path d="M0 22 L20 18 L40 21 L60 14 L80 16 L100 9 L120 12 L140 7 L160 11 L180 5 L200 8 L200 30 L0 30 Z" fill="url(#g1)"/>
+                </svg>
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ios-muted);margin-top:2px"><span>Today</span><span><b style="color:var(--ios-text)">0.34</b> kWh</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ios-muted)"><span>This month</span><span><b style="color:var(--ios-text)">14.8</b> kWh · ~$2.10</span></div>
+              </div>
+
+              <div style="display:flex;gap:10px">
+                <div class="btn-secondary" style="flex:1">Identify</div>
+                <div class="btn-primary" style="flex:1">Turn off</div>
+              </div>
+
+              <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px">
+                <span class="chip-soft">Living room</span>
+                <span class="chip-soft tone-good">reachable</span>
+                <span class="chip-soft">R 1 W 0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Plug · metering.</b> Living reading. Sparkline answers "is it normal right now?".</div>
+      </div>
+
+      <!-- Color light -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen dark">
+            <div class="statusbar dark"><span>9:41</span><span class="right" style="color:var(--ios-dark-text)"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <div class="floating-bar dark">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <div class="title">Bedroom ceiling</div>
+              <div class="right">●</div>
+            </div>
+
+            <div style="padding:110px 18px 18px;flex:1;display:flex;flex-direction:column;gap:14px;align-items:center;background:
+              radial-gradient(circle at 50% 35%, rgba(186, 158, 222, 0.5) 0%, transparent 55%),
+              linear-gradient(180deg, #1a1620 0%, #0a0a0e 100%)">
+              <div class="serif" style="font-size:24px;line-height:1.1;letter-spacing:-0.02em;margin-top:6px;color:#f1eee7">Mood · Lavender</div>
+
+              <div class="color-picker">
+                <div class="dot"></div>
+              </div>
+
+              <div style="display:flex;gap:6px;margin-top:6px">
+                <div style="padding:6px 11px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(10px);font-size:11.5px;color:#f1eee7;font-weight:500">Focus 4000K</div>
+                <div style="padding:6px 11px;border-radius:999px;background:rgba(255,255,255,0.12);backdrop-filter:blur(10px);font-size:11.5px;color:#f1eee7;font-weight:500">Sunset 2700K</div>
+                <div style="padding:6px 11px;border-radius:999px;background:#d97c4a;color:#fff;font-size:11.5px;font-weight:600">Energize</div>
+              </div>
+
+              <!-- Brightness -->
+              <div style="width:100%;padding:0 20px">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:#b9b1a5;margin-bottom:6px;font-weight:500">
+                  <span>Brightness</span><span>72%</span>
+                </div>
+                <div class="slider" style="background:rgba(255,255,255,0.12)"><div class="fill" style="width:72%;background:#d97c4a"></div><div class="knob" style="left:72%"></div></div>
+              </div>
+
+              <div class="toggle on" style="margin-top:8px"></div>
+              <div style="font-size:12px;color:#b9b1a5">On · 72%</div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Color light.</b> Wheel + temp presets + a single toggle. The room is the UI.</div>
+      </div>
+
+      <!-- Sensor -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <div class="floating-bar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <div class="title">Hallway</div>
+              <div class="right">●●●</div>
+            </div>
+
+            <div style="padding:110px 18px 18px;flex:1;display:flex;flex-direction:column;gap:14px">
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;color:var(--ios-muted);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600">
+                  Sensor · battery <b style="color:var(--ink);margin-left:2px">64%</b>
+                </div>
+                <div style="margin-top:8px;display:flex;align-items:baseline">
+                  <span style="font-size:78px;font-weight:700;letter-spacing:-0.04em;line-height:1">22.4</span>
+                  <span style="font-size:30px;color:var(--ios-muted);margin-left:4px;font-weight:500">°C</span>
+                </div>
+                <div style="font-size:13px;color:var(--ios-muted);margin-top:4px">Updated 3 seconds ago</div>
+              </div>
+
+              <div class="sensor">
+                <div class="icn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 3l4 8a4 4 0 1 1-8 0z"/></svg></div>
+                <div>
+                  <div class="num-row"><span class="num">58</span><span class="unit">%</span></div>
+                  <div class="label">Humidity · comfortable</div>
+                </div>
+              </div>
+
+              <div class="sensor">
+                <div class="icn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.93 4.93l4.24 4.24M15.54 15.54l4.24 4.24"/></svg></div>
+                <div>
+                  <div class="num-row"><span class="num">312</span><span class="unit">lx</span></div>
+                  <div class="label">Illuminance · low</div>
+                </div>
+              </div>
+
+              <!-- 24h graph -->
+              <div style="padding:14px;border-radius:18px;background:var(--ios-card)">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ios-muted);font-weight:500;text-transform:uppercase;letter-spacing:0.06em"><span>Last 24 h</span><span>21.8 → 23.4°C</span></div>
+                <svg viewBox="0 0 240 60" style="width:100%;height:60px;margin-top:6px">
+                  <defs>
+                    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#c4512a" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="#c4512a" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M0 38 L15 36 L30 40 L45 35 L60 30 L75 32 L90 28 L105 22 L120 18 L135 22 L150 26 L165 20 L180 16 L195 22 L210 30 L225 28 L240 35 L240 60 L0 60 Z" fill="url(#g2)"/>
+                  <path d="M0 38 L15 36 L30 40 L45 35 L60 30 L75 32 L90 28 L105 22 L120 18 L135 22 L150 26 L165 20 L180 16 L195 22 L210 30 L225 28 L240 35" fill="none" stroke="#c4512a" stroke-width="1.5"/>
+                </svg>
+              </div>
+
+              <div style="font-size:12px;color:var(--ember);font-weight:500;text-align:center;margin-top:6px">2 automations use this ›</div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Sensor.</b> Big number, live status, 24 h. Read-only chrome — no toggle.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ AUTOMATIONS ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">4 · automations</span>
+      <h2>Sentences, not spreadsheets.</h2>
+      <p>A rule reads as a sentence. A scene reads as a paragraph. A schedule reads as a clock face. We try both bottom-sheet and full-screen push for the schedule form — your call.</p>
+    </div>
+
+    <div class="row2">
+      <!-- Scenes list (only — rules form is shown in 4.b comparison as a sheet) -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="floating-bar">
+              <div class="title">Automations</div>
+              <div class="right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 5v14M5 12h14"/></svg></div>
+            </div>
+
+            <div style="padding:110px 0 24px;flex:1;display:flex;flex-direction:column">
+              <!-- Segmented control -->
+              <div style="margin:0 16px;padding:3px;border-radius:11px;background:rgba(0,0,0,0.06);display:flex;gap:2px">
+                <div style="flex:1;padding:7px 0;border-radius:9px;background:#fff;font-size:12px;font-weight:600;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.08)">Scenes</div>
+                <div style="flex:1;padding:7px 0;font-size:12px;font-weight:500;text-align:center;color:var(--ios-muted)">Rules</div>
+                <div style="flex:1;padding:7px 0;font-size:12px;font-weight:500;text-align:center;color:var(--ios-muted)">Schedule</div>
+                <div style="flex:1;padding:7px 0;font-size:12px;font-weight:500;text-align:center;color:var(--ios-muted)">Timers</div>
+              </div>
+
+              <div class="section-title" style="padding-top:18px">Active scenes <span class="count">5</span></div>
+              <div style="padding:0 14px;display:flex;flex-direction:column;gap:8px">
+                <!-- Scene card -->
+                <div style="padding:14px;border-radius:18px;background:rgba(255,255,255,0.7);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.6)">
+                  <div style="display:flex;align-items:center;gap:12px">
+                    <div style="width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#5e4a78,#8a6e9b);display:flex;align-items:center;justify-content:center;color:#fff">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    </div>
+                    <div style="flex:1">
+                      <div style="font-size:15px;font-weight:600">Evening</div>
+                      <div style="font-size:12px;color:var(--ios-muted);margin-top:1px">Lamp 30% · Plug off · Sensor dim</div>
+                    </div>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid var(--ios-divider)">
+                    <span class="chip-soft">3 actions</span>
+                    <span class="chip-soft tone-good">last applied 4h ago</span>
+                    <span style="margin-left:auto;color:var(--ios-muted);font-size:11px">Edit</span>
+                  </div>
+                </div>
+
+                <div style="padding:14px;border-radius:18px;background:rgba(255,255,255,0.7);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.6);display:flex;align-items:center;gap:12px">
+                  <div style="width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#c4512a,#d97c4a);display:flex;align-items:center;justify-content:center;color:#fff">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M12 2C8 2 5 5 5 9c0 3 2 5 4 6v5h6v-5c2-1 4-3 4-6 0-4-3-7-7-7z"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:15px;font-weight:600">Morning</div>
+                    <div style="font-size:12px;color:var(--ios-muted);margin-top:1px">Lamp 80% · Kettle on</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+
+                <div style="padding:14px;border-radius:18px;background:rgba(255,255,255,0.7);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.6);display:flex;align-items:center;gap:12px">
+                  <div style="width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#3a4654,#57626f);display:flex;align-items:center;justify-content:center;color:#fff">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:15px;font-weight:600">Away</div>
+                    <div style="font-size:12px;color:var(--ios-muted);margin-top:1px">All lights off · plugs off</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+              </div>
+            </div>
+
+            <div class="tabbar">
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></svg>Home</div>
+              <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Auto</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7z"/></svg>Hub</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>History</div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Automations hub.</b> Segmented control. Scenes read like sentences.</div>
+      </div>
+
+      <!-- Add rule sheet -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <div style="position:absolute;inset:0;background:rgba(0,0,0,0.3);z-index:10;display:flex;align-items:flex-end">
+              <div style="width:100%;background:var(--ios-bg);border-radius:24px 24px 41px 41px;padding:14px 18px 32px;max-height:88%;overflow:hidden">
+                <div style="width:36px;height:4px;background:rgba(0,0,0,0.15);border-radius:2px;margin:4px auto 14px"></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                  <div style="font-size:14px;color:var(--ios-muted);font-weight:500">Cancel</div>
+                  <div class="serif" style="font-size:20px;letter-spacing:-0.02em">New Rule</div>
+                  <div style="font-size:14px;color:var(--ember);font-weight:600">Save</div>
+                </div>
+
+                <!-- Sentence builder -->
+                <div style="padding:14px;border-radius:16px;background:var(--ios-card);font-size:14px;line-height:1.6">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:12px;color:var(--ios-muted)">WHEN</span>
+                    <span class="chip-soft">Hallway sensor</span>
+                    <span class="chip-soft">temperature</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+                    <span class="chip-soft tone-ember">&gt; 24</span>
+                    <span style="font-size:13px;color:var(--ios-muted)">°C</span>
+                  </div>
+                  <div style="height:1px;background:var(--ios-divider);margin:12px 0"></div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:12px;color:var(--ios-muted)">THEN</span>
+                    <span class="chip-soft">Bedroom plug</span>
+                    <span class="chip-soft">on_off</span>
+                    <span class="chip-soft tone-good">off</span>
+                  </div>
+                  <div style="height:1px;background:var(--ios-divider);margin:12px 0"></div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:12px;color:var(--ios-muted)">ONLY</span>
+                    <span class="chip-soft">between 18:00 – 23:00</span>
+                    <span class="chip-soft">daily</span>
+                    <span class="chip-soft">cooldown 30m</span>
+                  </div>
+                </div>
+
+                <div style="margin-top:18px;display:flex;flex-direction:column;gap:10px">
+                  <div style="font-size:12px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;padding:0 4px">Preview</div>
+                  <div style="padding:14px;border-radius:14px;background:rgba(196,81,42,0.08);font-size:13px;line-height:1.45;color:var(--ink-2)">
+                    <em style="color:var(--ember);font-weight:600">When</em> Hallway sensor is hotter than 24°C between 18:00 and 23:00, <em style="color:var(--ember);font-weight:600">then</em> turn off Bedroom plug. Daily, with a 30 min cool-down.
+                  </div>
+                </div>
+
+                <div style="margin-top:18px;display:flex;gap:8px">
+                  <div class="btn-secondary" style="flex:1">Add condition</div>
+                  <div class="btn-secondary" style="flex:1">Time window</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:8px"></div>
+        <div class="desc"><b style="color:var(--ink)">Rule sheet.</b> A sentence in chips first, English second. Save is right where the thumb lands.</div>
+      </div>
+    </div>
+
+    <div style="margin:48px auto 0;max-width:720px;text-align:center">
+      <span class="eyebrow">4.b · schedule form variants</span>
+      <h3 style="margin-top:8px">Sheet vs. push — same form, two shapes.</h3>
+      <p style="color:var(--ink-2);margin-top:10px">The schedule form is the long one (time + days + action + optional scene). We built it twice: a 3-step bottom sheet that grows, and a scrollable push page where everything is visible.</p>
+    </div>
+
+    <div class="row2" style="margin-top:24px">
+      <!-- Schedule — bottom-sheet variant -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <!-- Dimmed mock content behind the sheet -->
+            <div style="padding:110px 18px 18px;flex:1;display:flex;flex-direction:column;gap:10px;filter:blur(2px) saturate(80%);opacity:0.6">
+              <div style="font-size:13px;text-transform:uppercase;letter-spacing:0.1em;color:var(--ios-muted);font-weight:600;padding-left:6px">Active schedules <span class="count">3</span></div>
+              <div style="padding:14px;border-radius:18px;background:var(--ios-card);display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="width:36px;height:36px;border-radius:10px;background:rgba(0,0,0,0.05);display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></div>
+                  <div style="flex:1"><div style="font-size:13.5px;font-weight:600">Sunset lamp dim</div><div style="font-size:11.5px;color:var(--ios-muted)">30m after sunset · daily · Lamp → 30%</div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- The sheet itself -->
+            <div style="position:absolute;inset:0;background:rgba(0,0,0,0.18);z-index:10;display:flex;align-items:flex-end">
+              <div style="width:100%;background:var(--ios-bg);border-radius:24px 24px 41px 41px;padding:14px 20px 32px;max-height:88%;overflow:hidden">
+                <div style="width:36px;height:4px;background:rgba(0,0,0,0.18);border-radius:2px;margin:4px auto 14px"></div>
+
+                <!-- Step indicator (3 dots) -->
+                <div style="display:flex;justify-content:center;gap:6px;margin-bottom:14px">
+                  <div style="width:24px;height:4px;border-radius:2px;background:var(--ember)"></div>
+                  <div style="width:24px;height:4px;border-radius:2px;background:rgba(0,0,0,0.12)"></div>
+                  <div style="width:24px;height:4px;border-radius:2px;background:rgba(0,0,0,0.12)"></div>
+                </div>
+
+                <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px">
+                  <div style="font-size:11px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.1em;font-weight:600">Step 2 of 3</div>
+                  <div style="font-size:13px;color:var(--ember);font-weight:600">Cancel</div>
+                </div>
+                <div class="serif" style="font-size:26px;line-height:1.05;letter-spacing:-0.025em">Which days?</div>
+                <div style="font-size:13px;color:var(--ios-muted);margin-top:4px">A daily schedule is the most common pick.</div>
+
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:18px">
+                  <div style="padding:8px 14px;border-radius:999px;background:var(--ember);color:#fff;font-size:12.5px;font-weight:600">Daily</div>
+                  <div style="padding:8px 14px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:12.5px;font-weight:500">Weekdays</div>
+                  <div style="padding:8px 14px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:12.5px;font-weight:500">Weekends</div>
+                  <div style="padding:8px 14px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:12.5px;font-weight:500">Custom…</div>
+                  <div style="padding:8px 14px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:12.5px;font-weight:500">Once, a date</div>
+                </div>
+
+                <!-- Custom days grid -->
+                <div style="margin-top:18px;padding:14px;border-radius:14px;background:var(--ios-card);display:flex;gap:6px;justify-content:space-between">
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(196,81,42,0.12);color:var(--ember);font-size:12px;font-weight:600">M</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(196,81,42,0.12);color:var(--ember);font-size:12px;font-weight:600">T</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(196,81,42,0.12);color:var(--ember);font-size:12px;font-weight:600">W</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(196,81,42,0.12);color:var(--ember);font-size:12px;font-weight:600">T</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(196,81,42,0.12);color:var(--ember);font-size:12px;font-weight:600">F</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(0,0,0,0.04);color:var(--ios-muted);font-size:12px;font-weight:600">S</div>
+                  <div style="flex:1;aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:10px;background:rgba(0,0,0,0.04);color:var(--ios-muted);font-size:12px;font-weight:600">S</div>
+                </div>
+
+                <div style="display:flex;gap:10px;margin-top:22px">
+                  <div class="btn-secondary" style="flex:1">‹ Time</div>
+                  <div class="btn-primary" style="flex:1.4">Continue · Action</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="desc" style="margin-top:14px"><b style="color:var(--ink)">A · bottom sheet.</b> 3-step wizard with a step indicator. Save lives on the last step; Cancel stays one tap away.</div>
+      </div>
+
+      <!-- Schedule — full-screen push variant -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="floating-bar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <div class="title" style="font-weight:600">New schedule</div>
+              <div class="right" style="font-size:13px;color:var(--ember);font-weight:600">Save</div>
+            </div>
+
+            <div style="padding:110px 18px 18px;flex:1;display:flex;flex-direction:column;gap:14px">
+              <div>
+                <div style="font-size:11px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.1em;font-weight:600">Time</div>
+                <div class="serif" style="font-size:54px;line-height:1;letter-spacing:-0.04em;margin-top:4px;color:var(--ink)">19:30</div>
+                <div style="display:flex;gap:6px;margin-top:10px">
+                  <div style="padding:6px 11px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:11.5px;font-weight:500">+ 30 min</div>
+                  <div style="padding:6px 11px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:11.5px;font-weight:500">− 15 min</div>
+                  <div style="padding:6px 11px;border-radius:999px;background:rgba(0,0,0,0.06);font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>Sunset</div>
+                  <div style="padding:6px 11px;border-radius:999px;background:var(--ember);color:#fff;font-size:11.5px;font-weight:600">Sunset + 30</div>
+                </div>
+              </div>
+
+              <div style="height:1px;background:var(--ios-divider)"></div>
+
+              <div>
+                <div style="font-size:11px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.1em;font-weight:600">Days</div>
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <div style="flex:1;padding:9px 0;border-radius:10px;background:var(--ember);color:#fff;font-size:12.5px;font-weight:600;text-align:center">Daily</div>
+                  <div style="flex:1;padding:9px 0;border-radius:10px;background:rgba(0,0,0,0.05);font-size:12.5px;font-weight:500;text-align:center">Weekdays</div>
+                  <div style="flex:1;padding:9px 0;border-radius:10px;background:rgba(0,0,0,0.05);font-size:12.5px;font-weight:500;text-align:center">Weekends</div>
+                </div>
+              </div>
+
+              <div style="height:1px;background:var(--ios-divider)"></div>
+
+              <div>
+                <div style="font-size:11px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.1em;font-weight:600">Action</div>
+                <div style="display:flex;gap:6px;margin-top:8px;padding:3px;border-radius:11px;background:rgba(0,0,0,0.05)">
+                  <div style="flex:1;padding:8px 0;border-radius:9px;background:#fff;font-size:12px;font-weight:600;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.08)">A device</div>
+                  <div style="flex:1;padding:8px 0;font-size:12px;font-weight:500;text-align:center;color:var(--ios-muted)">A scene</div>
+                </div>
+
+                <div style="padding:14px;border-radius:14px;background:var(--ios-card);margin-top:10px;display:flex;flex-direction:column;gap:10px">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div style="width:32px;height:32px;border-radius:9px;background:rgba(196,81,42,0.14);display:flex;align-items:center;justify-content:center;color:var(--ember)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="3"/><path d="M12 2l4 7h-8z"/></svg></div>
+                    <div style="flex:1">
+                      <div style="font-size:13.5px;font-weight:600">Bedroom ceiling</div>
+                      <div style="font-size:11.5px;color:var(--ios-muted)">on_off · color</div>
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  </div>
+                </div>
+
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <div style="flex:1;padding:11px;border-radius:12px;background:rgba(0,0,0,0.04);text-align:center">
+                    <div style="font-size:18px;font-weight:600">off</div>
+                    <div style="font-size:10.5px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.06em">on_off</div>
+                  </div>
+                  <div style="flex:1;padding:11px;border-radius:12px;background:rgba(0,0,0,0.04);text-align:center">
+                    <div style="font-size:18px;font-weight:600">30<span style="font-size:11px;color:var(--ios-muted);font-weight:500"> %</span></div>
+                    <div style="font-size:10.5px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.06em">brightness</div>
+                  </div>
+                  <div style="flex:1;padding:11px;border-radius:12px;background:rgba(0,0,0,0.04);text-align:center">
+                    <div style="font-size:18px;font-weight:600">2700<span style="font-size:11px;color:var(--ios-muted);font-weight:500"> K</span></div>
+                    <div style="font-size:10.5px;color:var(--ios-muted);text-transform:uppercase;letter-spacing:0.06em">temp</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style="padding:14px;border-radius:14px;background:rgba(196,81,42,0.08);font-size:12.5px;line-height:1.5;color:var(--ink-2);margin-top:auto">
+                <em style="color:var(--ember);font-weight:600">At</em> sunset + 30, <em style="color:var(--ember);font-weight:600">on</em> weekdays, <em style="color:var(--ember);font-weight:600">turn off</em> Bedroom ceiling and dim it to 30% at 2700K.
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="desc" style="margin-top:14px"><b style="color:var(--ink)">B · full-screen push.</b> Everything visible at a glance; English preview lives at the bottom and updates live.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ HUB / PAIRING / HISTORY ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">5 · hub & helpers</span>
+      <h2>Trust, in three small views.</h2>
+      <p>The Hub tab reassures; the Add-Device sheet excites; the History tab explains.</p>
+    </div>
+
+    <div class="row3">
+      <!-- Hub -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen dark">
+            <div class="statusbar dark"><span style="color:var(--ios-dark-text)">9:41</span><span class="right" style="color:var(--ios-dark-text)"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="floating-bar dark">
+              <div class="title">Hub</div>
+              <div class="right">⋯</div>
+            </div>
+
+            <div style="padding:110px 18px 24px;flex:1;display:flex;flex-direction:column;gap:14px;background:linear-gradient(180deg,#15171c 0%,#0e1014 100%)">
+              <!-- Hub hero card -->
+              <div style="padding:18px;border-radius:22px;background:rgba(255,255,255,0.06);backdrop-filter:blur(18px) saturate(180%);border:1px solid rgba(255,255,255,0.08)">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="width:10px;height:10px;border-radius:50%;background:#3ccf7e;box-shadow:0 0 0 4px rgba(60,207,126,0.2)"></div>
+                  <span style="font-size:12px;color:#9bc7a7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em">Hub · Home</span>
+                </div>
+                <div class="serif" style="font-size:24px;letter-spacing:-0.025em;color:#f1eee7;margin-top:8px">All systems quiet</div>
+                <div style="font-size:13px;color:#98928a;margin-top:6px;line-height:1.4">Wi-Fi home (-58 dBm) · 14:32 local · synced 6m ago</div>
+              </div>
+
+              <!-- Chip card -->
+              <div style="padding:14px;border-radius:18px;background:rgba(255,255,255,0.06);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.08)">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#3a4654,#57626f);display:flex;align-items:center;justify-content:center;color:#fff">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 2L2 7v10l10 5 10-5V7z"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14px;font-weight:600;color:#f1eee7">Zigbee · #1</div>
+                    <div style="font-size:11px;color:#98928a">ready · boot 42 · 3 devices</div>
+                  </div>
+                  <span class="chip-soft tone-good">↑ 12k rx</span>
+                </div>
+                <div style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:10.5px;color:#98928a">
+                  <div><span style="color:#f1eee7;font-weight:600">378</span> KB free</div>
+                  <div><span style="color:#f1eee7;font-weight:600">4h</span> uptime</div>
+                  <div><span style="color:#f1eee7;font-weight:600">0</span> CRC err</div>
+                </div>
+                <svg class="spark" viewBox="0 0 200 30" preserveAspectRatio="none" style="width:100%;height:30px;margin-top:8px">
+                  <path d="M0 22 L20 18 L40 14 L60 18 L80 12 L100 16 L120 11 L140 8 L160 12 L180 6 L200 10" fill="none" stroke="#3ccf7e" stroke-width="1.5" opacity="0.7"/>
+                </svg>
+              </div>
+
+              <div style="padding:14px;border-radius:18px;background:rgba(255,255,255,0.06);backdrop-filter:blur(14px) saturate(180%);border:1px solid rgba(255,255,255,0.08)">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#c4512a,#d97c4a);display:flex;align-items:center;justify-content:center;color:#fff">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="2"/><path d="M6.34 6.34l1.41 1.41M16.24 16.24l1.41 1.41M2 12h2M20 12h2M6.34 17.66l1.41-1.41M16.24 7.76l1.41-1.41M12 2v2M12 20v2"/></svg>
+                  </div>
+                  <div style="flex:1">
+                    <div style="font-size:14px;font-weight:600;color:#f1eee7">Matter / Thread · #2</div>
+                    <div style="font-size:11px;color:#98928a">ready · boot 7 · 1 device</div>
+                  </div>
+                  <span class="chip-soft tone-warn">3 reboots</span>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:8px;margin-top:6px">
+                <div class="btn-secondary" style="flex:1;background:rgba(255,255,255,0.06);color:#f1eee7">Wi-Fi</div>
+                <div class="btn-secondary" style="flex:1;background:rgba(255,255,255,0.06);color:#f1eee7">Location</div>
+                <div class="btn-secondary" style="flex:1;background:rgba(255,255,255,0.06);color:#f1eee7">Switch</div>
+              </div>
+            </div>
+
+            <div class="tabbar dark">
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></svg>Home</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Auto</div>
+              <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7z"/></svg>Hub</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>History</div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Hub.</b> Per-chip card with telemetry; the brain at a glance.</div>
+      </div>
+
+      <!-- Pairing -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+
+            <div style="position:absolute;inset:0;background:rgba(20,12,8,0.4);z-index:10;display:flex;align-items:flex-end">
+              <div style="width:100%;background:var(--ios-bg);border-radius:24px 24px 41px 41px;padding:18px 20px 32px">
+                <div style="width:36px;height:4px;background:rgba(0,0,0,0.15);border-radius:2px;margin:0 auto 14px"></div>
+                <div style="text-align:center">
+                  <div class="serif" style="font-size:22px;letter-spacing:-0.02em">Add a device</div>
+                  <div style="font-size:13px;color:var(--ios-muted);margin-top:6px;line-height:1.4;max-width:240px;margin-left:auto;margin-right:auto">Put your Zigbee device in pairing mode<br/>(usually: hold the button 5 seconds).</div>
+                </div>
+
+                <div style="position:relative;display:flex;justify-content:center">
+                  <svg width="200" height="200" viewBox="0 0 200 200" style="margin-top:8px">
+                    <circle cx="100" cy="100" r="40" fill="none" stroke="#c4512a" stroke-width="1" opacity="0.4"/>
+                    <circle cx="100" cy="100" r="55" fill="none" stroke="#c4512a" stroke-width="1" opacity="0.3"/>
+                    <circle cx="100" cy="100" r="70" fill="none" stroke="#c4512a" stroke-width="1" opacity="0.2"/>
+                    <circle cx="100" cy="100" r="85" fill="none" stroke="#c4512a" stroke-width="1" opacity="0.1"/>
+                    <circle cx="100" cy="100" r="32" fill="#c4512a"/>
+                  </svg>
+                  <div style="position:absolute;top:165px;left:50%;transform:translate(-50%,-50%);color:#c4512a;font-weight:700;letter-spacing:-0.02em"><span class="mono" style="font-size:28px">1:42</span></div>
+                </div>
+
+                <div style="padding:12px 14px;border-radius:14px;background:var(--ios-card);font-size:13px;line-height:1.4;border:1px dashed var(--ember)">
+                  <div style="display:flex;align-items:center;gap:8px;color:var(--ember);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><circle cx="12" cy="12" r="2"/><path d="M6.34 6.34l1.41 1.41M16.24 16.24l1.41 1.41M2 12h2M20 12h2M6.34 17.66l1.41-1.41M16.24 7.76l1.41-1.41M12 2v2M12 20v2"/></svg>Just joined</div>
+                  IKEA INSPELNING plug · 2 seconds ago
+                </div>
+
+                <div class="btn-secondary" style="margin-top:14px">Cancel</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">Add a device.</b> Live countdown + a list of what joined.</div>
+      </div>
+
+      <!-- History -->
+      <div class="fig">
+        <div class="phone">
+          <div class="island"></div>
+          <div class="bezel"></div>
+          <div class="screen">
+            <div class="statusbar"><span>9:41</span><span class="right"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="7" width="18" height="10" rx="2"/></svg></span></div>
+            <div class="floating-bar">
+              <div class="title">History</div>
+              <div class="right"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M9 18h6"/></svg></div>
+            </div>
+
+            <div style="padding:110px 18px 24px;flex:1;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;flex-direction:column;gap:10px">
+
+                <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:var(--ember);margin-top:6px;flex-shrink:0"></div>
+                  <div style="flex:1">
+                    <div style="font-size:13.5px;font-weight:500;line-height:1.4">Kitchen plug turned <b style="color:var(--ember)">on</b> · rule fired</div>
+                    <div style="font-size:11px;color:var(--ios-muted);margin-top:2px">2 min ago · power: 0 → 42 W</div>
+                  </div>
+                </div>
+
+                <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:var(--sage);margin-top:6px;flex-shrink:0"></div>
+                  <div style="flex:1">
+                    <div style="font-size:13.5px;font-weight:500;line-height:1.4">Scene <b style="color:var(--ember)">Evening</b> applied · you</div>
+                    <div style="font-size:11px;color:var(--ios-muted);margin-top:2px">5 min ago · 3 sent, 0 skipped</div>
+                  </div>
+                </div>
+
+                <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:#b9aa92;margin-top:6px;flex-shrink:0"></div>
+                  <div style="flex:1">
+                    <div style="font-size:13.5px;font-weight:500;line-height:1.4">Bedroom plug turned <b style="color:var(--ios-bad)">off</b> · at the wall</div>
+                    <div style="font-size:11px;color:var(--ios-muted);margin-top:2px">8 min ago · hub adopts and learns from this</div>
+                  </div>
+                </div>
+
+                <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:var(--ios-warn);margin-top:6px;flex-shrink:0"></div>
+                  <div style="flex:1">
+                    <div style="font-size:13.5px;font-weight:500;line-height:1.4">Zigbee chip went silent</div>
+                    <div style="font-size:11px;color:var(--ios-muted);margin-top:2px">14 min ago · recovered after 6 s</div>
+                  </div>
+                </div>
+
+                <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:var(--sage);margin-top:6px;flex-shrink:0"></div>
+                  <div style="flex:1">
+                    <div style="font-size:13.5px;font-weight:500;line-height:1.4">Hub boot · software reset</div>
+                    <div style="font-size:11px;color:var(--ios-muted);margin-top:2px">2 h ago · rule pipeline resumed automatically</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style="text-align:center;font-size:12px;color:var(--ios-muted);margin-top:auto;padding-top:12px">Showing the last 24 · oldest is from 9 h ago</div>
+            </div>
+
+            <div class="tabbar">
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></svg>Home</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Auto</div>
+              <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7z"/></svg>Hub</div>
+              <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>History</div>
+            </div>
+          </div>
+        </div>
+        <div class="desc"><b style="color:var(--ink)">History.</b> Each event is said, not just shown. Color-dot = origin.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ COMPONENTS / ATOMS ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">6 · building blocks</span>
+      <h2>Atoms, ready to plug in.</h2>
+      <p>The components the screens above are built from. Re-used across devices, automations, history, hub — they carry the brand.</p>
+    </div>
+
+    <div class="atoms">
+
+      <div class="atom">
+        <div class="name">Primary button · liquid glass</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch">
+          <div class="btn-primary">Turn off Living Room</div>
+          <div class="btn-primary" style="background:#3a4654;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2),0 6px 20px rgba(58,70,84,0.35)">Apply Scene</div>
+          <div class="btn-primary" style="background:#5a7560;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2),0 6px 20px rgba(90,117,96,0.35)">Confirm · Add Rule</div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">iOS toggle · reachable vs. silent</div>
+        <div class="stage" style="gap:18px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div class="toggle"></div><span class="note">off</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div class="toggle on"></div><span class="note">on</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div class="toggle disabled"></div><span class="note">unreachable</span></div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Chip set · status & affordance</div>
+        <div class="stage">
+          <span class="chip-soft">kitchen</span>
+          <span class="chip-soft tone-good">ready</span>
+          <span class="chip-soft tone-warn">silent</span>
+          <span class="chip-soft tone-ember">low battery</span>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Glass device card</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch;padding:14px;border-radius:18px;background:linear-gradient(135deg,#f7f4ed,#efe9dc)">
+          <div style="padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.7);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.6);display:flex;align-items:center;gap:12px">
+            <div style="width:38px;height:38px;border-radius:11px;background:var(--ember);color:#fff;display:flex;align-items:center;justify-content:center">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 2C8 2 5 5 5 9c0 3 2 5 4 6v5h6v-5c2-1 4-3 4-6 0-4-3-7-7-7z"/></svg>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:600">Bedroom lamp</div>
+              <div style="font-size:11.5px;color:var(--ios-muted)">68% · warm 2700K</div>
+            </div>
+            <div class="toggle on"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Live reading · sparkline</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch">
+          <div style="display:flex;align-items:baseline;gap:6px;padding:14px;border-radius:14px;background:rgba(196,81,42,0.08)">
+            <span style="font-size:32px;font-weight:700;letter-spacing:-0.025em">42</span>
+            <span style="font-size:14px;color:var(--ios-muted);font-weight:500">W</span>
+            <svg class="spark" viewBox="0 0 200 30" preserveAspectRatio="none" style="flex:1;height:28px">
+              <defs>
+                <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#c4512a" stop-opacity="0.4"/>
+                  <stop offset="100%" stop-color="#c4512a" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <path d="M0 22 L20 18 L40 21 L60 14 L80 16 L100 9 L120 12 L140 7 L160 11 L180 5 L200 8 L200 30 L0 30 Z" fill="url(#g3)"/>
+              <path d="M0 22 L20 18 L40 21 L60 14 L80 16 L100 9 L120 12 L140 7 L160 11 L180 5 L200 8" fill="none" stroke="#c4512a" stroke-width="1.5"/>
+            </svg>
+          </div>
+          <div class="note" style="margin-top:6px">Today 0.34 kWh · Month 14.8 kWh</div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Sheet (modal)</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch;height:170px;position:relative;background:#efe9dc;border-radius:14px;overflow:hidden">
+          <div style="position:absolute;inset:auto 0 0 0;background:var(--ios-bg);border-radius:18px 18px 0 0;padding:12px 16px">
+            <div style="width:32px;height:3px;background:rgba(0,0,0,0.15);border-radius:2px;margin:0 auto 10px"></div>
+            <div style="font-size:16px;font-weight:600">Add schedule</div>
+            <div class="note">A bottom sheet, never a full-screen push.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Connection card · mDNS</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch;padding:14px;border-radius:14px;background:linear-gradient(135deg,#f7f4ed,#efe9dc)">
+          <div class="hub-card">
+            <div class="signal"></div>
+            <div class="body">
+              <div class="nm">Home Hub</div>
+              <div class="meta">wss://192.168.0.202:8443</div>
+            </div>
+            <div class="chip">ready</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="atom">
+        <div class="name">Field · TLS fingerprint</div>
+        <div class="stage" style="flex-direction:column;align-items:stretch;padding:14px;border-radius:14px;background:linear-gradient(135deg,#f7f4ed,#efe9dc)">
+          <div class="field mono"><span class="label">Fingerprint</span><span class="value">AA:7D:21:C9:5B:11…</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================ DISCUSSION ============================ -->
+  <hr class="rule" />
+  <section class="section">
+    <div class="section-head">
+      <span class="eyebrow">7 · what to discuss</span>
+      <h2>Open questions.</h2>
+      <p>This is a <em>preview</em>, not a freeze. Things to argue about before we commit to a direction.</p>
+    </div>
+
+    <div class="discuss">
+      <ol>
+        <li><strong>Group by room.</strong> ✓ confirmed — Home is rooms-first, each room is a section with all its devices. v0.2 has Living Room / Kitchen / Bedroom; we will add Hallway + Outdoor as the real device set grows.</li>
+        <li><strong>Icons: SF Symbols-style stroke glyphs.</strong> ✓ confirmed — every device uses a stroke glyph (lamp, plug, sensor, curtain…). We replace the few unicode markers (●⊕▶) with consistent SVG paths. Closed/curtain glyph was added as a new one for the Bedroom mockup.</li>
+        <li><strong>Schedule form: sheet vs. push.</strong> ✓ both variants mocked (4.b section, two phones side by side). <em>A · sheet</em>: 3-step wizard, step indicator, Cancel one tap away. <em>B · push</em>: full scrollable page, live English preview at the bottom. <strong>You pick which ships.</strong></li>
+        <li><strong>iPad.</strong> repeat the phone layout for v1 — no sidebar yet. (Easy to add later; the hub itself doesn't need iPad to be useful.)</li>
+        <li><strong>Setup screen.</strong> separate iteration — the handoff from hub-AP to home Wi-Fi is a wizard of its own and gets its own mockup pass before lock-in.</li>
+        <li><strong>Is "Ember" the right accent?</strong> Terracotta sets keystone apart from Apple Home's blue but it eats a lot of attention. <em>Alternative:</em> a quieter slate accent for affordance, letting the room photos do the talking. Worth a warm vs. cool A/B.</li>
+        <li><strong>Color light picker.</strong> Circular HSL is iconic but only useful with an HSL bulb; we may also have XY bulbs. Do we ship one picker or two?</li>
+        <li><strong>Always-on wall backgrounds?</strong> Apple Weather / Home go for photo backgrounds that change. We don't have room photos. Mock gradients (above) are a placeholder; do we ship it without photos, or wait?</li>
+        <li><strong>Dark by default?</strong> Living-room dim lighting favors dark; the spec leaves it to system. Do we show both, or lead with dark like Apple Home?</li>
+      </ol>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  keystone · design preview v0.2 · общаемся на русском · 3rd room + sheet-vs-push form comparison added
+</footer>
+
+</main>
+
+</body>
+</html>

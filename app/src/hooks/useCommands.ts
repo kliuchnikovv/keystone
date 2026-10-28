@@ -11,8 +11,12 @@ export interface Commands {
   request(op: string, args?: Record<string, unknown>): Promise<Record<string, unknown> | null>;
   /** True while any management request is in flight. */
   busy: boolean;
-  /** The latest failure, shown briefly. */
+  /** The latest message, shown briefly as a toast. */
   message: string | null;
+  /** `bad` for a failure, `good` for a confirmation ("Device renamed"). */
+  tone: 'bad' | 'good';
+  /** Show a confirmation — the background kind of message the brief asks for. */
+  notify(text: string): void;
   dismiss(): void;
 }
 
@@ -21,6 +25,7 @@ const MESSAGE_MS = 4500;
 export function useCommands(client: HubConnection): Commands {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
+  const [tone, setTone] = useState<'bad' | 'good'>('bad');
   const [inFlight, setInFlight] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
@@ -33,12 +38,15 @@ export function useCommands(client: HubConnection): Commands {
     };
   }, []);
 
-  const show = useCallback((text: string) => {
+  const show = useCallback((text: string, kind: 'bad' | 'good' = 'bad') => {
     if (!alive.current) return;
+    setTone(kind);
     setMessage(text);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => alive.current && setMessage(null), MESSAGE_MS);
   }, []);
+
+  const notify = useCallback((text: string) => show(text, 'good'), [show]);
 
   const send = useCallback(
     async (entity: number, attr: number, value: Value) => {
@@ -83,6 +91,8 @@ export function useCommands(client: HubConnection): Commands {
     busy: inFlight > 0,
     isPending: (entity, attr) => pending.has(`${entity}:${attr}`),
     message,
+    tone,
+    notify,
     dismiss: () => setMessage(null),
   };
 }

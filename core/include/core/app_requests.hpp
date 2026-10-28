@@ -1,13 +1,15 @@
 // Management operations of the app protocol (`req` / `res`, docs/app-protocol.md §5):
-// names, rules, schedules and timers. Each operation parses its `args` JSON, checks
-// it against the registry the same way the console does (and a little stricter:
-// writable targets, value types and ranges), applies it to the container and reports
-// an Outcome. Persisting to NVS and re-broadcasting stay with the caller, so this is
-// portable and host-tested.
+// names, rules, schedules and timers, plus the firmware update, the access card
+// (token, certificate, relay) and the hub's own actions. Each operation parses its
+// `args` JSON, checks it against the registry the same way the console does (and a
+// little stricter: writable targets, value types and ranges), applies it to the
+// container and reports an Outcome. Persisting to NVS and re-broadcasting stay with
+// the caller, so this is portable and host-tested.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 
@@ -53,6 +55,10 @@ struct Outcome {
 
 inline constexpr std::uint8_t kOnOffAttr = 0x01;
 inline constexpr std::size_t kMaxNameChars = 23;  // EntityNames::MaxNameLen (24) minus the NUL
+// A device name: 15 characters (a person can read it at a glance) and 30 bytes
+// (the storage keeps 32, the NUL included).
+inline constexpr std::size_t kMaxEntityNameChars = 15;
+inline constexpr std::size_t kMaxEntityNameBytes = 30;
 
 namespace detail {
 
@@ -62,13 +68,38 @@ bool get_int(const Reader& r, int obj, const char* key, std::int64_t& out) {
 }
 
 inline bool valid_entity_name(const char* s) {
-  const std::size_t n = std::strlen(s);
-  if (n == 0 || n > kMaxNameChars) return false;
-  if (s[0] < 'a' || s[0] > 'z') return false;  // starts with a letter: never mistaken for 0x10 / 123
-  for (std::size_t i = 1; i < n; ++i) {
-    const char c = s[i];
-    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+  if (!s || s[0] == '\0') return false;
+  // A name a person reads out loud: letters (any script), digits, spaces and a
+  // little punctuation. At most 15 characters — a label, not a sentence — and at
+  // most 30 bytes, so it still fits the 32-byte field it is stored in.
+  std::size_t chars = 0;
+  std::size_t bytes = 0;
+  bool has_letter = false;
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s); *p != '\0'; ++p) {
+    const unsigned char c = *p;
+    if (++bytes > kMaxEntityNameBytes) return false;
+    if ((c & 0xC0) == 0x80) continue;  // a continuation byte: part of the character above
+    // A new character starts here.
+    if (++chars > kMaxEntityNameChars) return false;
+    if (c < 0x20 || c == 0x7F) return false;  // control characters
+    if (c < 0x80) {
+      const bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+      if (letter) has_letter = true;
+      const bool ok = letter || (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_' ||
+                       c == '.' || c == ',' || c == '&' || c == '\'' || c == '(' || c == ')';
+      if (!ok) return false;
+    } else {
+      has_letter = true;  // any non-ASCII letter (Cyrillic, for one)
+    }
   }
+  if (!has_letter) return false;  // a name of digits would be read as an id
+  // A name that reads as a number would be taken for an id at the console.
+  char* end = nullptr;
+  const unsigned long as_number = std::strtoul(s, &end, 0);
+  (void)as_number;
+  if (end != s && *end == '\0') return false;
+  const std::size_t n = std::strlen(s);
+  if (s[0] == ' ' || s[n - 1] == ' ') return false;  // no stray spaces at the edges
   return true;
 }
 
@@ -233,9 +264,11 @@ Outcome name_set(Reg& reg, const Reader& r, int args) {
   const auto id = static_cast<std::uint16_t>(e);
   const auto* ent = reg.find(id);
   if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) return Outcome::fail(Err::NotFound, "no such entity");
-  char name[kMaxNameChars + 2];
+  char name[kMaxEntityNameBytes + 2];
   if (!r.get_string(r.find(args, "name"), name, sizeof(name))) return Outcome::fail(Err::BadArgs, "name");
-  if (!detail::valid_entity_name(name)) return Outcome::fail(Err::BadArgs, "name: a-z 0-9 _, starts with a letter, max 23");
+  if (!detail::valid_entity_name(name)) {
+    return Outcome::fail(Err::BadArgs, "name: up to 15 characters, letters and spaces");
+  }
   const auto* other = reg.find_by_name(name);
   if (other != nullptr && other->entity_id != id) return Outcome::fail(Err::BadArgs, "name in use");
   if (!reg.set_name(id, name)) return Outcome::fail(Err::TableFull, "no room for more names");
@@ -634,6 +667,110 @@ ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t att
   }
   if (ent->chip_id != zigbee_chip) return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, 0, 0};
   return {Outcome::done(), zigbee_chip, attr, static_cast<std::uint16_t>(e)};
+}
+
+// ---- firmware update (OTA) -----------------------------------------------------------------
+//
+// `ota.start` and `ota.status`: updating a co-processor over the UART link (docs/ota.md).
+// The hub downloads the image and streams it to the chip; the app only asks for it and
+// watches the progress.
+
+inline constexpr std::uint8_t kOtaChipZigbee = 0x01;  // the Zigbee C6
+inline constexpr std::uint8_t kOtaChipThread = 0x02;  // the Thread/Matter C6
+inline constexpr std::size_t kMaxOtaUrlChars = 255;
+inline constexpr std::size_t kSha256HexChars = 64;
+
+/** The chip an update may target: 1 (Zigbee) or 2 (Thread). */
+inline bool ota_chip_valid(std::int64_t chip) noexcept {
+  return chip == static_cast<std::int64_t>(kOtaChipZigbee) || chip == static_cast<std::int64_t>(kOtaChipThread);
+}
+
+/** The image must come over HTTP(S). */
+inline bool ota_url_valid(const char* url) noexcept {
+  if (url == nullptr) return false;
+  const std::size_t n = std::strlen(url);
+  if (n == 0 || n > kMaxOtaUrlChars) return false;
+  return std::strncmp(url, "http://", 7) == 0 || std::strncmp(url, "https://", 8) == 0;
+}
+
+/** The digest of the image: exactly 64 hex characters. */
+inline bool sha256_hex_valid(const char* s) noexcept {
+  if (s == nullptr) return false;
+  if (std::strlen(s) != kSha256HexChars) return false;
+  for (std::size_t i = 0; i < kSha256HexChars; ++i) {
+    const char c = s[i];
+    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    if (!hex) return false;
+  }
+  return true;
+}
+
+struct OtaRequest {
+  std::uint8_t chip = 0;
+  char url[kMaxOtaUrlChars + 1] = {};
+  char sha256[kSha256HexChars + 1] = {};
+};
+
+/** `ota.start {chip, url, sha256}`: what to update and with which image. The caller starts the
+ *  job and answers busy if one is already running. */
+template <typename Reader>
+Outcome ota_start_parse(const Reader& r, int args, OtaRequest& out) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  std::int64_t chip = 0;
+  if (!detail::get_int(r, args, "chip", chip) || !ota_chip_valid(chip)) {
+    return Outcome::fail(Err::BadArgs, "chip: 1 (zigbee) or 2 (thread)");
+  }
+  out.chip = static_cast<std::uint8_t>(chip);
+  if (!r.get_string(r.find(args, "url"), out.url, sizeof(out.url)) || !ota_url_valid(out.url)) {
+    return Outcome::fail(Err::BadArgs, "url: http:// or https://");
+  }
+  if (!r.get_string(r.find(args, "sha256"), out.sha256, sizeof(out.sha256)) || !sha256_hex_valid(out.sha256)) {
+    return Outcome::fail(Err::BadArgs, "sha256: 64 hex characters");
+  }
+  return Outcome::done();
+}
+
+// ---- access: the app token and the relay ----------------------------------------------------
+
+inline constexpr std::size_t kMaxRelayUrlChars = 255;
+inline constexpr std::size_t kMaxRelaySecretChars = 63;
+
+/** The relay is reached over a WebSocket (the console takes wss://relay.example.com:9090/tunnel/my-hub);
+ *  http(s) is accepted too, for a relay that fronts it. */
+inline bool relay_url_valid(const char* url) noexcept {
+  if (url == nullptr) return false;
+  const std::size_t n = std::strlen(url);
+  if (n == 0 || n > kMaxRelayUrlChars) return false;
+  return std::strncmp(url, "wss://", 6) == 0 || std::strncmp(url, "ws://", 5) == 0 ||
+         std::strncmp(url, "https://", 8) == 0 || std::strncmp(url, "http://", 7) == 0;
+}
+
+struct RelayRequest {
+  char url[kMaxRelayUrlChars + 1] = {};
+  char secret[kMaxRelaySecretChars + 1] = {};
+};
+
+/** `access.token.set {token}`: the same rule as the `webtoken` console command. The caller saves
+ *  it and restarts the app server, so the client has to reconnect with the new token. */
+template <typename Reader>
+Outcome access_token_parse(const Reader& r, int args, char* token, std::size_t cap) {
+  if (args < 0 || !r.get_string(r.find(args, "token"), token, cap) || !token_valid(token)) {
+    return Outcome::fail(Err::BadArgs, "token: 8..64 printable characters");
+  }
+  return Outcome::done();
+}
+
+/** `access.relay.set {url, secret}`: the remote-access relay, like the `relay` console command. */
+template <typename Reader>
+Outcome access_relay_parse(const Reader& r, int args, RelayRequest& out) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  if (!r.get_string(r.find(args, "url"), out.url, sizeof(out.url)) || !relay_url_valid(out.url)) {
+    return Outcome::fail(Err::BadArgs, "url: ws://, wss://, http:// or https://");
+  }
+  if (!r.get_string(r.find(args, "secret"), out.secret, sizeof(out.secret)) || out.secret[0] == '\0') {
+    return Outcome::fail(Err::BadArgs, "secret");
+  }
+  return Outcome::done();
 }
 
 }  // namespace core::app

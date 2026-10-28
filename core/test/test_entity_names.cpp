@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <cstring>
 #include <string>
 
 #include "core/entity_names.hpp"
@@ -101,6 +102,47 @@ TEST_CASE("EntityNames enumeration via entry_at") {
   CHECK(std::string(e.name) == "light");
 
   CHECK_FALSE(names.entry_at(2, e));
+}
+
+TEST_CASE("EntityNames reads a v1 blob (24-byte names) into the wider table") {
+  // A blob as the old firmware wrote it: header plus entries with a 24-byte name.
+  constexpr std::size_t kLegacyEntry = 2 + 24;
+  std::array<std::uint8_t, 6 + 2 * kLegacyEntry> buf{};
+  buf[0] = 0x4D;  // 'NM'
+  buf[1] = 0x4E;
+  buf[2] = 1;  // version 1
+  buf[3] = 0;
+  buf[4] = 2;  // two entries
+  buf[5] = 0;
+  const auto put = [&buf](std::size_t i, std::uint16_t id, const char* name) {
+    const std::size_t off = 6 + i * kLegacyEntry;
+    buf[off] = static_cast<std::uint8_t>(id & 0xFF);
+    buf[off + 1] = static_cast<std::uint8_t>(id >> 8);
+    std::memcpy(buf.data() + off + 2, name, std::strlen(name));
+  };
+  put(0, 0x0100, "kitchen_plug");
+  put(1, 0x0101, "hall_sensor");
+
+  core::EntityNames<4, 32> names;
+  REQUIRE(names.load(buf.data(), buf.size()));
+  CHECK(names.size() == 2);
+  CHECK(std::string(names.get_name(0x0100)) == "kitchen_plug");
+  CHECK(names.find_id("hall_sensor") == 0x0101);
+}
+
+TEST_CASE("EntityNames keeps a long name (31 bytes) and a Cyrillic one") {
+  core::EntityNames<4, 32> names;
+  CHECK(names.set_name(0x0100, "abcdefghijklmnopqrstuvwxyz01234"));  // 31 bytes
+  CHECK(names.set_name(0x0101, "Кухня розетка"));
+  CHECK_FALSE(names.set_name(0x0102, "abcdefghijklmnopqrstuvwxyz012345"));  // 32 bytes: too long
+
+  std::array<std::uint8_t, 256> buf{};
+  const std::size_t written = names.save(buf.data(), buf.size());
+  REQUIRE(written > 0);
+  core::EntityNames<4, 32> loaded;
+  REQUIRE(loaded.load(buf.data(), written));
+  CHECK(std::string(loaded.get_name(0x0100)) == "abcdefghijklmnopqrstuvwxyz01234");
+  CHECK(std::string(loaded.get_name(0x0101)) == "Кухня розетка");
 }
 
 TEST_CASE("EntityNames save and load round-trips correctly") {

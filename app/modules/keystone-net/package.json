@@ -1,0 +1,13 @@
+{
+  "name": "keystone-net",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native socket with certificate pinning and mDNS discovery for the Keystone app.",
+  "expo": {
+    "autolinking": {
+      "android": {
+        "modules": ["dev.keystone.net.KeystoneNetModule"]
+      }
+    }
+  }
+}

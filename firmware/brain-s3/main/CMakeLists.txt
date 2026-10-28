@@ -10,7 +10,10 @@ endif()
 
 idf_component_register(SRCS ${KS_SRCS}
                        INCLUDE_DIRS "."
-                       REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_server esp_https_server esp-tls mdns esp_websocket_client)
+                       REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_server esp_https_server esp-tls mdns esp_websocket_client
+                       # PlatformIO adds the components of the headers a source includes; with
+                       # plain idf.py they have to be named here.
+                       esp_wifi esp_event esp_netif console esp_app_format nvs_flash)
 
 if(KS_TLS_DEFS)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE ${KS_TLS_DEFS})

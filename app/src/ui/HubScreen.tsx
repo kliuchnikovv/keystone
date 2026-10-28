@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
+import type { HubConnection } from '../hooks/useHub';
 import { describeLocation, locationRequest } from '../model/automation';
-import { chipSummary } from '../model/health';
+import { chipRows, chipSummary } from '../model/health';
 import { locatePhone } from '../native/position';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
+import { ScreenHeader } from './ScreenHeader';
+import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
 import { WifiCard } from './WifiCard';
-import { useTheme } from './theme';
+import { PALETTES, radius, useTheme, type PaletteId } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
 function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -46,7 +49,7 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
   };
 
   return (
-    <View accessibilityLabel="Location" style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+    <View accessibilityLabel="Location" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
       <Text style={[styles.h2, { color: t.text }]}>Location</Text>
       <Text style={{ color: t.muted }}>{describeLocation(home.hub)}</Text>
       {editing ? (
@@ -55,7 +58,7 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
           <Input label="Longitude" value={lon} onChangeText={setLon} placeholder="14.43 (east is positive)" keyboardType="numbers-and-punctuation" />
           <ErrorText text={error} />
           <View style={styles.row}>
-            <Button kind="plain" label="Cancel" onPress={() => setEditing(false)} />
+            <Button kind="secondary" label="Cancel" onPress={() => setEditing(false)} />
             <Button label="Save location" onPress={save} />
           </View>
         </View>
@@ -63,9 +66,9 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
         <>
           <ErrorText text={error} />
           <View style={styles.row}>
-            {loc && <Button kind="danger" label="Clear location" onPress={() => void commands.request('location.clear')} />}
-            <Button kind="plain" label={loc ? 'Change location' : 'Set location'} onPress={open} />
-            <Button label={locating ? 'Locating…' : 'Use this phone\u2019s location'} a11y="Use phone location" disabled={locating} onPress={() => void usePhone()} />
+            {loc && <Button kind="danger" size="compact" label="Clear location" onPress={() => void commands.request('location.clear')} />}
+            <Button kind="plain" size="compact" label={loc ? 'Change location' : 'Set location'} onPress={open} />
+            <Button size="compact" label={locating ? 'Locating…' : 'Use this phone\u2019s location'} a11y="Use phone location" disabled={locating} onPress={() => void usePhone()} />
           </View>
         </>
       )}
@@ -90,7 +93,7 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   const openHome = () => void Linking.openURL('x-apple-com-home://');
 
   return (
-    <View accessibilityLabel="Apple Home bridge" style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+    <View accessibilityLabel="Apple Home bridge" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
       <View style={styles.chipHead}>
         <Text style={[styles.h2, { color: t.text }]}>Apple Home bridge</Text>
         {s && <Text style={{ color: tone[s.tone], fontWeight: '600' }}>● {s.status}</Text>}
@@ -117,7 +120,7 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
 
       {Platform.OS === 'ios' && chip?.status === 'ready' && (
         <View style={[styles.row, { marginTop: 4 }]}>
-          <Button label="Open Apple Home" onPress={openHome} />
+          <Button size="compact" label="Open Apple Home" onPress={openHome} />
         </View>
       )}
 
@@ -130,21 +133,66 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   );
 }
 
-export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands }) {
+/** The app's own look: the palette is a setting of the phone, not of the hub. */
+function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?(id: PaletteId): void }) {
+  const t = useTheme();
+  return (
+    <View accessibilityLabel="Appearance" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
+      <Text style={[styles.h2, { color: t.text }]}>Appearance</Text>
+      <Text style={{ color: t.muted, fontSize: 13 }}>The palette the app wears. Ember is the dark glass look.</Text>
+      <View style={styles.paletteRow}>
+        {PALETTES.map((p) => {
+          const on = p.id === palette;
+          return (
+            <Pressable
+              key={p.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Palette ${p.name}`}
+              accessibilityState={{ selected: on }}
+              onPress={() => onPalette?.(p.id)}
+              style={[styles.palette, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
+            >
+              <Text style={{ color: on ? t.accent : t.text, fontSize: 14, fontWeight: '700' }}>{p.name}</Text>
+              <Text style={{ color: t.muted, fontSize: 11 }}>{p.hint}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, palette, onPalette }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; palette?: PaletteId; onPalette?(id: PaletteId): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
+  // One dot for the whole hub: healthy, degraded (a chip is quiet) or offline.
+  const hubTone = home.status !== 'ready' ? 'bad' : home.chips.some((c) => c.status !== 'ready') ? 'warn' : 'good';
+  const hubStatus = hubTone === 'bad' ? 'offline' : hubTone === 'warn' ? 'degraded' : 'healthy';
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
-        <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
-        <Text style={{ color: t.muted }}>{url}</Text>
+      <ScreenHeader title="Hub" />
+      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
+        <View style={styles.hubHead}>
+          <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
+          <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
+          <Text style={{ color: tone[hubTone], fontWeight: '600', fontSize: 12 }}>{hubStatus}</Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={{ color: t.muted }}>{url}</Text>
+        </View>
         {hub && (
           <>
-            <Text style={[styles.line, { color: t.text }]}>Firmware {hub.fw}</Text>
-            <Text style={[styles.line, { color: t.text }]}>
-              {hub.synced ? new Date(hub.time * 1000).toLocaleString() : 'Clock not synced'} · {hub.tz}
-            </Text>
+            <View style={styles.kv}>
+              <Text style={{ color: t.muted }}>Firmware</Text>
+              <Text style={{ color: t.text, fontWeight: '600' }}>{hub.fw}</Text>
+            </View>
+            <View style={styles.kv}>
+              <Text style={{ color: t.muted }}>Clock</Text>
+              <Text style={{ color: t.text, fontWeight: '600' }} numberOfLines={1}>
+                {hub.synced ? `${new Date(hub.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${hub.tz}` : 'not synced'}
+              </Text>
+            </View>
           </>
         )}
       </View>
@@ -158,15 +206,25 @@ export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeStat
       {home.chips.map((c) => {
         const s = chipSummary(c);
         return (
-          <View key={c.id} accessibilityLabel={`Chip ${s.title}`} style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+          <View key={c.id} accessibilityLabel={`Chip ${s.title}`} style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
             <View style={styles.chipHead}>
               <Text style={[styles.h2, { color: t.text }]}>{s.title}</Text>
               <Text style={{ color: tone[s.tone], fontWeight: '600' }}>● {s.status}</Text>
             </View>
-            {s.details.length > 0 && <Text style={{ color: t.muted }}>{s.details.join(' · ')}</Text>}
+            {chipRows(c).map((r) => (
+              <View key={r.label} style={styles.kv}>
+                <Text style={{ color: t.muted }}>{r.label}</Text>
+                <Text style={{ color: t.text, fontWeight: '600' }}>{r.value}</Text>
+              </View>
+            ))}
           </View>
         );
       })}
+
+      <FirmwareCard home={home} client={client} commands={commands} />
+      <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} />
+      <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
+      <AppearanceCard palette={palette ?? 'sandstone'} onPalette={onPalette} />
 
       <Pressable accessibilityRole="button" accessibilityLabel="Change hub" onPress={onChangeHub} style={[styles.change, { borderColor: t.border }]}>
         <Text style={{ color: t.accent, fontWeight: '600' }}>Change hub or token</Text>
@@ -176,17 +234,21 @@ export function HubScreen({ home, url, onChangeHub, commands }: { home: HomeStat
 }
 
 const styles = StyleSheet.create({
-  page: { padding: 16, gap: 10 },
-  card: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 4 },
+  page: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 110 : 98, gap: 10 },
+  card: { borderWidth: 1, padding: 14, gap: 4 },
   h: { fontSize: 22, fontWeight: '700' },
+  hubHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
   h2: { fontSize: 17, fontWeight: '600' },
-  line: { fontSize: 14, marginTop: 4 },
+  kv: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5 },
   section: { fontSize: 12, fontWeight: '700', letterSpacing: 1, marginTop: 10 },
   row: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
   chipHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  change: { marginTop: 14, borderWidth: 1, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  change: { marginTop: 14, borderWidth: 1, borderRadius: 12, paddingVertical: 11, paddingHorizontal: 14, alignItems: 'center' },
   step: { fontSize: 13, marginTop: 4 },
   codeBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-             borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginTop: 4 },
+             borderWidth: 1, borderRadius: radius.field, paddingHorizontal: 14, paddingVertical: 10, marginTop: 4 },
   code: { fontSize: 22, fontWeight: '700', letterSpacing: 2, fontVariant: ['tabular-nums'] },
+  paletteRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  palette: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
 });

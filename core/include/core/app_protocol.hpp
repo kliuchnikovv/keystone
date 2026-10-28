@@ -383,6 +383,50 @@ inline void encode_res_ok_counts(JsonWriter& w, std::int64_t id, std::int64_t se
       .key("result").begin_object().kv("sent", sent).kv("skipped", skipped).end_object().end_object();
 }
 
+// ---- firmware update (OTA) ---------------------------------------------------------------
+
+// Where a co-processor update stands. The names are what the app shows.
+enum class OtaState : std::uint8_t { Idle, Downloading, Verifying, Done, Failed };
+
+inline const char* ota_state_name(OtaState s) noexcept {
+  switch (s) {
+    case OtaState::Idle: return "idle";
+    case OtaState::Downloading: return "downloading";
+    case OtaState::Verifying: return "verifying";
+    case OtaState::Done: return "done";
+    case OtaState::Failed: return "failed";
+  }
+  return "idle";
+}
+
+// `ota.status`: the progress of the update. `pct` is 0 when it is unknown, `chip` the chip being
+// updated (0 when idle), `message` a short human-readable line.
+inline void encode_res_ok_ota(JsonWriter& w, std::int64_t id, OtaState state, std::int64_t pct,
+                              std::int64_t chip, const char* message) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
+      .key("result").begin_object()
+      .kv("state", ota_state_name(state))
+      .kv("pct", pct)
+      .kv("chip", chip)
+      .kv("message", message != nullptr ? message : "")
+      .end_object().end_object();
+}
+
+// ---- access: token, certificate, relay ------------------------------------------------------
+
+// `access.get`: what the app needs to reach the hub and to show the access card. The token is
+// the one the client already authenticated with, so handing it back exposes nothing new.
+inline void encode_res_ok_access(JsonWriter& w, std::int64_t id, const char* token, const char* fingerprint,
+                                 bool remote, const char* relay_url) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
+      .key("result").begin_object()
+      .kv("token", token != nullptr ? token : "")
+      .kv("fingerprint", fingerprint != nullptr ? fingerprint : "")
+      .kv("remote", remote)
+      .kv("relay_url", relay_url != nullptr ? relay_url : "")
+      .end_object().end_object();
+}
+
 inline void encode_res_error(JsonWriter& w, std::int64_t id, Err code, const char* message = nullptr) noexcept {
   w.begin_object().kv("type", "res").kv("id", id).kv("ok", false).kv("code", err_name(code));
   if (message != nullptr) w.kv("message", message);

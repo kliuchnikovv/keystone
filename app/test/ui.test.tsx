@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import './setup-dom';
+import { longPress } from './helpers';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
@@ -30,26 +31,32 @@ function renderHome(over: { token?: string; onChangeHub?: () => void } = {}) {
 }
 
 const card = (title: string) => screen.getByLabelText(`Device ${title}`);
+/** What the button says about itself: "on", "off", or the sensor's state. */
+const state = (title: string) => {
+  const el = within(card(title)).getByLabelText(new RegExp(`^${title} is `));
+  return el.getAttribute('aria-label')!.slice(title.length + 4);
+};
 
 describe('Devices', () => {
   it('shows what the hub reports', async () => {
     renderHome();
     await screen.findByText('plug1');
-    expect(within(card('plug1')).getByText(/Plug · online/)).toBeTruthy();
+    expect(state('plug1')).toBe('on');
     expect(within(card('plug1')).getByText('3 W')).toBeTruthy();
-    expect(within(card('plug1')).getByText('1.28 kWh')).toBeTruthy();
-    expect(within(card('lamp')).getByText('50 %')).toBeTruthy(); // brightness 128/254
+    expect(state('lamp')).toBe('off');
     expect(screen.getByText('Motion sensor 0x0102')).toBeTruthy();
     expect(within(card('Motion sensor 0x0102')).getByText('Clear')).toBeTruthy();
+    // The rest of the device lives in its sheet.
+    await longPress(card('plug1'));
+    expect(await screen.findByText('1.28 kWh')).toBeTruthy();
   });
 
-  it('flipping a switch sends the command and the switch follows the hub', async () => {
+  it('the button is the switch: tapping it sends the command', async () => {
     renderHome();
     await screen.findByText('lamp');
-    const sw = screen.getByLabelText('lamp power') as HTMLInputElement;
-    expect(sw.checked).toBe(false);
-    fireEvent.click(sw);
-    await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
+    expect(state('lamp')).toBe('off');
+    fireEvent.click(card('lamp'));
+    await waitFor(() => expect(state('lamp')).toBe('on'));
     expect(hub.entities.find((e) => e.name === 'lamp')!.attrs[0]!.value).toBe(true);
   });
 
@@ -62,24 +69,26 @@ describe('Devices', () => {
     await within(card('Motion sensor 0x0102')).findByText('Occupied');
   });
 
-  it('brightness buttons nudge the level by 10 %', async () => {
+  it('brightness is a slider in percent, dark while the lamp is off', async () => {
     renderHome();
     await screen.findByText('lamp');
-    fireEvent.click(screen.getByLabelText('lamp brighter'));
-    await within(card('lamp')).findByText('60 %'); // 128 + 25 = 153 -> 60 %
-    // The buttons stay locked until the chip has acknowledged the first command.
-    await waitFor(() => expect(screen.getByLabelText('lamp dimmer').getAttribute('aria-disabled')).not.toBe('true'));
-    fireEvent.click(screen.getByLabelText('lamp dimmer'));
-    await within(card('lamp')).findByText('50 %');
+    await longPress(card('lamp'));
+    const slider = await screen.findByLabelText('lamp brightness');
+    expect(slider.getAttribute('aria-valuetext')).toBe('50 %'); // 128/254
+    expect(slider.getAttribute('aria-valuemin')).toBe('0');
+    expect(slider.getAttribute('aria-valuemax')).toBe('100');
+    expect(slider.getAttribute('aria-disabled')).toBe('true'); // the lamp is off
+    fireEvent.click(screen.getByLabelText('Turn on lamp'));
+    await waitFor(() => expect(screen.getByLabelText('lamp brightness').getAttribute('aria-disabled')).toBeNull());
   });
 
   it('a command the device refuses shows a message that can be dismissed', async () => {
     hub.forceAck = 'fail';
     renderHome();
     await screen.findByText('lamp');
-    fireEvent.click(screen.getByLabelText('lamp power'));
+    fireEvent.click(card('lamp'));
     const toast = await screen.findByText('The device refused the command');
-    expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(false); // nothing changed
+    expect(state('lamp')).toBe('off'); // nothing changed
     fireEvent.click(toast);
     await waitFor(() => expect(screen.queryByText('The device refused the command')).toBeNull());
   });
@@ -88,12 +97,12 @@ describe('Devices', () => {
     renderHome();
     await screen.findByText('lamp');
     act(() => hub.setChipStatus(1, 'silent'));
-    await within(card('lamp')).findByText(/Light · offline/);
-    expect((screen.getByLabelText('lamp power') as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByLabelText('lamp brighter') as HTMLButtonElement).getAttribute('aria-disabled')).toBe('true');
+    await within(card('lamp')).findByText('offline');
+    expect(state('lamp')).toBe('off, offline');
+    fireEvent.click(card('lamp'));
+    expect(hub.entities.find((e) => e.name === 'lamp')!.attrs[0]!.value).toBe(false);
     act(() => hub.setChipStatus(1, 'ready'));
-    await within(card('lamp')).findByText(/Light · online/);
-    expect((screen.getByLabelText('lamp power') as HTMLInputElement).disabled).toBe(false);
+    await waitFor(() => expect(state('lamp')).toBe('off'));
   });
 });
 
@@ -102,27 +111,29 @@ describe('Adding, finding and removing devices', () => {
     renderHome();
     await screen.findByText('plug1');
     fireEvent.click(screen.getByLabelText('Add a device'));
-    await screen.findByText(/Looking for devices… 2:0\d/);
+    await screen.findByText(/You have 2 minutes/);
     expect(hub.pairCalls).toEqual([120]);
     act(() => hub.simulateJoin(0x0200, 'new_plug'));
-    await screen.findByText('✓ Found new_plug');
+    await screen.findByText(/new_plug joined/);
     expect(card('new_plug')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Done'));
-    expect(screen.queryByText(/Looking for devices/)).toBeNull();
+    fireEvent.click(screen.getByLabelText('Cancel'));
+    await waitFor(() => expect(screen.queryByText(/You have 2 minutes/)).toBeNull());
     expect(screen.getByLabelText('Add a device')).toBeTruthy();
   });
 
   it('a device can be made to blink, and removal needs a second tap', async () => {
     renderHome();
     await screen.findByText('plug1');
-    fireEvent.click(screen.getByLabelText('Rename plug1'));
-    fireEvent.click(screen.getByLabelText('Identify plug1'));
+    await longPress(card('plug1'));
+    fireEvent.click(await screen.findByLabelText('Identify plug1'));
     await screen.findByText(/should blink/);
     expect(hub.identifyCalls).toEqual([0x0100]);
 
-    fireEvent.click(screen.getByLabelText('Remove plug1'));
-    expect(hub.unpairCalls).toEqual([]); // first tap only arms it
-    fireEvent.click(screen.getByLabelText('Remove plug1'));
+    await longPress(card('plug1'));
+    fireEvent.click(await screen.findByLabelText('Remove plug1'));
+    expect(hub.unpairCalls).toEqual([]); // the hub is asked first
+    expect(await screen.findByText('This will take it off the Zigbee network and from Apple Home.')).toBeTruthy();
+    fireEvent.click(await screen.findByLabelText('Remove device'));
     await waitFor(() => expect(screen.queryByText('plug1')).toBeNull());
     expect(hub.unpairCalls).toEqual([0x0100]);
     expect(screen.getByText('lamp')).toBeTruthy(); // the others stay
@@ -137,7 +148,10 @@ describe('Hub tab', () => {
     await screen.findByText('mock-home');
     const zigbee = screen.getByLabelText('Chip Zigbee');
     expect(within(zigbee).getByText(/Online/)).toBeTruthy();
-    expect(within(zigbee).getByText(/368 KB free/)).toBeTruthy();
+    // The chip's numbers sit in rows: uptime, free heap, reboots, line errors.
+    expect(within(zigbee).getByText('Free heap')).toBeTruthy();
+    expect(within(zigbee).getByText('368 KB')).toBeTruthy();
+    expect(within(zigbee).getByText('Link errors')).toBeTruthy();
     expect(screen.getByLabelText('Chip Thread')).toBeTruthy();
     act(() => hub.setChipStatus(2, 'silent'));
     await within(screen.getByLabelText('Chip Thread')).findByText(/Not responding/);
@@ -157,9 +171,9 @@ describe('Connection problems', () => {
   it('a wrong token is explained and can be edited', async () => {
     const onChangeHub = vi.fn();
     renderHome({ token: 'wrong-token', onChangeHub });
-    await screen.findByText('The hub rejected the token');
+    await screen.findByText('Authentication failed');
     expect(screen.getByText('Waiting for the hub…')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Edit connection'));
+    fireEvent.click(screen.getByLabelText('Go to Connect'));
     expect(onChangeHub).toHaveBeenCalled();
   });
 
@@ -167,10 +181,10 @@ describe('Connection problems', () => {
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.dropAll());
-    await screen.findByText('Connection lost; reconnecting…');
+    await screen.findByText('Reconnecting after a drop');
     expect(screen.queryByText('plug1')).toBeNull(); // no stale devices shown as current
     await screen.findByText('plug1');
-    expect(screen.queryByText('Connection lost; reconnecting…')).toBeNull();
+    expect(screen.queryByText('Reconnecting after a drop')).toBeNull();
   });
 });
 
@@ -178,13 +192,19 @@ describe('Connect screen', () => {
   it('rejects bad input and says why, then saves a normalized address', () => {
     const onSave = vi.fn();
     render(<ConnectScreen onSave={onSave} />);
-    fireEvent.click(screen.getByLabelText('Connect'));
+    const connect = screen.getByLabelText('Connect');
+    expect((connect as HTMLButtonElement).disabled).toBe(true); // nothing to connect to yet
+    fireEvent.click(connect);
     expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: 'not an address' } });
     expect(screen.getByText(/Enter an address like/)).toBeTruthy();
+    expect((screen.getByLabelText('Connect') as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText('Hub address'), { target: { value: '192.168.0.202' } });
-    fireEvent.click(screen.getByLabelText('Connect'));
+    fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'four' } });
     expect(screen.getByText('The token is at least 8 characters')).toBeTruthy();
+    expect((screen.getByLabelText('Connect') as HTMLButtonElement).disabled).toBe(true);
     expect(onSave).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'twelve-chars' } });
@@ -205,6 +225,15 @@ describe('Connect screen', () => {
     expect(screen.getByText('The hub rejected the token')).toBeTruthy();
     expect((screen.getByLabelText('Hub address') as HTMLInputElement).value).toBe('ws://h:8080/ws');
   });
+
+  it('offers a way back only when there is something to go back to', () => {
+    const onCancel = vi.fn();
+    const { rerender } = render(<ConnectScreen onSave={() => {}} />);
+    expect(screen.queryByLabelText('Back')).toBeNull();
+    rerender(<ConnectScreen onSave={() => {}} onCancel={onCancel} />);
+    fireEvent.click(screen.getByLabelText('Back'));
+    expect(onCancel).toHaveBeenCalled();
+  });
 });
 
 describe('Hub discovery on the connect screen', () => {
@@ -217,7 +246,7 @@ describe('Hub discovery on the connect screen', () => {
 
   it('says it is searching, then lists hubs; tapping one fills the address but never the fingerprint', () => {
     const { rerender } = render(<ConnectScreen onSave={() => {}} discovery={{ available: true, hubs: [] }} />);
-    expect(screen.getByText('Searching…')).toBeTruthy();
+    expect(screen.getByText('Searching your network…')).toBeTruthy();
     rerender(<ConnectScreen onSave={() => {}} discovery={{ available: true, hubs: [found] }} />);
     expect(screen.getByText('192.168.0.202:8443 · encrypted')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Use hub home'));
@@ -275,8 +304,8 @@ describe('Certificate fingerprint', () => {
     const onChangeHub = vi.fn();
     // No socketFactory override: this is the platform WebSocket, which cannot check a pin.
     render(<Home settings={{ url: hub.url, token: hub.token, fingerprint: colons }} onChangeHub={onChangeHub} />);
-    await screen.findByText(/can't verify the hub's certificate fingerprint/);
-    fireEvent.click(screen.getByLabelText('Edit connection'));
+    await screen.findByText(/can't pin a certificate/);
+    fireEvent.click(screen.getByLabelText('Go to Connect'));
     expect(onChangeHub).toHaveBeenCalled();
     expect(screen.queryByText('plug1')).toBeNull();
   });

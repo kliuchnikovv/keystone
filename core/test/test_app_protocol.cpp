@@ -501,3 +501,42 @@ TEST_CASE("a Wi-Fi scan result is encoded as a list of networks") {
   encode_res_networks(e, 8, nets, 0);
   CHECK(std::string(e.c_str()) == R"({"type":"res","id":8,"ok":true,"result":{"networks":[]}})");
 }
+
+TEST_CASE("the OTA status is encoded as a state, a percentage, a chip and a line of text") {
+  char buf[256];
+  JsonWriter w(buf, sizeof(buf));
+  encode_res_ok_ota(w, 7, OtaState::Downloading, 42, 1, "downloading 667 KB");
+  CHECK(std::string(w.c_str()) ==
+        R"({"type":"res","id":7,"ok":true,"result":{"state":"downloading","pct":42,"chip":1,"message":"downloading 667 KB"}})");
+
+  JsonWriter i(buf, sizeof(buf));
+  encode_res_ok_ota(i, 8, OtaState::Idle, 0, 0, "no update run since boot");
+  CHECK(std::string(i.c_str()) ==
+        R"({"type":"res","id":8,"ok":true,"result":{"state":"idle","pct":0,"chip":0,"message":"no update run since boot"}})");
+
+  for (auto s : {OtaState::Idle, OtaState::Downloading, OtaState::Verifying, OtaState::Done, OtaState::Failed}) {
+    CHECK(std::string(ota_state_name(s)) != "unknown");
+  }
+  CHECK(std::string(ota_state_name(OtaState::Verifying)) == "verifying");
+  CHECK(std::string(ota_state_name(OtaState::Done)) == "done");
+  CHECK(std::string(ota_state_name(OtaState::Failed)) == "failed");
+
+  // A message with a quote in it stays a JSON string.
+  JsonWriter q(buf, sizeof(buf));
+  encode_res_ok_ota(q, 9, OtaState::Failed, 0, 2, "the chip said \"no\"");
+  CHECK(std::string(q.c_str()).find(R"("message":"the chip said \"no\"")") != std::string::npos);
+}
+
+TEST_CASE("the access view carries the token, the fingerprint and the relay") {
+  char buf[256];
+  JsonWriter w(buf, sizeof(buf));
+  encode_res_ok_access(w, 3, "12345678", "AA:BB:CC", true, "wss://relay.example.com:9090/tunnel/my-hub");
+  CHECK(std::string(w.c_str()) ==
+        R"({"type":"res","id":3,"ok":true,"result":{"token":"12345678","fingerprint":"AA:BB:CC","remote":true,"relay_url":"wss://relay.example.com:9090/tunnel/my-hub"}})");
+
+  // Nothing set: empty strings, no relay.
+  JsonWriter e(buf, sizeof(buf));
+  encode_res_ok_access(e, 4, "", "", false, "");
+  CHECK(std::string(e.c_str()) ==
+        R"({"type":"res","id":4,"ok":true,"result":{"token":"","fingerprint":"","remote":false,"relay_url":""}})");
+}

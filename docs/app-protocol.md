@@ -178,6 +178,15 @@ so they also update the desired state (reconciler).
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
 | `history` | all optional: `before` (a `seq`: only events strictly older), `limit` (1..24, default 24), `entity` (only events about this device, also one that has since been removed) | a newest-first page of the event history (§5.1): `result: {now, latest, oldest, more, events}` |
+| `ota.start` | `chip` (1 = Zigbee C6, 2 = Thread C6), `url` (`http://` or `https://`), `sha256` (64 hex characters) | updates that co-processor over the UART link, exactly as the console's `ota <chip> <url> <sha256>`. The hub downloads the image itself, so the URL must be reachable **from the hub**; the client uploads nothing. One update at a time: `busy` while another runs. See §5.2 |
+| `ota.status` | — | where the update stands: `result: {state, pct, chip, message}` (§5.2) |
+| `hub.reboot` | — | answers `ok`, then reboots the brain ~300 ms later, so the reply gets out first. The connection drops and the client reconnects |
+| `hub.factory_reset` | — | answers `ok`, then ~500 ms later erases the hub's own settings (rules, names, schedules, timers, scenes, desired state, the app token, the relay credentials, the location) and reboots. The Wi-Fi credentials stay, and the co-processors keep their own partitions (their networks and images). See §5.2 |
+| `access.get` | — | `result: {token, fingerprint, remote, relay_url}` (§5.2) |
+| `access.token.set` | `token` (8..64 printable ASCII characters, no spaces) | the same rule as the console's `webtoken`. Answers `ok`, then ~300 ms later saves the token and restarts the app server: **the connection drops and the client must reconnect with the new token** |
+| `access.relay.set` | `url` (`ws://`, `wss://`, `http://` or `https://`), `secret` | the remote-access relay (§13), like the console's `relay <url> <secret>`: the credentials are saved and the hub connects out. The secret is never sent back |
+| `access.relay.clear` | — | disconnects the tunnel and erases the relay credentials |
+| `wifi.forget` | — | answers `ok`, then ~300 ms later erases the saved Wi-Fi credentials and disconnects: the hub comes up on its setup access point (§11) |
 
 Error codes: a missing or ill-typed argument is `bad_args` (the `message` names it);
 an entity or attribute that does not exist, or an index with nothing behind it, is
@@ -186,10 +195,39 @@ table is `table_full`. Both the hub (`core::app`, `core/app_requests.hpp`) and t
 mock hub follow this.
 
 Every mutating op re-broadcasts the affected list (`rules`/`schedules`/…) to all
-clients. Anything that changes who may control the hub is **not** available to a normal client:
-the token is set on the console, or by the first-time setup (§11) from a client that
-proved it knows the setup code; OTA is not available at all. (A normal client may change the
-Wi-Fi network, with the rollback described under `wifi.set`.)
+clients. A client that authenticated with the setup code (§11) may use `wifi.scan`
+and `setup.apply` only — everything else, including the ops below, needs the token.
+
+### 5.2 Firmware update, access and hub actions
+
+The ops that update a co-processor, change how the hub can be reached, or change the
+hub itself. Two of them answer with a result of their own shape:
+
+```jsonc
+// ota.status
+{ "type": "res", "id": 9, "ok": true,
+  "result": { "state": "downloading", "pct": 42, "chip": 1, "message": "downloading 667 KB" } }
+
+// access.get
+{ "type": "res", "id": 10, "ok": true,
+  "result": { "token": "s3cret1", "fingerprint": "AA:BB:…", "remote": false, "relay_url": "" } }
+```
+
+`ota.status`: `state` is `idle` · `downloading` · `verifying` · `done` · `failed`
+(`verifying` covers both the chip writing the image and the chip rebooting into it);
+`pct` is the download progress, 0..100 (0 when unknown); `chip` is the chip being
+updated (0 when idle); `message` is a short human-readable line for the card.
+
+`access.get`: `token` is the token the client already authenticated with, so handing
+it back exposes nothing new (the hub never logs it); `fingerprint` is the SHA-256 of
+the hub's certificate — what the app pins (§10) — and is empty when the firmware has
+no TLS identity; `remote` says whether a relay is configured; `relay_url` is its URL
+(the relay's secret is never sent).
+
+The ops that change the hub itself answer `ok` **first** and do the work a moment
+later (300 ms, 500 ms for the factory reset), so the reply reaches the client before
+the connection drops or the hub reboots. A client must expect the connection to drop
+after `hub.reboot`, `hub.factory_reset` and `access.token.set`, and reconnect.
 
 ### 5.1 History
 
@@ -503,8 +541,17 @@ code).
 9. **Remote access / relay** (hub + relay server + app + console; NOT hardware-verified):
    §13. The brain connects out to a relay server (`esp_websocket_client`); a cloud relay
    exposes HTTP+SSE for apps; a console tool gives a full REPL. The connect screen has
-   Local / Cloud / Relay modes. 299 vitest, 349 host tests. Not tested on hardware or
+   Local / Cloud / Relay modes. 299 vitest, 355 host tests. Not tested on hardware or
    end-to-end through a live relay.
+
+10. ✅ **Firmware update, access and hub actions** (hub side; §5.2): `ota.start` /
+    `ota.status` (the co-processor update the console's `ota` command drives, with the
+    progress the app's card shows), `access.get` / `access.token.set` /
+    `access.relay.set` / `access.relay.clear`, `hub.reboot`, `hub.factory_reset` and
+    `wifi.forget`. The hub answers first and does the work a moment later (300–500 ms),
+    so the reply gets out before the connection drops or the hub reboots. The parsing and
+    the validation live in `core/app_requests.hpp` (host-tested), the encoders in
+    `core/app_protocol.hpp`.
 
 ## 13. Remote access (relay)
 

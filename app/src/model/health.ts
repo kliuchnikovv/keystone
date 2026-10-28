@@ -32,3 +32,19 @@ export function chipSummary(c: Chip): ChipSummary {
   }
   return { title: c.label.charAt(0).toUpperCase() + c.label.slice(1), tone, status, details };
 }
+
+/** The chip's own numbers, one row each: uptime, heap, reboots, line errors. */
+export interface ChipRow {
+  label: string;
+  value: string;
+}
+
+export function chipRows(c: Chip): ChipRow[] {
+  const t = c.telemetry;
+  return [
+    { label: 'Uptime', value: t.uptime_s !== undefined ? formatUptime(t.uptime_s) : '—' },
+    { label: 'Free heap', value: t.heap !== undefined ? `${Math.round(t.heap / 1024)} KB` : '—' },
+    { label: 'Reboots seen', value: String(c.reboots) },
+    { label: 'Link errors', value: String(t.crc_errors ?? 0) },
+  ];
+}

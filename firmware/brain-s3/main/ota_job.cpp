@@ -120,6 +120,8 @@ void OtaJob::finish(bool ok, const char* msg) noexcept {
   } else {
     ESP_LOGE(kTag, "%s", result_);
   }
+  ran_ = true;
+  last_ok_ = ok;
   running_ = false;
 }
 
@@ -205,6 +207,7 @@ void OtaJob::run() noexcept {
     if (!done) prefetch();
 
     const unsigned pct = static_cast<unsigned>((static_cast<std::uint64_t>(acked) * 100) / total_);
+    last_pct_ = pct;
     if (pct / 10 != last_pct / 10 && !done) {
       last_pct = pct;
       ESP_LOGI(kTag, "%u%% (%u/%u B)", pct, static_cast<unsigned>(acked),
@@ -249,6 +252,38 @@ void OtaJob::describe(char* out, std::size_t cap) noexcept {
   const unsigned pct = total_ ? static_cast<unsigned>((static_cast<std::uint64_t>(acked) * 100) / total_) : 0;
   std::snprintf(out, cap, "chip 0x%02x: %s - %u%% (%u/%u B)\n", static_cast<unsigned>(chip_id_),
                 phase, pct, static_cast<unsigned>(acked), static_cast<unsigned>(total_));
+}
+
+OtaJob::Status OtaJob::status() const noexcept {
+  Status s;
+  if (!running_) {
+    if (!ran_) {
+      std::snprintf(s.message, sizeof(s.message), "%s", result_);  // "no update run since boot"
+      return s;
+    }
+    s.state = last_ok_ ? State::Done : State::Failed;
+    s.pct = last_pct_;
+    s.chip = chip_id_;
+    std::snprintf(s.message, sizeof(s.message), "%s", result_);
+    return s;
+  }
+
+  xSemaphoreTake(mtx_, portMAX_DELAY);
+  const std::uint32_t acked = sender_.acked();
+  const auto st = sender_.state();
+  xSemaphoreGive(mtx_);
+
+  s.chip = chip_id_;
+  s.pct = total_ ? static_cast<unsigned>((static_cast<std::uint64_t>(acked) * 100) / total_) : 0;
+  if (st == core::OtaSender::State::Ending) {
+    s.state = State::Verifying;
+    std::snprintf(s.message, sizeof(s.message), "the chip is verifying the image");
+  } else {
+    s.state = State::Downloading;
+    std::snprintf(s.message, sizeof(s.message), "downloading %u KB",
+                  static_cast<unsigned>(total_ / 1024));
+  }
+  return s;
 }
 
 }  // namespace fw

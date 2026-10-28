@@ -18,8 +18,10 @@ export interface HubConnection {
   close(): void;
 }
 
-/** One connection per (url, token); it lives as long as the component that asked. */
-export function useHubClient(settings: Settings, options: Partial<HubClientOptions> = {}): HubConnection {
+/** One connection per (url, token); it lives as long as the component that asked.
+ * `autoConnect` is false when the caller already has a live connection (the Connect
+ * screen hands its client over) — then this one must not open a second socket. */
+export function useHubClient(settings: Settings, options: Partial<HubClientOptions> = {}, autoConnect = true): HubConnection {
   const client = useMemo(
     () => {
       if (isCloudUrl(settings.url)) {
@@ -38,9 +40,10 @@ export function useHubClient(settings: Settings, options: Partial<HubClientOptio
     [settings.url, settings.token, settings.fingerprint],
   );
   useEffect(() => {
+    if (!autoConnect) return;
     client.connect();
     return () => client.close();
-  }, [client]);
+  }, [client, autoConnect]);
   return client;
 }
 

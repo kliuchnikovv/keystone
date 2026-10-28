@@ -14,13 +14,17 @@
 
 namespace core {
 
-template <std::size_t MaxEntities = 64, std::size_t MaxNameLen = 24>
+template <std::size_t MaxEntities = 64, std::size_t MaxNameLen = 32>
 class EntityNames {
  public:
   static constexpr std::uint16_t kMagic = 0x4E4D;  // 'NM'
-  static constexpr std::uint8_t  kVersion = 1;
+  static constexpr std::uint8_t  kVersion = 2;
+  // v1 kept a 24-byte name; v2 keeps 32, so 15 Cyrillic characters fit.
+  static constexpr std::uint8_t  kLegacyVersion = 1;
+  static constexpr std::size_t   kLegacyNameLen = 24;
   static constexpr std::size_t   kHeaderSize = 6;
   static constexpr std::size_t   kEntryWireSize = 2 + MaxNameLen;
+  static constexpr std::size_t   kMaxEntities = MaxEntities;
 
   struct Entry {
     std::uint16_t id;
@@ -173,11 +177,17 @@ class EntityNames {
     const auto* p = static_cast<const std::uint8_t*>(in_buf);
 
     if (detail::get_u16_le(p + 0) != kMagic) return false;
-    if (p[2] != kVersion) return false;
+    const std::uint8_t version = p[2];
+    if (version != kVersion && version != kLegacyVersion) return false;
+
+    // A v1 blob stores a 24-byte name, a v2 blob 32. The old names fit the new
+    // table as they are, so a v1 blob is read with its own stride and migrated.
+    const std::size_t name_len = (version == kLegacyVersion) ? kLegacyNameLen : MaxNameLen;
+    const std::size_t entry_size = 2 + name_len;
 
     const std::uint16_t num_entries = detail::get_u16_le(p + 4);
     const std::size_t expected_len =
-        kHeaderSize + static_cast<std::size_t>(num_entries) * kEntryWireSize;
+        kHeaderSize + static_cast<std::size_t>(num_entries) * entry_size;
     if (in_len < expected_len) return false;
     if (num_entries > MaxEntities) return false;
 
@@ -187,9 +197,9 @@ class EntityNames {
       const std::uint16_t id = detail::get_u16_le(p + off);
       off += 2;
       char name_buf[MaxNameLen + 1] = {};
-      std::memcpy(name_buf, p + off, MaxNameLen);
+      std::memcpy(name_buf, p + off, name_len);
       name_buf[MaxNameLen] = '\0';  // guarantee null termination
-      off += MaxNameLen;
+      off += name_len;
 
       if (!set_name(id, name_buf)) {
         return false;

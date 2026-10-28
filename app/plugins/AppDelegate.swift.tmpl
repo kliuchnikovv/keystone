@@ -1,0 +1,114 @@
+internal import Expo
+import React
+import ReactAppDependencyProvider
+
+// Xcode 27 / iOS 27 refuse to launch an app that does not adopt the UIKit scene lifecycle
+// ("Application failed to launch: UIScene lifecycle is required for apps built with this SDK").
+// `ExpoAppDelegate` only conforms to `UIApplicationDelegate`, so this subclass adds the scene
+// conformance and creates the React Native window when the scene connects.
+// The matching `UIApplicationSceneManifest` lives in app.json (ios.infoPlist) so it survives
+// regeneration — see docs/ios-build.md.
+@main
+class AppDelegate: ExpoAppDelegate, UIWindowSceneDelegate {
+  var window: UIWindow?
+
+  // iOS instantiates a separate AppDelegate as the scene delegate, so these must be shared
+  // across instances; otherwise scene(_:willConnectTo:) sees nil and the window stays blank.
+  static var reactNativeDelegate: ExpoReactNativeFactoryDelegate?
+  static var reactNativeFactory: RCTReactNativeFactory?
+
+  public override func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+  ) -> Bool {
+    NSLog("[Keystone] didFinishLaunchingWithOptions")
+    let delegate = ReactNativeDelegate()
+    let factory = ExpoReactNativeFactory(delegate: delegate)
+    delegate.dependencyProvider = RCTAppDependencyProvider()
+
+    AppDelegate.reactNativeDelegate = delegate
+    AppDelegate.reactNativeFactory = factory
+
+    // The window is created in scene(_:willConnectTo:options:) — creating one here would
+    // leave the scene without a root view controller.
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // iOS 18+ runtime check (UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption)
+  // kills the app on launch unless the delegate also vends a scene configuration.
+  public func application(
+    _ application: UIApplication,
+    configurationForConnectingSceneSession connectingSceneSession: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    let config = UISceneConfiguration(
+      name: "Default Configuration",
+      sessionRole: connectingSceneSession.role
+    )
+    config.delegateClass = AppDelegate.self
+    return config
+  }
+
+  public func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    NSLog("[Keystone] scene willConnectTo")
+    guard let windowScene = scene as? UIWindowScene else {
+      NSLog("[Keystone] scene is not a UIWindowScene: \(scene)")
+      return
+    }
+    guard let factory = AppDelegate.reactNativeFactory else {
+      NSLog("[Keystone] reactNativeFactory is nil")
+      return
+    }
+
+    let window = UIWindow(windowScene: windowScene)
+    self.window = window
+    window.makeKeyAndVisible()
+    factory.startReactNative(withModuleName: "main", in: window, launchOptions: nil)
+    NSLog("[Keystone] startReactNative done, rootVC=\(String(describing: window.rootViewController))")
+
+    // A link that opened the app (exp+keystone://…) arrives with the scene, not the delegate.
+    for context in connectionOptions.urlContexts {
+      RCTLinkingManager.application(UIApplication.shared, open: context.url, options: [:])
+    }
+  }
+
+  // Linking API
+  public override func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    return super.application(app, open: url, options: options) || RCTLinkingManager.application(app, open: url, options: options)
+  }
+
+  // Universal Links
+  public override func application(
+    _ application: UIApplication,
+    continue userActivity: NSUserActivity,
+    restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
+  ) -> Bool {
+    let result = RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)
+    return super.application(application, continue: userActivity, restorationHandler: restorationHandler) || result
+  }
+}
+
+class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
+  // Extension point for config-plugins
+
+  override func sourceURL(for bridge: RCTBridge) -> URL? {
+    // needed to return the correct URL for expo-dev-client.
+    bridge.bundleURL ?? bundleURL()
+  }
+
+  override func bundleURL() -> URL? {
+#if DEBUG
+    return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")
+#else
+    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+#endif
+  }
+}

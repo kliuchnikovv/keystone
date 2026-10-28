@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import './setup-dom';
+import { longPress } from './helpers';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
@@ -43,25 +44,28 @@ describe('Renaming a device', () => {
   it('gives a device a name, which every client then sees', async () => {
     await openApp();
     expect(screen.getByText('Motion sensor 0x0102')).toBeTruthy();
+    await longPress(screen.getByLabelText('Device Motion sensor 0x0102'));
     click('Rename Motion sensor 0x0102');
     type('Name', 'hall_motion');
     click('Save name');
-    await screen.findByText('hall_motion');
+    await waitFor(() => expect(screen.getByLabelText('Device hall_motion')).toBeTruthy());
     expect(hub.entities.find((e) => e.id === 0x0102)!.name).toBe('hall_motion');
     expect(screen.queryByLabelText('Name')).toBeNull(); // the editor closed
   });
 
   it('explains a bad name without asking the hub', async () => {
     await openApp();
+    await longPress(screen.getByLabelText('Device lamp'));
     click('Rename lamp');
-    type('Name', 'My Lamp');
+    type('Name', 'bad/name');
     click('Save name');
-    expect(await screen.findByText(/Use a-z, 0-9 and _/)).toBeTruthy();
+    expect(await screen.findByText(/Letters, digits, spaces/)).toBeTruthy();
     expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBe('lamp');
   });
 
   it('shows the hub\'s refusal (a name already in use) and keeps the editor open', async () => {
     await openApp();
+    await longPress(screen.getByLabelText('Device lamp'));
     click('Rename lamp');
     type('Name', 'plug1');
     click('Save name');
@@ -71,9 +75,10 @@ describe('Renaming a device', () => {
 
   it('removes a name', async () => {
     await openApp();
+    await longPress(screen.getByLabelText('Device lamp'));
     click('Rename lamp');
     click('Remove name');
-    await screen.findByText('Light 0x0101');
+    await waitFor(() => expect(screen.getByLabelText('Device Light 0x0101')).toBeTruthy());
     expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBeNull();
   });
 });
@@ -103,7 +108,7 @@ describe('Schedules', () => {
 
     click('Delete schedule 22:00 · Off lamp');
     expect(hub.schedules).toHaveLength(1); // the first tap only arms it
-    fireEvent.click(screen.getByText('Tap again to delete'));
+    fireEvent.click(screen.getByText('Confirm'));
     await waitFor(() => expect(hub.schedules).toHaveLength(0));
     await screen.findByText(/No schedules/);
   });
@@ -162,7 +167,7 @@ describe('Timers', () => {
     const item = await screen.findByLabelText('timer On lamp');
     expect(within(item).getByText('in 15 min')).toBeTruthy();
     click('Delete timer On lamp');
-    fireEvent.click(screen.getByText('Tap again to delete'));
+    fireEvent.click(screen.getByText('Confirm'));
     await screen.findByText('No timers running.');
   });
 
@@ -196,7 +201,7 @@ describe('Timers', () => {
     await screen.findByLabelText('timer On lamp');
     await waitFor(() => expect(screen.queryByLabelText('timer On lamp')).toBeNull(), { timeout: 3000 });
     click('Devices');
-    await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
+    await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
   });
 });
 
@@ -226,7 +231,7 @@ describe('Rules', () => {
     click('Choose plug1 · Power draw');
     click('Only while is above');
     type('Only while value', '5');
-    type('Cooldown (minutes)', '5');
+    type('Cooldown (seconds)', '300');
     click('Save rule');
 
     const item = await screen.findByLabelText('rule 1');
@@ -241,7 +246,7 @@ describe('Rules', () => {
     });
 
     click('Delete rule 1');
-    fireEvent.click(screen.getByText('Tap again to delete'));
+    fireEvent.click(screen.getByText('Confirm'));
     await screen.findByText(/No rules/);
     expect(hub.rules).toHaveLength(0);
   });
@@ -408,7 +413,8 @@ describe('The sun', () => {
   it('the Hub tab sets and clears the location; the sun times show up', async () => {
     await openApp();
     click('Hub');
-    await screen.findByText(/Not set/);
+    // The hub's own facts arrive as a separate event: give it room on a loaded machine.
+    await screen.findByText(/Not set/, undefined, { timeout: 5000 });
     click('Set location');
     type('Latitude', '50.08');
     type('Longitude', '14.43');
@@ -594,10 +600,10 @@ describe('Scenes', () => {
     await openApp();
     await screen.findByLabelText('Apply scene night');
     click('Apply scene night');
-    await screen.findByText('night applied');
+    await screen.findByText("Applied 'night': 2 settings sent");
     expect(hub.scenesApplied).toEqual(['night']);
-    await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
-    expect((screen.getByLabelText('plug1 power') as HTMLInputElement).checked).toBe(false);
+    await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
+    expect(screen.getByLabelText('plug1 is off')).toBeTruthy();
   });
 
   it('says so when part of a scene could not be applied (the chip is silent)', async () => {
@@ -606,6 +612,6 @@ describe('Scenes', () => {
     act(() => hub.setChipStatus(1, 'silent'));
     await screen.findByLabelText('Apply scene night');
     click('Apply scene night');
-    await screen.findByText(/night: 0 applied, 1 could not be/);
+    await screen.findByText(/Applied 'night': 0 sent, 1 skipped/);
   });
 });
