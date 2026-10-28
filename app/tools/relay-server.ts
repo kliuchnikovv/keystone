@@ -32,7 +32,10 @@ const secret = arg('secret') ?? process.env.RELAY_SECRET ?? '';
 const maxClientsPerHub = Number(arg('max-clients') ?? '3');
 
 if (!secret) {
-  console.error('Usage: relay-server --port <port> --secret <shared-secret> [--max-clients 3]');
+  console.error(
+    'relay-server: no shared secret. Set the RELAY_SECRET variable (a PaaS passes it ' +
+      'in the environment) or run it with --secret <shared-secret>.',
+  );
   process.exit(2);
 }
 

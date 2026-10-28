@@ -32,7 +32,10 @@ const authTimeoutMs = 15_000;
 const reqTimeoutMs = 15_000;
 
 if (!secret) {
-  console.error('Usage: cloud-relay --port <port> --secret <shared-secret>');
+  console.error(
+    'cloud-relay: no shared secret. Set the RELAY_SECRET variable (a PaaS passes it ' +
+      'in the environment) or run it with --secret <shared-secret>.',
+  );
   process.exit(2);
 }
 
