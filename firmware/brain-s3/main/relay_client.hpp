@@ -29,6 +29,8 @@ using HubInfoFn = appsrv::HubInfoFn;
 bool configure(const char* url, const char* secret);
 void clear_config();
 void describe(char* buf, std::size_t cap);
+// The configured relay URL ("" when there is none). The secret is never handed out.
+bool configured_url(char* out, std::size_t cap);
 
 bool start(const char* token, HubInfoFn info);
 void stop();

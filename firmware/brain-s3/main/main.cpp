@@ -788,12 +788,18 @@ bool submit(Req& r, int timeout_ms = 1500) {
 
 const char* kNvsNamespace = "keystone";
 
+// The names blob: a header plus one entry per named entity (id + a 32-byte name).
+// Sized from the table itself so a change of MaxNameLen cannot overflow it.
+constexpr std::size_t kNamesBlobMax =
+    core::EntityRegistry<>::Names::kHeaderSize +
+    core::EntityRegistry<>::Names::kEntryWireSize * core::EntityRegistry<>::Names::kMaxEntities;
+
 void persist_names(const core::EntityRegistry<>::Names& names) {
   nvs_handle_t h;
   if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
   // static: this runs in the request-drain path of the main task, whose stack
   // (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is far too small for a 2 KB local.
-  static std::uint8_t buf[2048];
+  static std::uint8_t buf[kNamesBlobMax];
   std::size_t written = names.save(buf, sizeof(buf));
   if (written > 0) {
     nvs_set_blob(h, "ent_names", buf, written);
@@ -809,8 +815,8 @@ void restore_names(core::EntityRegistry<>::Names& names) {
   nvs_handle_t h;
   if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
   std::size_t sz = 0;
-  if (nvs_get_blob(h, "ent_names", nullptr, &sz) == ESP_OK && sz <= 2048) {
-    static std::uint8_t buf[2048];
+  if (nvs_get_blob(h, "ent_names", nullptr, &sz) == ESP_OK && sz <= kNamesBlobMax) {
+    static std::uint8_t buf[kNamesBlobMax];
     if (nvs_get_blob(h, "ent_names", buf, &sz) == ESP_OK) {
       if (names.load(buf, sz)) {
         ESP_LOGI(kTag, "restored %u entity name(s) from NVS",
@@ -2115,11 +2121,15 @@ int cmd_wifi_join(int argc, char** argv) {
 
 // wifi_forget: drop the saved network. The hub disconnects; after a reboot it uses the image's built-in
 // default if there is one, else it waits for `wifi_join`.
-int cmd_wifi_forget(int /*argc*/, char** /*argv*/) {
+void wifi_forget() {
   wifi_creds_erase();
   s_wifi_have_creds = false;
   s_wifi_up = false;
   esp_wifi_disconnect();
+}
+
+int cmd_wifi_forget(int /*argc*/, char** /*argv*/) {
+  wifi_forget();
   printf("saved Wi-Fi credentials erased; disconnected\n");
   return 0;
 }
@@ -2249,6 +2259,64 @@ void on_verify_done(void* /*ctx*/, std::uint8_t chip, core::OtaVerifier::Verdict
     ESP_LOGW(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
   } else {
     ESP_LOGE(kTag, "OTA chip 0x%02x: %s", chip, verdict_text(v));
+  }
+}
+
+// Where the update stands, for the app protocol (`ota.status`). The job knows the transfer, the
+// verifier knows whether the chip really came up on the new image.
+void ota_app_status(core::app::OtaState& state, std::int64_t& pct, std::int64_t& chip, char* msg,
+                     std::size_t msg_cap) {
+  state = core::app::OtaState::Idle;
+  pct = 0;
+  chip = 0;
+  msg[0] = '\0';
+  if (g_ota == nullptr) {
+    std::snprintf(msg, msg_cap, "the hub has no update job");
+    return;
+  }
+  const fw::OtaJob::Status s = g_ota->status();
+  chip = static_cast<std::int64_t>(s.chip);
+  pct = static_cast<std::int64_t>(s.pct);
+  std::snprintf(msg, msg_cap, "%s", s.message);
+
+  switch (s.state) {
+    case fw::OtaJob::State::Idle: state = core::app::OtaState::Idle; break;
+    case fw::OtaJob::State::Downloading: state = core::app::OtaState::Downloading; break;
+    case fw::OtaJob::State::Verifying: state = core::app::OtaState::Verifying; break;
+    case fw::OtaJob::State::Done: state = core::app::OtaState::Done; break;
+    case fw::OtaJob::State::Failed: state = core::app::OtaState::Failed; break;
+  }
+
+  // While the image is on its way the old verdict says nothing about it.
+  if (g_ota->running() || g_verifier == nullptr) return;
+
+  switch (g_verifier->verdict()) {
+    case core::OtaVerifier::Verdict::Idle:
+      break;
+    case core::OtaVerifier::Verdict::Waiting:
+      state = core::app::OtaState::Verifying;
+      std::snprintf(msg, msg_cap, "the chip is rebooting into the new image");
+      break;
+    case core::OtaVerifier::Verdict::Verified:
+      state = core::app::OtaState::Done;
+      std::snprintf(msg, msg_cap, "verified");
+      break;
+    case core::OtaVerifier::Verdict::RolledBack:
+      state = core::app::OtaState::Failed;
+      std::snprintf(msg, msg_cap, "rolled back: the chip is not running the new image");
+      break;
+    case core::OtaVerifier::Verdict::NoRecord:
+      state = core::app::OtaState::Done;
+      std::snprintf(msg, msg_cap, "updated, but the chip has no OTA record to verify it");
+      break;
+    case core::OtaVerifier::Verdict::RunningUnconfirmed:
+      state = core::app::OtaState::Done;
+      std::snprintf(msg, msg_cap, "updated; the new image runs but is not confirmed yet");
+      break;
+    case core::OtaVerifier::Verdict::NoAnswer:
+      state = core::app::OtaState::Failed;
+      std::snprintf(msg, msg_cap, "the chip did not answer the verification request");
+      break;
   }
 }
 
@@ -2775,6 +2843,8 @@ void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::u
 }
 
 void persist_webtoken(const char* token);
+bool restore_webtoken(char* out, std::size_t cap);  // defined with the app glue, below
+void app_hub_info(core::app::HubInfo& h);          // defined with the app glue, below
 void setup_token_request(const char* token, std::uint32_t now);  // defined with the setup code, below
 
 // Live history: what the ring got since the last push goes to every client at once, newest first, so the
@@ -2811,6 +2881,38 @@ void history_push(Scenes& scenes, std::uint32_t now_ms) {
                                  },
                                  &scenes);
   if (w.ok()) hub_broadcast(hb, w.size());
+}
+
+// ---- delayed hub actions -------------------------------------------------------------------
+//
+// A few requests change the hub itself: a reboot, a factory reset, a new app token, forgetting
+// the Wi-Fi network. The reply has to reach the client first, so the work happens a moment later,
+// in the main loop (the same pattern the setup code uses for the network and the token).
+
+enum class HubAction : std::uint8_t { None, Reboot, FactoryReset, SetToken, ForgetWifi };
+
+struct PendingHubAction {
+  bool pending = false;
+  HubAction kind = HubAction::None;
+  std::uint32_t at = 0;  // the main loop's clock
+  char token[core::app::kMaxToken + 1] = {};
+};
+
+PendingHubAction g_hub_action;
+
+constexpr std::uint32_t kHubActionDelayMs = 300;      // a reboot: the reply is out by then
+constexpr std::uint32_t kFactoryResetDelayMs = 500;  // a factory reset erases and reboots
+
+void hub_action_request(HubAction kind, std::uint32_t now, std::uint32_t delay_ms,
+                         const char* token = nullptr) {
+  g_hub_action.kind = kind;
+  g_hub_action.at = now + delay_ms;
+  g_hub_action.pending = true;
+  if (token != nullptr) {
+    std::snprintf(g_hub_action.token, sizeof(g_hub_action.token), "%s", token);
+  } else {
+    g_hub_action.token[0] = '\0';
+  }
 }
 
 void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
@@ -2957,6 +3059,7 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     if (o.ok) set_location(lat, lon);
   } else if (!std::strcmp(op, "location.clear")) {
     clear_location();
+    o = Outcome::done();
   } else if (!std::strcmp(op, "scene.put")) {
     o = scene_put(reg, scenes, reader, m.args);
     if (o.ok) persist_scenes(scenes);
@@ -2999,6 +3102,100 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
                                      kZigbeeChipId);
     o = cm.out;
     if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
+  } else if (!std::strcmp(op, "ota.start")) {
+    // Update a co-processor over the UART link, exactly as the `ota` console command does.
+    core::app::OtaRequest ota_req;
+    o = core::app::ota_start_parse(reader, m.args, ota_req);
+    if (o.ok) {
+      if (g_ota == nullptr) {
+        o = Outcome::fail(Err::Internal, "the hub has no update job");
+      } else if (g_ota->running()) {
+        o = Outcome::fail(Err::Busy, "an update is already running");
+      } else {
+        char err[96];
+        if (!g_ota->start(ota_req.chip, ota_req.url, ota_req.sha256, err, sizeof(err))) {
+          o = Outcome::fail(Err::Internal, err);
+        } else {
+          ESP_LOGI(kTag, "app: update of chip 0x%02x started", static_cast<unsigned>(ota_req.chip));
+        }
+      }
+    }
+  } else if (!std::strcmp(op, "ota.status")) {
+    // A result of its own shape: sent right away.
+    static char ob[256];
+    core::app::OtaState st = core::app::OtaState::Idle;
+    std::int64_t pct = 0, chip = 0;
+    char msg[96] = {};
+    ota_app_status(st, pct, chip, msg, sizeof(msg));
+    core::JsonWriter ow(ob, sizeof(ob));
+    encode_res_ok_ota(ow, in.id, st, pct, chip, msg);
+    if (ow.ok()) {
+      hub_send(in.fd, ob, ow.size());
+      ESP_LOGI(kTag, "app: req ota.status -> %s", core::app::ota_state_name(st));
+      return;
+    }
+    o = Outcome::fail(Err::Internal, "ota status too large");
+  } else if (!std::strcmp(op, "hub.reboot")) {
+    hub_action_request(HubAction::Reboot, now, kHubActionDelayMs);
+    o = Outcome::done();
+  } else if (!std::strcmp(op, "hub.factory_reset")) {
+    hub_action_request(HubAction::FactoryReset, now, kFactoryResetDelayMs);
+    o = Outcome::done();
+  } else if (!std::strcmp(op, "access.get")) {
+    // What the app's access card shows: the token (the client already has it), the certificate
+    // fingerprint it pins, and the relay. The token is never logged.
+    char tok[core::app::kMaxToken + 1] = {};
+    const bool have = restore_webtoken(tok, sizeof(tok));
+    char fp[80] = {};
+    if (appsrv::tls_available()) {
+      const char* f = appsrv::cert_fingerprint();
+      if (f != nullptr) std::snprintf(fp, sizeof(fp), "%s", f);
+    }
+    char rurl[256] = {};
+    relay::configured_url(rurl, sizeof(rurl));
+    static char ab[512];
+    core::JsonWriter aw(ab, sizeof(ab));
+    encode_res_ok_access(aw, in.id, have ? tok : "", fp, rurl[0] != '\0', rurl);
+    std::memset(tok, 0, sizeof(tok));  // the copy in the reply is what matters
+    if (aw.ok()) {
+      hub_send(in.fd, ab, aw.size());
+      ESP_LOGI(kTag, "app: req access.get -> token %s, relay %s", have ? "set" : "not set",
+               rurl[0] != '\0' ? "set" : "not set");
+      return;
+    }
+    o = Outcome::fail(Err::Internal, "access view too large");
+  } else if (!std::strcmp(op, "access.token.set")) {
+    // The new token is saved and the app server restarts with it: this connection drops and the
+    // client has to come back with the new token.
+    char tok[core::app::kMaxToken + 1] = {};
+    o = core::app::access_token_parse(reader, m.args, tok, sizeof(tok));
+    if (o.ok) hub_action_request(HubAction::SetToken, now, kHubActionDelayMs, tok);
+    std::memset(tok, 0, sizeof(tok));
+  } else if (!std::strcmp(op, "access.relay.set")) {
+    core::app::RelayRequest relay_req;
+    o = core::app::access_relay_parse(reader, m.args, relay_req);
+    if (o.ok) {
+      if (!relay::configure(relay_req.url, relay_req.secret)) {
+        o = Outcome::fail(Err::Internal, "cannot store the relay credentials");
+      } else {
+        char tok[core::app::kMaxToken + 1] = {};
+        const bool have = restore_webtoken(tok, sizeof(tok));
+        if (relay::running()) relay::stop();
+        if (!relay::start(have ? tok : nullptr, &app_hub_info)) {
+          ESP_LOGW(kTag, "app: the relay is configured but did not come up (it retries on the next boot)");
+        }
+        std::memset(tok, 0, sizeof(tok));
+      }
+    }
+    std::memset(relay_req.secret, 0, sizeof(relay_req.secret));
+  } else if (!std::strcmp(op, "access.relay.clear")) {
+    relay::stop();
+    relay::clear_config();
+    o = Outcome::done();
+  } else if (!std::strcmp(op, "wifi.forget")) {
+    // The reply goes out first; the hub drops the network right after it.
+    hub_action_request(HubAction::ForgetWifi, now, kHubActionDelayMs);
+    o = Outcome::done();
   }
 
   if (o.ok) {
@@ -3121,6 +3318,67 @@ void persist_webplain(bool on) {
   else nvs_erase_key(h, kWebPlainKey);
   nvs_commit(h);
   nvs_close(h);
+}
+
+// ---- a factory reset ------------------------------------------------------------------------
+//
+// Everything the hub's own settings live in, in the "keystone" NVS namespace. The Wi-Fi
+// credentials stay (otherwise the hub would come up with no network at all and only its setup
+// access point), and the co-processors keep their own partitions (their networks and images).
+
+constexpr const char* kFactoryResetKeys[] = {
+    "rules", "ent_names", "schedules", "timers", "scenes", "desired",
+    kWebTokenKey, kWebPlainKey, "relay_url", "relay_sec", "location",
+};
+
+void factory_reset() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) {
+    ESP_LOGE(kTag, "factory reset: cannot open the NVS namespace");
+    return;
+  }
+  for (const char* key : kFactoryResetKeys) nvs_erase_key(h, key);
+  nvs_commit(h);
+  nvs_close(h);
+  ESP_LOGW(kTag, "factory reset: the hub's settings are erased");
+}
+
+// Runs the action the app asked for, once the reply has had its time to go out.
+void hub_action_service(std::uint32_t now) {
+  if (!g_hub_action.pending) return;
+  if (static_cast<std::int32_t>(now - g_hub_action.at) < 0) return;
+  const HubAction kind = g_hub_action.kind;
+  g_hub_action.pending = false;
+
+  switch (kind) {
+    case HubAction::Reboot:
+      ESP_LOGI(kTag, "app: rebooting the hub");
+      esp_restart();
+      break;
+    case HubAction::FactoryReset:
+      ESP_LOGW(kTag, "app: factory reset - erasing the hub's settings and rebooting");
+      factory_reset();
+      esp_restart();
+      break;
+    case HubAction::SetToken: {
+      const char* token = g_hub_action.token;
+      persist_webtoken(token);
+      if (!appsrv::start(token, &app_hub_info, restore_webplain())) {
+        ESP_LOGE(kTag, "app: the token was saved, but the app server did not start");
+      }
+      relay::set_token(token);
+      if (!relay::running()) relay::start(token, &app_hub_info);
+      std::memset(g_hub_action.token, 0, sizeof(g_hub_action.token));
+      ESP_LOGI(kTag, "app: the app token was changed; the clients have to reconnect");
+      break;
+    }
+    case HubAction::ForgetWifi:
+      ESP_LOGW(kTag, "app: forgetting the saved Wi-Fi network");
+      wifi_forget();
+      break;
+    case HubAction::None:
+      break;
+  }
 }
 
 const char* app_mode_text() {
@@ -3745,6 +4003,10 @@ extern "C" void app_main(void) {
         relay::tick(t);
       }
     }
+
+    // A reboot, a factory reset, a new app token or a forgotten network: the app asked for it,
+    // the reply has had its time to go out, now do it.
+    hub_action_service(t);
 
     // Drain console requests (single-threaded core access here).
     Req* r = nullptr;

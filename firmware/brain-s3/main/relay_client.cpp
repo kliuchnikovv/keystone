@@ -399,6 +399,12 @@ void describe(char* buf, std::size_t cap) {
                 static_cast<unsigned>(n_authed), g_url);
 }
 
+bool configured_url(char* out, std::size_t cap) {
+  if (out == nullptr || cap == 0) return false;
+  std::snprintf(out, cap, "%s", g_url);
+  return g_url[0] != '\0';
+}
+
 bool start(const char* token, HubInfoFn info) {
   if (g_url[0] == '\0') {
     // Try loading from NVS.

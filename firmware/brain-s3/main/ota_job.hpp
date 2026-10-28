@@ -40,6 +40,19 @@ class OtaJob {
   // One human-readable line: idle / progress / last result.
   void describe(char* out, std::size_t cap) noexcept;
 
+  // Where the update stands, for the app protocol (`ota.status`).
+  enum class State : std::uint8_t { Idle, Downloading, Verifying, Done, Failed };
+
+  struct Status {
+    State state = State::Idle;
+    unsigned pct = 0;        // 0 when unknown
+    std::uint8_t chip = 0;   // the chip being updated (0 when idle)
+    char message[96] = {};
+  };
+
+  // A snapshot of the job's state. Safe to call from the main loop while the job runs.
+  Status status() const noexcept;
+
  private:
   // Delivers inbound messages to the sender under the job mutex.
   class LockedBus final : public core::Bus {
@@ -94,6 +107,9 @@ class OtaJob {
   std::size_t pre_pos_ = 0;
 
   char result_[96] = "no update run since boot";
+  bool ran_ = false;    // an update has been run since boot
+  bool last_ok_ = false;  // and it ended well
+  unsigned last_pct_ = 0;
   AcceptedFn accepted_fn_ = nullptr;
   void* accepted_ctx_ = nullptr;
 };

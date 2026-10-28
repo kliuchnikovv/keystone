@@ -108,19 +108,33 @@ TEST_CASE("name.set names a device, replaces a name, and name.clear removes it")
   CHECK(h.reg.name_of(0x0100) == nullptr);
 }
 
+TEST_CASE("name.set accepts a name a person can read") {
+  Home h;
+  CHECK(h.name_set(R"({"entity":256,"name":"Living room"})").ok);
+  CHECK(std::string(h.reg.name_of(0x0100)) == "Living room");
+  CHECK(h.name_set(R"({"entity":256,"name":"Kitchen lamp"})").ok);   // a space is fine
+  CHECK(h.name_set(R"({"entity":256,"name":"Plug_2"})").ok);          // the old style still works
+  CHECK(h.name_set(R"({"entity":256,"name":"1plug"})").ok);            // a digit may start it
+  CHECK(h.name_set(R"j({"entity":256,"name":"Lamp (main)"})j").ok);     // punctuation is fine
+  CHECK(h.name_set(R"({"entity":256,"name":"Кухня розетка"})").ok);   // Cyrillic counts as one character
+  CHECK(h.name_set(R"({"entity":256,"name":"abcdefghijklmno"})").ok);  // exactly 15
+}
+
 TEST_CASE("name.set rejects bad names, duplicates and unknown or chip entities") {
   Home h;
   REQUIRE(h.name_set(R"({"entity":256,"name":"plug1"})").ok);
   struct Case { const char* args; Err err; };
   const Case bad[] = {
       {R"({"entity":257,"name":"plug1"})", Err::BadArgs},                      // in use
-      {R"({"entity":257,"name":"Plug"})", Err::BadArgs},                       // uppercase
-      {R"({"entity":257,"name":"my plug"})", Err::BadArgs},                    // space
-      {R"({"entity":257,"name":"1plug"})", Err::BadArgs},                      // starts with a digit
-      {R"({"entity":257,"name":"_plug"})", Err::BadArgs},
       {R"({"entity":257,"name":"0x10"})", Err::BadArgs},                       // would look like an id
+      {R"({"entity":257,"name":"123"})", Err::BadArgs},                        // only digits
       {R"({"entity":257,"name":""})", Err::BadArgs},
-      {R"({"entity":257,"name":"aaaaaaaaaaaaaaaaaaaaaaaaa"})", Err::BadArgs},  // 25 chars
+      {R"({"entity":257,"name":" lead"})", Err::BadArgs},                      // a space at the edge
+      {R"({"entity":257,"name":"trail "})", Err::BadArgs},
+      {R"({"entity":257,"name":"abcdefghijklmnop"})", Err::BadArgs},           // 16 characters
+      {R"({"entity":257,"name":"Кухня розетка длинная"})", Err::BadArgs},      // too many characters
+      {R"({"entity":257,"name":"bad/name"})", Err::BadArgs},                   // not a name character
+      {R"({"entity":257,"name":"tab\there"})", Err::BadArgs},                  // a control character
       {R"({"entity":257,"name":7})", Err::BadArgs},
       {R"({"entity":257})", Err::BadArgs},
       {R"({"name":"x"})", Err::BadArgs},
@@ -130,12 +144,12 @@ TEST_CASE("name.set rejects bad names, duplicates and unknown or chip entities")
       {R"({"entity":1,"name":"chipname"})", Err::NotFound},                    // chips are not devices
   };
   for (const auto& c : bad) {
-    CAPTURE(c.args);
+    CAPTURE(std::string(c.args));
     const auto o = h.name_set(c.args);
     CHECK_FALSE(o.ok);
     CHECK(o.err == c.err);
   }
-  CHECK(h.name_set(R"({"entity":257,"name":"aaaaaaaaaaaaaaaaaaaaaaa"})").ok);  // exactly 23
+  CHECK(h.name_set(R"({"entity":257,"name":"abcd fghijklmno"})").ok);  // exactly 15 characters
   CHECK(h.name_clear(R"({"entity":4660})").err == Err::NotFound);
   Reader r;  // a request with no args object at all
   CHECK(name_set(h.reg, r, -1).err == Err::BadArgs);
@@ -720,6 +734,144 @@ TEST_CASE("wifi.set needs a valid SSID and password and refuses anything else wi
                           R"({"ssid":"home","password":"123456789012345678901234567890123456789012345678901234567890123456"})"}) {
     CAPTURE(bad);
     const auto o = parse(bad, s, p);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}
+
+// ---- firmware update (OTA) -------------------------------------------------------------------
+
+namespace {
+
+// {"chip":1,"url":"…","sha256":"…"} with the parts the test wants.
+std::string ota_args(int chip, const std::string& url, const std::string& sha) {
+  return "{\"chip\":" + std::to_string(chip) + ",\"url\":\"" + url + "\",\"sha256\":\"" + sha + "\"}";
+}
+
+Outcome ota_parse(const std::string& args, core::app::OtaRequest& req) {
+  const std::string frame = R"({"type":"req","id":1,"op":"ota.start","args":)" + args + "}";
+  Reader r;
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  return core::app::ota_start_parse(r, m.args, req);
+}
+
+}  // namespace
+
+TEST_CASE("ota.start takes a chip, an http(s) url and a 64-hex digest") {
+  const std::string sha(64, 'a');
+  core::app::OtaRequest req;
+  REQUIRE(ota_parse(ota_args(1, "https://example.com/fw.bin", sha), req).ok);
+  CHECK(req.chip == core::app::kOtaChipZigbee);
+  CHECK(std::string(req.url) == "https://example.com/fw.bin");
+  CHECK(std::string(req.sha256) == sha);
+
+  REQUIRE(ota_parse(ota_args(2, "http://example.com/fw.bin", sha), req).ok);
+  CHECK(req.chip == core::app::kOtaChipThread);
+
+  // upper case hex is hex too
+  REQUIRE(ota_parse(ota_args(2, "http://example.com/fw.bin", std::string(64, 'F')), req).ok);
+  CHECK(std::string(req.sha256) == std::string(64, 'F'));
+}
+
+TEST_CASE("ota.start refuses a chip it does not know, a bad url and a bad digest") {
+  const std::string sha(64, 'a');
+  core::app::OtaRequest req;
+  const std::vector<std::string> bad = {
+      ota_args(0, "https://example.com/fw.bin", sha),
+      ota_args(3, "https://example.com/fw.bin", sha),
+      ota_args(-1, "https://example.com/fw.bin", sha),
+      ota_args(257, "https://example.com/fw.bin", sha),  // 257 & 0xff == 1: must not slip through
+      R"({"chip":"1","url":"https://example.com/fw.bin","sha256":")" + sha + R"("})",
+      R"({"url":"https://example.com/fw.bin","sha256":")" + sha + R"("})",
+      ota_args(1, "ftp://example.com/fw.bin", sha),
+      ota_args(1, "example.com/fw.bin", sha),
+      ota_args(1, "", sha),
+      ota_args(1, "HTTPS://example.com/fw.bin", sha),  // the scheme is case sensitive
+      R"({"chip":1,"sha256":")" + sha + R"("})",
+      ota_args(1, "https://example.com/fw.bin", std::string(63, 'a')),
+      ota_args(1, "https://example.com/fw.bin", std::string(65, 'a')),
+      ota_args(1, "https://example.com/fw.bin", std::string(63, 'a') + "g"),
+      ota_args(1, "https://example.com/fw.bin", ""),
+      R"({"chip":1,"url":"https://example.com/fw.bin"})",
+  };
+  for (const auto& args : bad) {
+    CAPTURE(args);
+    const auto o = ota_parse(args, req);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}
+
+// ---- access: the app token and the relay ---------------------------------------------------------
+
+namespace {
+
+Outcome token_parse(const std::string& args, std::string& out) {
+  const std::string frame = R"({"type":"req","id":1,"op":"access.token.set","args":)" + args + "}";
+  Reader r;
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  char tok[core::app::kMaxToken + 1] = {};
+  const auto o = core::app::access_token_parse(r, m.args, tok, sizeof(tok));
+  out = tok;
+  return o;
+}
+
+Outcome relay_parse(const std::string& args, core::app::RelayRequest& req) {
+  const std::string frame = R"({"type":"req","id":1,"op":"access.relay.set","args":)" + args + "}";
+  Reader r;
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  return core::app::access_relay_parse(r, m.args, req);
+}
+
+}  // namespace
+
+TEST_CASE("access.token.set takes the same token the console takes") {
+  std::string t;
+  REQUIRE(token_parse(R"({"token":"12345678"})", t).ok);
+  CHECK(t == "12345678");
+  REQUIRE(token_parse(R"({"token":")" + std::string(64, 'x') + R"("})", t).ok);  // exactly the limit
+  CHECK(t.size() == 64);
+
+  const std::vector<std::string> bad = {
+      R"({"token":"1234567"})",                       // too short
+      R"({"token":")" + std::string(65, 'x') + R"("})",  // too long
+      R"({"token":"1234 678"})",                      // a space inside
+      R"({"token":"12345678 "})",                     // a space at the end
+      R"({"token":"1234567\n"})",                     // not printable
+      R"({"token":""})",
+      R"({"token":12345678})",
+      R"({})",
+  };
+  for (const auto& args : bad) {
+    CAPTURE(args);
+    const auto o = token_parse(args, t);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}
+
+TEST_CASE("access.relay.set takes a relay url and a secret") {
+  core::app::RelayRequest req;
+  REQUIRE(relay_parse(R"({"url":"wss://relay.example.com:9090/tunnel/my-hub","secret":"s3cret"})", req).ok);
+  CHECK(std::string(req.url) == "wss://relay.example.com:9090/tunnel/my-hub");
+  CHECK(std::string(req.secret) == "s3cret");
+  REQUIRE(relay_parse(R"({"url":"https://relay.example.com/","secret":"s3cret"})", req).ok);
+
+  const std::vector<std::string> bad = {
+      R"({"url":"","secret":"s3cret"})",
+      R"({"url":"relay.example.com","secret":"s3cret"})",
+      R"({"url":"ftp://relay.example.com","secret":"s3cret"})",
+      R"({"url":"wss://relay.example.com","secret":""})",
+      R"({"url":"wss://relay.example.com"})",
+      R"({"secret":"s3cret"})",
+      R"({})",
+  };
+  for (const auto& args : bad) {
+    CAPTURE(args);
+    const auto o = relay_parse(args, req);
     CHECK_FALSE(o.ok);
     CHECK(o.err == Err::BadArgs);
   }
