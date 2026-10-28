@@ -6,6 +6,7 @@ import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import type { HubConnection } from '../hooks/useHub';
 import type { HomeState } from '../protocol/store';
+import { relayClientUrl } from '../settings';
 import { Button, ErrorText, Input } from './controls';
 import { ConfirmDialog, Sheet } from './Sheet';
 import { radius, useTheme } from './theme';
@@ -132,7 +133,7 @@ export function FirmwareCard({ home, client, commands }: { home: HomeState; clie
   );
 }
 
-export function AccessCard({ client, commands, onTokenChange }: { client: HubConnection; commands: Commands; onTokenChange?(token: string): Promise<void> }) {
+export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { client: HubConnection; commands: Commands; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void }) {
   const t = useTheme();
   const [info, setInfo] = useState<{ token: string; fingerprint: string; remote: boolean; relay_url: string } | null>(null);
   const [showToken, setShowToken] = useState(false);
@@ -140,6 +141,8 @@ export function AccessCard({ client, commands, onTokenChange }: { client: HubCon
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // The hub's own address ends in /tunnel/<id>; the app talks to the client side.
+  const clientUrl = info?.relay_url ? relayClientUrl(info.relay_url) : '';
 
   const load = useCallback(async () => {
     try {
@@ -167,6 +170,7 @@ export function AccessCard({ client, commands, onTokenChange }: { client: HubCon
     setUrl('');
     setSecret('');
     await load();
+    commands.notify('The hub now uses this relay. Connect through it below.');
   };
 
   const clearRelay = async () => {
@@ -218,15 +222,28 @@ export function AccessCard({ client, commands, onTokenChange }: { client: HubCon
         </Text>
       </View>
 
+      {clientUrl ? (
+        <View style={styles.kv}>
+          <Text style={{ color: t.muted }}>Through the relay</Text>
+          <Text style={{ color: t.text, fontWeight: '600', flex: 1, textAlign: 'right' }} numberOfLines={1}>
+            {clientUrl}
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.row}>
         {info?.relay_url ? (
           <Button kind="secondary" size="compact" label="Remove relay" onPress={() => void clearRelay()} />
+        ) : null}
+        {clientUrl && onUseRelay ? (
+          <Button size="compact" label="Connect through the relay" a11y="Connect through the relay" onPress={() => onUseRelay(clientUrl)} />
         ) : null}
         <Button kind="secondary" size="compact" label="Set up relay" onPress={() => setOpen(true)} />
         <Button size="compact" label="New token" a11y="New token" onPress={() => void newToken()} />
       </View>
       <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 6 }}>
         A new token closes this connection: the app reconnects with the new one.
+        {'\n'}Changing the relay drops a connection that goes through the old one — connect with the new address.
       </Text>
 
       <Sheet visible={open} title="Remote access" onCancel={() => setOpen(false)}>

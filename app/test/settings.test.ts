@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloudUrl, createSettingsStore, isCloudUrl, isPlaintext, isRelayUrl, isSecure, normalizeUrl, validateSettings, type KeyValueStore } from '../src/settings';
+import { cloudUrl, createSettingsStore, isCloudUrl, isPlaintext, isRelayUrl, isSecure, normalizeUrl, relayClientUrl, validateSettings, type KeyValueStore } from '../src/settings';
 
 function memoryStore(initial: Record<string, string> = {}, failing = false): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -46,12 +46,29 @@ describe('connection form', () => {
     expect(normalizeUrl('wss://hub/ws')).toBe('wss://hub/ws');
     expect(normalizeUrl('10.0.0.5/custom')).toBe('ws://10.0.0.5:8080/custom');
   });
+  it('keeps the security of an address copied from a browser', () => {
+    // https:// is what the browser shows - the WebSocket has to stay on TLS.
+    expect(normalizeUrl('https://relay.example.com/client/home')).toBe('wss://relay.example.com/client/home');
+    expect(normalizeUrl('http://relay.example.com/client/home')).toBe('ws://relay.example.com/client/home');
+  });
+  it('a relay address without a scheme means TLS and the default port', () => {
+    expect(normalizeUrl('relay.example.com/client/home')).toBe('wss://relay.example.com/client/home');
+    expect(normalizeUrl('keystone-esp-production.up.railway.app/client/home')).toBe(
+      'wss://keystone-esp-production.up.railway.app/client/home',
+    );
+  });
   it('recognises relay URLs', () => {
     expect(isRelayUrl('wss://relay.example.com/client/my-hub')).toBe(true);
     expect(isRelayUrl('ws://relay:9090/client/my-hub')).toBe(true);
     expect(isRelayUrl('ws://192.168.0.202:8080/ws')).toBe(false);
     expect(isRelayUrl('wss://hub.local/ws')).toBe(false);
     expect(isRelayUrl('')).toBe(false);
+  });
+  it('turns the hub\'s tunnel address into the address for the app', () => {
+    expect(relayClientUrl('wss://relay.example.com/tunnel/home')).toBe('wss://relay.example.com/client/home');
+    expect(relayClientUrl('ws://relay:9090/tunnel/my-hub')).toBe('ws://relay:9090/client/my-hub');
+    // Nothing to derive from an address without a tunnel.
+    expect(relayClientUrl('https://relay.example.com')).toBe('');
   });
   it('validates relay URLs', () => {
     expect(validateSettings({ url: 'wss://relay.example.com/client/my-hub', token: '12345678' })).toBeNull();

@@ -162,7 +162,7 @@ function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?
   );
 }
 
-export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, palette, onPalette }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; palette?: PaletteId; onPalette?(id: PaletteId): void }) {
+export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, palette, onPalette }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; palette?: PaletteId; onPalette?(id: PaletteId): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
@@ -222,7 +222,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
       })}
 
       <FirmwareCard home={home} client={client} commands={commands} />
-      <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} />
+      <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} {...(onUseRelay ? { onUseRelay } : {})} />
       <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
       <AppearanceCard palette={palette ?? 'sandstone'} onPalette={onPalette} />
 

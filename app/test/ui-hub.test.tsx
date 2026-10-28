@@ -21,11 +21,12 @@ afterEach(async () => {
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
-async function openHub() {
+async function openHub(props: { onUseRelay?(url: string): void } = {}) {
   render(
     <Home
       settings={{ url: hub.url, token: hub.token }}
       onChangeHub={() => {}}
+      {...props}
       clientOptions={{ socketFactory: wsFactory, backoffMs: { min: 20, max: 60 }, requestTimeoutMs: 2000 }}
     />,
   );
@@ -61,6 +62,20 @@ describe('the hub tab', () => {
     await waitFor(() => expect(screen.getByText('https://relay.example.com')).toBeTruthy());
     click('Remove relay');
     await waitFor(() => expect(screen.getByText('not set up')).toBeTruthy());
+  });
+
+  it('shows the address the app uses through the relay', async () => {
+    const used: string[] = [];
+    await openHub({ onUseRelay: (u) => used.push(u) });
+    click('Set up relay');
+    await screen.findByLabelText('Relay URL');
+    type('Relay URL', 'wss://relay.example.com/tunnel/home');
+    type('Secret', 'shared-secret');
+    click('Save');
+    // The hub's own address ends in /tunnel/, the app's one in /client/.
+    await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());
+    click('Connect through the relay');
+    expect(used).toEqual(['wss://relay.example.com/client/home']);
   });
 
   it('starts an update and follows it', async () => {
