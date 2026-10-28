@@ -1,13 +1,23 @@
 # Building the app for an iPhone
 
-**Status: prepared, never built.** Nothing here has an Apple toolchain, so the iOS project has not
-been generated into a working build and the native module has never run. What *was* checked on the
-Linux dev box: `expo-doctor` (21/21), the JavaScript bundle for iOS (`expo export --platform ios`, Metro
+**Status: the native project builds up to the archive step; the archive itself was not produced on this
+machine.** The Xcode build service (an XPC service outside the agent's sandbox) is refused write access
+here, so the last mile — `xcodebuild archive` — has to run on your Mac. Everything before it works:
+`expo prebuild --platform ios` generates a valid project, `pod install` resolves all pods **including the
+local `KeystoneNet` module**, and the workspace opens in Xcode. What *was* checked on the Linux dev box:
+`expo-doctor` (21/21), the JavaScript bundle for iOS (`expo export --platform ios`, Metro
 stage: 615 modules, includes the native-module bindings), `expo prebuild --platform ios` (a valid Xcode
-project with the right Info.plist keys, deployment target 16.4, autolinking finds `KeystoneNet`), the
-Swift module against the Expo Modules API signatures (`Function`, `Events`, `OnDestroy`, `sendEvent`),
+project with the right Info.plist keys, deployment target 16.4, autolinking finds `KeystoneNet`),
+the Swift module against the Expo Modules API signatures (`Function`, `Events`, `OnDestroy`, `sendEvent`),
 and a syntax check of the Swift. Expect to fix a compile error or two: send them to whoever maintains
 the module (see "If it does not compile").
+
+**Signing:** the project is set to automatic signing, team `5H749MZFPN`, bundle id
+`com.kliuchnikovv.keystone`. The provisioning profile on this machine (team `5H749MZFPN`, device
+`00008130-0004250E0E62001C`) **expired on 2026-10-24**, and Xcode's stored Apple ID credentials are
+invalid ("missing Xcode-Username"), so nothing could be renewed from here. Sign in to Xcode
+(▸ Settings ▸ Accounts) before building for a device; a free Apple ID is enough for your own phone
+(the profile then lives 7 days).
 
 ## Scene lifecycle (the first launch-time crash, Xcode 27)
 
@@ -47,8 +57,12 @@ JavaScript from your computer), or later as a release build.
   `ITSAppUsesNonExemptEncryption = false` (the app only uses the system's standard TLS), a placeholder icon.
 - `expo-dev-client` is a dependency; `eas.json` has profiles `development` (device), `development-simulator`
   (iOS Simulator), `preview` and `production`.
-- `modules/keystone-net/` is picked up automatically (autolinking); its podspec targets iOS 16.4 and
-  Swift 5 language mode (Expo's own modules are Swift 6; this one avoids strict concurrency on purpose).
+- `modules/keystone-net/` is picked up automatically (autolinking): the module carries its own
+  `package.json` and `app/package.json` points Expo at it with
+  `expo.autolinking.nativeModulesDir = "./modules"`. Without both, the module is silently *not* linked —
+  the iOS app then builds without the pinning socket and falls back to the JavaScript one (no pinning).
+  Its podspec targets iOS 16.4 and Swift 5 language mode (Expo's own modules are Swift 6; this one
+  avoids strict concurrency on purpose).
 - `app/ios/` and `app/android/` are generated and **gitignored**: change `app.json` or the module, not the
   generated project.
 
@@ -83,6 +97,23 @@ npx expo run:ios --device               # builds, installs on the connected iPho
 If `run:ios` cannot sign, open `ios/Keystone.xcworkspace` in Xcode, select the *Keystone* target →
 *Signing & Capabilities*, choose your Team, and run from Xcode. For the Simulator: `npx expo run:ios`
 (the Simulator can reach your LAN, but cannot test Local Network permission behaviour the way a phone does).
+
+### Release build (one command)
+
+```bash
+cd app
+./scripts/ios-release.sh                 # device (arm64), archived and signed
+./scripts/ios-release.sh simulator       # simulator build, no signing
+```
+
+The script does the whole chain: patches React Native's prebuilt-dependencies podspec (its cleanup step
+is a bulk `rm` inside the CocoaPods cache, which fails on sandboxed hosts), runs `expo prebuild`, installs
+the pods with the CocoaPods cache inside `build/`, and archives the Release configuration into
+`build/ios-release/Keystone.xcarchive`. The app is at
+`build/ios-release/Keystone.xcarchive/Products/Applications/Keystone.app`.
+
+`app/ios/` is generated and gitignored, so the script regenerates it every time; change `app.json` or the
+module, never the generated project.
 
 ### Route B — EAS
 

@@ -55,6 +55,15 @@ Matter-over-WiFi.
 - `docs/` — per-phase notes (wiring, expected output), `ota.md`, `app-protocol.md`
   (the app protocol and its status), and the backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
   `matter-backlog.md`).
+- `docs/design/` — the client app's design system: `keystone-spec.html` (the spec: palette,
+  typography, icons, every screen with its states, tables for the engineer), `tokens.json`
+  (machine-readable tokens), `icons/` (SVG set generated from the app's own `Glyph.tsx`) and
+  `keystone.css`. The design brief and its reconciliation with the running app are in
+  `docs/design-brief.md` (§14 lists what changed and why). **Two rules, split:** the
+  *visual* requirements of the brief are the source of truth and live in the app (the brief's
+  wording stays as written); only *facts* (protocol, data, available operations) are corrected
+  in the brief's body — §14.1 lists what was implemented in the app, §14.2 what was corrected
+  in the text.
 
 ## Build & test
 
@@ -128,3 +137,5 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 - **Design & rationale:** [SPEC.md](SPEC.md) (the source of truth).
 - **Current phase status & what's verified:** [CLAUDE.md](CLAUDE.md) § Status.
 - **Per-phase wiring/output notes:** `docs/`.
+- **Client app design system:** [docs/design/keystone-spec.html](docs/design/keystone-spec.html)
+  (open it in a browser) and the brief it implements, [docs/design-brief.md](docs/design-brief.md).

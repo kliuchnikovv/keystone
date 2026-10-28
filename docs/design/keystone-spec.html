@@ -1,0 +1,1960 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>keystone — спецификация клиентского приложения</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="keystone.css" />
+<style>
+/* Page chrome for the spec document (the app tokens live in keystone.css) */
+.spec-doc { max-width: 1180px; margin: 0 auto; padding: 0 28px 40px; }
+.spec-doc h1 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 12px; }
+.spec-doc h2 { font-size: 30px; letter-spacing: -0.015em; margin: 0 0 8px; }
+.spec-doc h3 { font-size: 19px; margin: 26px 0 8px; }
+.spec-doc h4 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 0 0 10px; font-weight: 700; }
+.spec-doc p { color: var(--ink-2); max-width: 74ch; }
+.spec-doc p.lead { font-size: 18px; color: var(--ink-2); max-width: 68ch; }
+.spec-doc code { font-family: 'JetBrains Mono', monospace; font-size: 13px; background: rgba(0,0,0,0.05); padding: 1px 5px; border-radius: 5px; }
+.sec-head { margin: 64px 0 20px; }
+.sec-head .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--ember); font-weight: 700; }
+.sec-head .rule { height: 1px; background: var(--line); margin-top: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 26px; }
+.sub { font-size: 13.5px; color: var(--muted); margin: -2px 0 14px; }
+.toc { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 22px; margin: 22px 0 0; padding: 0; list-style: none; font-size: 13.5px; }
+.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--line-soft); padding: 5px 0; display: block; }
+.toc a:hover { color: var(--ember); }
+.state-table td { font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2C8 2 5 5 5 9c0 3 2 5 4 6v5h6v-5c2-1 4-3 4-6 0-4-3-7-7-7z" fill="currentColor" fill-opacity="0.22" />
+    <path d="M9 22h6" fill="none" />
+  </symbol>
+  <symbol id="i-switch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 2v6L4 18a2 2 0 0 0 1.7 3h12.6A2 2 0 0 0 20 18L15 8V2" fill="currentColor" fill-opacity="0.22" />
+    <path d="M9 2h6" fill="none" />
+  </symbol>
+  <symbol id="i-sensor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z" fill="currentColor" fill-opacity="0.22" />
+    <path d="M12 8v6" fill="none" />
+  </symbol>
+  <symbol id="i-occupancy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 7V5a2 2 0 0 1 2-2h2" fill="none" />
+    <path d="M17 3h2a2 2 0 0 1 2 2v2" fill="none" />
+    <path d="M21 17v2a2 2 0 0 1-2 2h-2" fill="none" />
+    <path d="M7 21H5a2 2 0 0 1-2-2v-2" fill="none" />
+    <circle d="" cx="12" cy="12" r="2.5" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-contact" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13 4h3a2 2 0 0 1 2 2v14" fill="currentColor" fill-opacity="0.22" />
+    <path d="M2 20h3" fill="none" />
+    <path d="M13 20h9" fill="none" />
+    <path d="M6 8v12a2 2 0 0 0 2 2h2" fill="none" />
+  </symbol>
+  <symbol id="i-cover" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect d="" x="3" y="3" width="18" height="18" rx="2" fill="currentColor" fill-opacity="0.22" />
+    <path d="M3 8h18M3 16h18" fill="none" />
+  </symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect d="" x="3" y="11" width="18" height="11" rx="2" fill="currentColor" fill-opacity="0.22" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" fill="none" />
+  </symbol>
+  <symbol id="i-climate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle d="" cx="12" cy="12" r="4" fill="currentColor" fill-opacity="0.22" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" fill="none" />
+  </symbol>
+  <symbol id="i-button" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle d="" cx="12" cy="12" r="10" fill="none" />
+    <circle d="" cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="currentColor" fill-opacity="0.22" />
+    <path d="M9 22V12h6v10" fill="none" />
+  </symbol>
+  <symbol id="i-automation" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3" fill="none" />
+    <circle d="" cx="14" cy="4" r="2" fill="currentColor" fill-opacity="0.22" />
+    <circle d="" cx="12" cy="12" r="2" fill="currentColor" fill-opacity="0.22" />
+    <circle d="" cx="16" cy="20" r="2" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-hub" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z" fill="currentColor" fill-opacity="0.22" />
+    <path d="m3.3 7 8.7 5 8.7-5" fill="none" />
+    <path d="M12 22V12" fill="none" />
+  </symbol>
+  <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle d="" cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.22" />
+    <path d="M12 6v6l4 2" fill="none" />
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 12h14M12 5v14" fill="none" />
+  </symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" fill="currentColor" fill-opacity="0.22" />
+    <path d="M15 5l4 4" fill="none" />
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m9 18 6-6-6-6" fill="none" />
+  </symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m15 18-6-6 6-6" fill="none" />
+  </symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m6 3 14 9-14 9z" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 6 9 17l-5-5" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect d="" x="4" y="4" width="16" height="16" rx="2" fill="currentColor" fill-opacity="0.22" />
+    <rect d="" x="9" y="9" width="6" height="6" rx="0" fill="none" />
+    <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" fill="none" />
+  </symbol>
+  <symbol id="i-signal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 8.8a15 15 0 0 1 20 0" fill="none" />
+    <path d="M5 12.6a11 11 0 0 1 14 0" fill="none" />
+    <path d="M8.5 16.1a6 6 0 0 1 7 0" fill="currentColor" fill-opacity="0.22" />
+    <path d="M12 20h.01" fill="none" />
+  </symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" fill="none" />
+    <circle d="" cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.22" />
+  </symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9.9 9.9a3 3 0 1 0 4.2 4.2" fill="none" />
+    <path d="M10.7 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13 13 0 0 1-1.7 2.7" fill="none" />
+    <path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" fill="none" />
+    <path d="M2 2l20 20" fill="none" />
+  </symbol>
+</svg>
+
+<main class="spec-doc">
+
+<header style="padding: 56px 0 8px">
+  <span style="display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted);font-weight:600">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>
+    keystone · спецификация приложения
+  </span>
+  <h1 style="margin-top:14px">Клиент хаба.<br/>Спецификация <em style="color:var(--ember);font-style:italic">v1.0</em>.</h1>
+  <p class="lead">
+    Это рабочая спецификация экранов приложения Keystone: палитра, типографика, иконки, все экраны
+    с ключевыми состояниями и таблицы размеров — чтобы инженер собрал без вопросов.
+  </p>
+  <div class="note-box" style="margin-top:22px">
+    <b>Правило приоритета.</b> Приложение реализовано (Expo, iOS + Android + web) — код в <code>app/</code>
+    первичен. <b>Визуальные</b> требования ТЗ теперь исполнены в приложении, поэтому спецификация и ТЗ
+    описывают одно и то же: все экраны ниже — это то, что в приложении есть сейчас.
+    <b>Фактические</b> расхождения (состав протокола, реальные данные устройств, поддерживаемые операции)
+    сведены в разделе «ТЗ ↔ приложение»: там же видно, что исправлено в теле самого ТЗ.
+    Всё, что здесь показано, — либо уже работает, либо помечено как «не в протоколе» / «вне объёма».
+  </div>
+
+  <ul class="toc">
+    <li><a href="#foundations">1 · Foundations — язык</a></li>
+    <li><a href="#icons">1.5 · Иконки</a></li>
+    <li><a href="#shared">2 · Сквозные элементы</a></li>
+    <li><a href="#connect">3.1 · Connect</a></li>
+    <li><a href="#setup">3.2 · Setup</a></li>
+    <li><a href="#devices">3.3 · Devices</a></li>
+    <li><a href="#automations">3.4 · Automations</a></li>
+    <li><a href="#hub">3.5 · Hub</a></li>
+    <li><a href="#history">3.6 · History</a></li>
+    <li><a href="#spec">4 · Спека для инженера</a></li>
+    <li><a href="#gaps">5 · ТЗ ↔ приложение</a></li>
+    <li><a href="#open">6 · Открытые вопросы</a></li>
+  </ul>
+</header>
+
+<!-- ============================ FOUNDATIONS ============================ -->
+<section id="foundations">
+  <div class="sec-head">
+    <span class="eyebrow">1 · foundations</span>
+    <h2>Язык приложения</h2>
+    <p class="sub">Тёплая песчаная бумага, чернильный текст, один терракотовый акцент. Акцент делает ровно две вещи:
+      <em>пригодность</em> (кнопка, выбранный чип) и <em>живое тепло</em> (устройство включено, идёт измерение).</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h4>Светлая тема</h4>
+      <div class="sw-grid">
+        <div class="sw-cell"><div class="chip" style="background:#f5f1e8"></div><div class="meta"><b>bg</b><span>#f5f1e8</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#ffffff;box-shadow:inset 0 0 0 1px #e3ddcd"></div><div class="meta"><b>card</b><span>#ffffff</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#15171c"></div><div class="meta"><b>text</b><span>#15171c</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#6f6a5c"></div><div class="meta"><b>muted</b><span>#6f6a5c</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#e3ddcd"></div><div class="meta"><b>border</b><span>#e3ddcd</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#c4512a"></div><div class="meta"><b>accent</b><span>#c4512a</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:rgba(196,81,42,.12)"></div><div class="meta"><b>accentSoft</b><span>rgba(196,81,42,.12)</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#2f7a4d"></div><div class="meta"><b>good</b><span>#2f7a4d</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#a8760f"></div><div class="meta"><b>warn</b><span>#a8760f</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#b53b3b"></div><div class="meta"><b>bad</b><span>#b53b3b</span></div></div>
+      </div>
+    </div>
+
+    <div>
+      <h4>Тёмная тема</h4>
+      <div class="sw-grid">
+        <div class="sw-cell"><div class="chip" style="background:#14161b"></div><div class="meta"><b>bg</b><span>#14161b</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#1d2027"></div><div class="meta"><b>card</b><span>#1d2027</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#f3efe7"></div><div class="meta"><b>text</b><span>#f3efe7</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#9a9384"></div><div class="meta"><b>muted</b><span>#9a9384</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#2c303a"></div><div class="meta"><b>border</b><span>#2c303a</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#e07a4a"></div><div class="meta"><b>accent</b><span>#e07a4a</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:rgba(224,122,74,.18)"></div><div class="meta"><b>accentSoft</b><span>rgba(224,122,74,.18)</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#4fbe7f"></div><div class="meta"><b>good</b><span>#4fbe7f</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#e0a63c"></div><div class="meta"><b>warn</b><span>#e0a63c</span></div></div>
+        <div class="sw-cell"><div class="chip" style="background:#ef6b6b"></div><div class="meta"><b>bad</b><span>#ef6b6b</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note-box" style="margin-top:22px">
+    <b>Семантика цвета.</b> <code>good</code> — «живой», <code>warn</code> — «внимание, но работает», <code>bad</code> — «не работает».
+    <code>accent</code> никогда не означает «ошибка» и никогда не означает «включено» — только действие и нагрев.
+    Включённый свитч — <code>good</code>, включённая лампа в карточке — <code>accent</code> на плашке иконки.
+  </div>
+
+  <div class="grid2" style="margin-top:34px">
+    <div>
+      <h4>Типографика</h4>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Роль</th><th>Размер / вес</th><th>Где</th></tr>
+          <tr><td>display</td><td class="mono">30 / 700, −0.02</td><td>заголовок приветствия</td></tr>
+          <tr><td>title</td><td class="mono">22 / 700</td><td>имя хаба на экране Devices</td></tr>
+          <tr><td>screenTitle</td><td class="mono">17 / 700</td><td>заголовок в верхней панели (Automations, Hub, History)</td></tr>
+          <tr><td>cardTitle</td><td class="mono">17 / 600</td><td>карточки на Hub</td></tr>
+          <tr><td>deviceName</td><td class="mono">16 / 600</td><td>имя устройства</td></tr>
+          <tr><td>body</td><td class="mono">15 / 400</td><td>текст, значения списков</td></tr>
+          <tr><td>label</td><td class="mono">13 / 500</td><td>подписи полей, вторичный текст</td></tr>
+          <tr><td>caption</td><td class="mono">12 / 500</td><td>подсказки, время</td></tr>
+          <tr><td>overline</td><td class="mono">12 / 700, +0.8, UPPER</td><td>заголовок комнаты, раздел</td></tr>
+          <tr><td>reading</td><td class="mono">34 / 700, −0.02</td><td>большое число датчика</td></tr>
+          <tr><td>mono</td><td class="mono">13 / Menlo</td><td>токены, отпечаток, код</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:10px">Системный шрифт (SF Pro / Roboto). Трекинг отрицательный только у крупных кеглей.</p>
+    </div>
+
+    <div>
+      <h4>Сетка: радиусы, отступы, размеры</h4>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Токен</th><th>Значение</th><th>Применение</th></tr>
+          <tr><td>radius.card</td><td class="mono">18</td><td>карточка устройства, карточка хаба</td></tr>
+          <tr><td>radius.chip</td><td class="mono">11</td><td>плашка значения датчика</td></tr>
+          <tr><td>radius.pill</td><td class="mono">999</td><td>сцены, чипы, бейджи</td></tr>
+          <tr><td>radius.field</td><td class="mono">12</td><td>поле ввода</td></tr>
+          <tr><td>space.xs … xl</td><td class="mono">6 / 10 / 14 / 20 / 28</td><td>внутренние отступы</td></tr>
+          <tr><td>page padding</td><td class="mono">16</td><td>поле экрана</td></tr>
+          <tr><td>card padding</td><td class="mono">14</td><td>внутренний отступ карточки</td></tr>
+          <tr><td>icon chip</td><td class="mono">38 × 38, r 11</td><td>плашка иконки устройства</td></tr>
+          <tr><td>device grid</td><td class="mono">3 колонки, зазор 10</td><td>сетка устройств</td></tr>
+          <tr><td>device button</td><td class="mono">wide — строка 66; square — колонка; tall — колонка × 1.35</td><td>форма выводится из данных устройства</td></tr>
+          <tr><td>нажатие</td><td class="mono">приглушение сразу, янтарь через 250 мс</td><td>видно, что приложение считает зажатие</td></tr>
+          <tr><td>клавиатура</td><td class="mono">лист поднимается на высоту клавиатуры</td><td>поле имени не перекрыто</td></tr>
+          <tr><td>device name</td><td class="mono">≤ 15 кодовых точек, ≤ 30 байт</td><td>человеко-читаемое имя устройства</td></tr>
+          <tr><td>tab bar · iOS</td><td class="mono">плавающая пилюля h 60, отступ 16, ширина 100%−32, глиф 21, подпись 10</td><td>нижняя навигация на iPhone</td></tr>
+          <tr><td>tab bar · Android, web</td><td class="mono">нижняя панель h 82 (62 + 20 под home-indicator), глиф 22, подпись 10, тёплая кромка сверху</td><td>нижняя навигация вне iOS</td></tr>
+          <tr><td>screen header</td><td class="mono">панель 52, заголовок 17/700 по центру, слоты 44×44 по бокам</td><td>заголовки Automations, Hub, History</td></tr>
+          <tr><td>radius.card</td><td class="mono">18 в Sandstone, 22 в Ember</td><td>карточки и панели</td></tr>
+          <tr><td>hairline</td><td class="mono">StyleSheet.hairlineWidth</td><td>разделители</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:10px">Все значения — из <code>app/src/ui/theme.ts</code>. Дублируются в <code>docs/design/tokens.json</code>.</p>
+    </div>
+  </div>
+
+  <h3>Материал: стеклянная карточка</h3>
+  <div class="grid2">
+    <div>
+      <p>Карточка устройства — полупрозрачная пластина с размытым фоном, волосяной кромкой и бликом по верхней кромке.
+        Тёмная тема использует ту же геометрию, но с холодным стеклом (40,44,54 / 72 %) вместо белого.</p>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Слой</th><th>Светлая</th><th>Тёмная</th></tr>
+          <tr><td>фон</td><td class="mono">rgba(255,255,255,.70)</td><td class="mono">rgba(40,44,54,.72)</td></tr>
+          <tr><td>кромка</td><td class="mono">rgba(255,255,255,.70)</td><td class="mono">rgba(255,255,255,.10)</td></tr>
+          <tr><td>блик</td><td class="mono">rgba(255,255,255,.95)</td><td class="mono">rgba(255,255,255,.18)</td></tr>
+          <tr><td>размытие</td><td class="mono">blur(14px) saturate(180%)</td><td>то же</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="phone" style="margin:0 auto">
+        <div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="device-grid" style="padding-top:56px">
+              <div class="device-btn on">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div>
+                <div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap" style="text-align:center;margin-top:12px"><span class="cap-title">Карточка устройства</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ ICONS ============================ -->
+<section id="icons">
+  <div class="sec-head">
+    <span class="eyebrow">1.5 · icons</span>
+    <h2>Иконки</h2>
+    <p class="sub">Один набор на всю платформу: 24 знака, сетка 24 × 24, обводка 2 px, круглые наконечники и соединения.
+      Формат — <code>currentColor</code>, поэтому один и тот же файл работает в светлой и тёмной теме.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h4>Светлая тема</h4>
+      <div class="icon-grid" style="margin-bottom:18px">
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="nm">light</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div><div class="nm">switch</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sensor"/></svg></div><div class="nm">sensor</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-occupancy"/></svg></div><div class="nm">occupancy</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-contact"/></svg></div><div class="nm">contact</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cover"/></svg></div><div class="nm">cover</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-lock"/></svg></div><div class="nm">lock</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-climate"/></svg></div><div class="nm">climate</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-button"/></svg></div><div class="nm">button</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg></div><div class="nm">home</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg></div><div class="nm">automation</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg></div><div class="nm">hub</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg></div><div class="nm">history</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg></div><div class="nm">plus</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-pencil"/></svg></div><div class="nm">pencil</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron"/></svg></div><div class="nm">chevron</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div><div class="nm">back</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-play"/></svg></div><div class="nm">play</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></div><div class="nm">check</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bolt"/></svg></div><div class="nm">bolt</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg></div><div class="nm">chip</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-signal"/></svg></div><div class="nm">signal</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye"/></svg></div><div class="nm">eye</div></div>
+        <div class="icon-cell"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye-off"/></svg></div><div class="nm">eye-off</div></div>
+      </div>
+    </div>
+    <div>
+      <h4>Тёмная тема</h4>
+      <div class="icon-grid" style="margin-bottom:18px">
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="nm">light</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div><div class="nm">switch</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sensor"/></svg></div><div class="nm">sensor</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-occupancy"/></svg></div><div class="nm">occupancy</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-contact"/></svg></div><div class="nm">contact</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cover"/></svg></div><div class="nm">cover</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-lock"/></svg></div><div class="nm">lock</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-climate"/></svg></div><div class="nm">climate</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-button"/></svg></div><div class="nm">button</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg></div><div class="nm">home</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg></div><div class="nm">automation</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg></div><div class="nm">hub</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg></div><div class="nm">history</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg></div><div class="nm">plus</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-pencil"/></svg></div><div class="nm">pencil</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron"/></svg></div><div class="nm">chevron</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div><div class="nm">back</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-play"/></svg></div><div class="nm">play</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></div><div class="nm">check</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bolt"/></svg></div><div class="nm">bolt</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg></div><div class="nm">chip</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-signal"/></svg></div><div class="nm">signal</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye"/></svg></div><div class="nm">eye</div></div>
+        <div class="icon-cell on-dark"><div class="ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye-off"/></svg></div><div class="nm">eye-off</div></div>
+      </div>
+      <div class="note-box">
+        <b>Файлы.</b> <code>docs/design/icons/*.svg</code> — по файлу на знак, <code>sprite.svg</code> — спрайт.
+        Набор генерируется из кода приложения: <code>node docs/design/icons/build-icons.mjs</code>.
+        Геометрия <code>app/src/ui/Glyph.tsx</code> — источник истины, набор не может с ним разойтись.
+        <b>Последние два знака</b> — <code>eye</code> и <code>eye-off</code>
+        (показать/спрятать токен на экране Connect). Знака «⋯» в наборе нет: меню устройства
+        открывается долгим нажатием, отдельная кнопка не нужна.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SHARED ============================ -->
+<section id="shared">
+  <div class="sec-head">
+    <span class="eyebrow">2 · shared</span>
+    <h2>Сквозные элементы</h2>
+    <p class="sub">Баннер подключения, тост, подтверждения, пустые состояния и загрузка — одинаковы на всех экранах.</p>
+    <div class="rule"></div>
+  </div>
+
+  <h3>Статус подключения</h3>
+  <p>Баннер висит под строкой состояния и <b>всегда виден, когда что-то не так</b>. В здоровом состоянии его нет —
+    не занимать место ради «всё хорошо». Внизу баннера — действие, когда без него не починить.</p>
+  <div class="screens" style="margin-top:22px">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="banner tone-warn"><span class="b-text">Connecting…</span></div>
+          <div class="scroll"><div class="card-stack"><div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div></div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Connecting</span><div class="cap-title">Жёлтый баннер</div><div class="cap-note">Первое подключение, пока открывается сокет.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="banner tone-warn"><span class="b-text">Reconnecting after a drop</span></div>
+          <div class="scroll"><div class="card-stack"><div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div></div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Reconnecting</span><div class="cap-title">Жёлтый баннер</div><div class="cap-note">Был коннект, пропал. Данные на экране остаются, но могут быть устаревшими.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="banner tone-bad"><span class="b-text">Not connected</span><span class="b-action">Retry</span></div>
+          <div class="scroll"><div class="card-stack"><div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div></div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Not connected</span><div class="cap-title">Красный баннер + Retry</div><div class="cap-note">Соединение закрыто. Действие — переподключиться.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="banner tone-bad"><span class="b-text">Authentication failed</span><span class="b-action">Go to Connect</span></div>
+          <div class="scroll"><div class="card-stack"><div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div></div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Auth failed</span><div class="cap-title">Красный баннер + переход</div><div class="cap-note">Токен не принят. Кнопка «Go to Connect» уводит на экран подключения.</div></div>
+    </div>
+  </div>
+
+  <div class="note-box" style="margin-top:22px">
+    <b>Пятое состояние — «сертификат не тот».</b> Оно красное, но текст другой:
+    «This hub's certificate changed. Someone may be intercepting the connection.».
+    На web без возможности запинить отпечаток приложение честно пишет:
+    «This browser can't pin a certificate. Use the mobile app.».
+  </div>
+
+  <h3>Тост</h3>
+  <p>Одно сообщение внизу, само скрывается. Цвет текста — инверсия темы. Никаких кнопок: тост только сообщает.
+    Успех — обычным тоном, ошибка — красным фоном.</p>
+  <div class="screens" style="margin-top:22px">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll"><div class="card-stack">
+            <div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div>
+            <div class="device-btn"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div><div class="body"><div class="name">Desk plug</div></div></div>
+          </div></div>
+          <div class="toast">Applied 'Night': 5 settings sent</div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Toast</span><div class="cap-title">Результат действия</div><div class="cap-note">«Applied 'Night': 5 settings sent» — после тапа по сцене. Если часть действий пропущена: «3 sent, 1 skipped». Тосты подтверждения: «Scene 'Night' applied», «Device renamed», «Rule saved».</div></div>
+    </div>
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll"><div class="card-stack">
+            <div class="device-btn on"><div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div><div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div></div>
+          </div></div>
+          <div class="toast err">Device unreachable</div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Toast</span><div class="cap-title">Ошибка</div><div class="cap-note">Тот же тост, но красный фон: «Device unreachable».</div></div>
+    </div>
+  </div>
+
+  <h3>Подтверждения: три уровня</h3>
+  <div class="grid2">
+    <div>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Уровень</th><th>Действия</th><th>Как</th></tr>
+          <tr><td>Безобидное</td><td>переключить, переименовать, создать</td><td>без подтверждения</td></tr>
+          <tr><td>Деструктивное</td><td>удалить правило / сцену / таймер / устройство</td><td>первый тап arm'ит кнопку, 3 с</td></tr>
+          <tr><td>Опасное</td><td>сброс хаба, забыть Wi-Fi</td><td>модальный диалог</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:12px">Первый тап по кнопке удаления меняет сам контрол: вместо «Delete»
+        появляется строка «Delete?» + кнопка «Confirm» + крестик ✕. Крестик (или 3 секунды тишины) возвращает
+        кнопку назад. Устройство не пропадает с экрана сразу — карточка остаётся до ответа хаба.</p>
+    </div>
+    <div>
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll"><div class="card-stack"><div class="auto-row"><div class="a-body"><div class="a-title">Evening</div><div class="a-sub">3 devices</div></div><div class="armed"><span class="armed-label">Delete?</span><span class="btn-danger" style="padding:7px 12px;font-size:13px">Confirm</span><span class="armed-cross">✕</span></div></div></div></div>
+          <div class="dialog-wrap">
+            <div class="dialog">
+              <div class="d-title">Factory reset the hub?</div>
+              <div class="d-body">The hub forgets every device, rule, schedule and scene, and clears its Wi-Fi. This cannot be undone.</div>
+              <div class="d-actions">
+                <div class="btn-danger">Factory reset</div>
+                <div class="btn-secondary">Cancel</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap" style="text-align:center;margin-top:12px"><span class="cap-title">Деструктивное (Delete? → Confirm) и опасное (диалог)</span></div>
+    </div>
+  </div>
+
+  <h3>Загрузка, пусто, ожидание</h3>
+  <div class="screens" style="margin-top:22px">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll"><div class="card-stack">
+            <div style="display:flex;justify-content:center;padding:40px 0"><div class="progress indeterminate" style="width:70%"><div class="fill"></div></div></div>
+          </div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Loading</span><div class="cap-title">Неопределённый прогресс</div><div class="cap-note">Скелетон или тонкая полоса — без текста.</div></div>
+    </div>
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll"><div class="card-stack" style="padding-top:96px">
+            <div class="empty-art">
+              <svg viewBox="0 0 120 100" width="148" height="123" fill="none">
+                <circle cx="60" cy="52" r="40" fill="var(--ios-accent-soft)"/>
+                <path d="M22 50 60 18l38 32" stroke="var(--ios-accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M30 46v40h60V46" stroke="var(--ios-accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="60" cy="64" r="13" fill="var(--ios-bg)" stroke="var(--ios-accent)" stroke-width="2.5"/>
+                <circle cx="55" cy="62" r="2" fill="var(--ios-accent)"/>
+                <circle cx="65" cy="62" r="2" fill="var(--ios-accent)"/>
+                <path d="M55 68h10" stroke="var(--ios-accent)" stroke-width="2.5" stroke-linecap="round"/>
+                <path d="M46 14a18 18 0 0 1 28 0" stroke="var(--ios-accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
+              </svg>
+            </div>
+            <div style="text-align:center;display:flex;flex-direction:column;gap:6px;margin-top:18px">
+              <div style="font-size:18px;font-weight:600">No devices yet</div>
+              <div style="font-size:14px;color:var(--ios-muted);line-height:1.5">Tap below to add your first one.</div>
+            </div>
+            <div class="add-device"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg>Add a device</div>
+          </div></div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Empty</span><div class="cap-title">Пусто с иллюстрацией</div><div class="cap-note">Дом с пустой розеткой, заголовок и одна строка подсказки; кнопка добавления — внизу списка.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ SCREENS ============================ -->
+<section id="connect">
+  <div class="sec-head">
+    <span class="eyebrow">3.1 · connect</span>
+    <h2>Connect — вход в хаб</h2>
+    <p class="sub">Куда ходить. Хаб находится сам через mDNS; адрес можно ввести руками. Токен живёт в
+      <code>webtoken</code> на консоли хаба, отпечаток сертификата — там же.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <!-- Idle -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+            <div class="g-lead">Enter the hub's address and the token you set on its console with <code>webtoken</code>.</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg><span class="t">Hubs on this network</span></div>
+              <div class="g-hub">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>
+                <div><div class="nm">home</div><div class="meta">192.168.0.202:8443 · encrypted</div></div>
+              </div>
+              <div class="g-note">Finding a hub does not prove it is yours: for an encrypted hub, still enter the fingerprint the hub console prints.</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-chips"><span class="g-chip on">Local</span><span class="g-chip">Cloud</span><span class="g-chip">Relay</span></div>
+              <div class="g-label">Hub address</div>
+              <div class="g-field"><span class="ph">192.168.0.202 or ws://hub:8080/ws</span></div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field"><span class="ph">at least 8 characters</span><svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn off">Connect</div>
+            <div class="g-link">Set up a new hub</div>
+            <div class="g-sub">For a hub that is not on your Wi-Fi yet</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Idle · Local</span><div class="cap-title">Главный вид</div>
+        <div class="cap-note">Тот же язык, что и в комнате: панель с заголовком, стеклянные карточки с
+          маленькой строкой-именем, поля в тёмной рамке, чипы режима пилюлями. Найденные хабы — сверху,
+          отдельной карточкой; строка говорит имя и адрес, шифрование видно сразу. Кнопка Connect спит,
+          пока не заполнены адрес и токен (от 8 символов). Палитра экрана — Ember; та же вёрстка
+          в палитре Sandstone.</div></div>
+    </div>
+
+    <!-- Connecting -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+            <div style="opacity:.45">
+              <div class="g-card">
+                <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+                <div class="g-chips"><span class="g-chip on">Local</span><span class="g-chip">Cloud</span><span class="g-chip">Relay</span></div>
+                <div class="g-label">Hub address</div>
+                <div class="g-field">wss://keystone.local:8443/ws</div>
+              </div>
+              <div class="g-card">
+                <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+                <div class="g-field">••••••••••••<svg class="eye"><use href="#i-eye-off"/></svg></div>
+              </div>
+            </div>
+            <div class="g-btn"><span class="spinner"></span>Connecting…</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Connecting</span><div class="cap-title">Форма заблокирована</div>
+        <div class="cap-note">Отдельного экрана нет: форма гаснет (0.45), поля не редактируются, на кнопке
+          спиннер и надпись «Connecting…».</div></div>
+    </div>
+
+    <!-- Discovering -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+            <div class="g-lead">Enter the hub's address and the token you set on its console with <code>webtoken</code>.</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg><span class="t">Hubs on this network</span></div>
+              <div class="g-search"><span class="spin"></span>Searching your network…</div>
+              <div class="g-note">Finding a hub does not prove it is yours: for an encrypted hub, still enter the fingerprint the hub console prints.</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-chips"><span class="g-chip on">Local</span><span class="g-chip">Cloud</span><span class="g-chip">Relay</span></div>
+              <div class="g-label">Hub address</div>
+              <div class="g-field"><span class="ph">192.168.0.202 or ws://hub:8080/ws</span></div>
+            </div>
+
+            <div class="g-btn off">Connect</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Discovering</span><div class="cap-title">Поиск по сети</div>
+        <div class="cap-note">Блок «Hubs on this network» показывает «Searching your network…». Списка может
+          не быть вовсе — на web нативного mDNS-модуля нет, и карточки нет тоже.</div></div>
+    </div>
+
+    <!-- Cloud -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-chips"><span class="g-chip">Local</span><span class="g-chip on">Cloud</span><span class="g-chip">Relay</span></div>
+              <div class="g-label">Cloud server</div>
+              <div class="g-field">relay.example.com</div>
+              <div class="g-label">Hub ID</div>
+              <div class="g-field">home-5ef894</div>
+              <div class="g-note">The hub connects to this cloud server automatically. Set it on the hub console with
+                <code>relay &lt;url&gt; &lt;secret&gt;</code>. The Hub ID is shown by <code>relay</code> on the console.</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field">••••••••••••<svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Mode · Cloud</span><div class="cap-title">Через облако-релей</div>
+        <div class="cap-note">Хаб сам ходит в релей; приложение знает только адрес сервера и ID хаба.</div></div>
+    </div>
+
+    <!-- Relay -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-chips"><span class="g-chip">Local</span><span class="g-chip">Cloud</span><span class="g-chip on">Relay</span></div>
+              <div class="g-label">Relay URL</div>
+              <div class="g-field">wss://relay.example.com/client/my-hub</div>
+              <div class="g-note">Run a relay server on a VPS, then set it on the hub console with
+                <code>relay &lt;url&gt; &lt;secret&gt;</code>. The relay forwards traffic; authentication still uses the hub's token.</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field">••••••••••••<svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Mode · Relay</span><div class="cap-title">Через свой релей</div>
+        <div class="cap-note">Аутентификация всё равно токеном хаба — релей только пересылает байты.</div></div>
+    </div>
+
+    <!-- Wrong token -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-chips"><span class="g-chip on">Local</span><span class="g-chip">Cloud</span><span class="g-chip">Relay</span></div>
+              <div class="g-label">Hub address</div>
+              <div class="g-field">wss://keystone.local:8443/ws</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field bad">wrong-token<svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+            <div class="g-alert">The hub rejected the token.</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Error · wrong token</span><div class="cap-title">Токен не принят</div>
+        <div class="cap-note">Красный блок под формой с текстом «The hub rejected the token.»; курсор переезжает
+          в поле Token — чинить поле, не гадать.</div></div>
+    </div>
+
+    <!-- Unreachable -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-label">Hub address</div>
+              <div class="g-field">wss://keystone.local:8443/ws</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field">••••••••••••<svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+            <div class="g-alert">Can't reach the hub. Check Wi‑Fi.<span class="retry">Retry</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Error · unreachable</span><div class="cap-title">Хаб не отвечает</div>
+        <div class="cap-note">Красный блок под формой: «Can't reach the hub. Check Wi‑Fi.» и кнопка Retry —
+          повторить те же значения.</div></div>
+    </div>
+
+    <!-- Untrusted -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-signal"/></svg><span class="t">Certificate fingerprint (SHA-256)</span></div>
+              <div class="g-field bad">AA:BB:CC:DD:…</div>
+              <div class="g-err">That is not a SHA-256 fingerprint (32 bytes of hex)</div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+            <div class="g-alert">This hub's certificate changed. Someone may be intercepting the connection.</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Error · untrusted</span><div class="cap-title">Сертификат не тот</div>
+        <div class="cap-note">Красный блок под формой: «This hub's certificate changed. Someone may be intercepting
+          the connection.». Ошибка формата отпечатка — под самим полем.</div></div>
+    </div>
+
+    <!-- Pin not supported (web) -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll" style="padding:44px 16px 0">
+            <div class="connect-bar">
+              <div class="back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-back"/></svg></div>
+              <div class="t">Connect</div>
+              <div class="back"></div>
+            </div>
+            <div class="g-hero">Connect to your hub</div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg><span class="t">Connection</span></div>
+              <div class="g-label">Hub address</div>
+              <div class="g-field">wss://keystone.local:8443/ws</div>
+            </div>
+
+            <div class="g-card">
+              <div class="g-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg><span class="t">Token</span></div>
+              <div class="g-field">••••••••••••<svg class="eye"><use href="#i-eye"/></svg></div>
+            </div>
+
+            <div class="g-btn">Connect</div>
+            <div class="g-alert">This browser can't pin a certificate. Use the mobile app.</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Error · pin not supported</span><div class="cap-title">Web без пина</div>
+        <div class="cap-note">Браузер не умеет проверять отпечаток: «This browser can't pin a certificate. Use the
+          mobile app.» — идти в мобильное приложение.</div></div>
+    </div>
+  </div>
+
+  <div class="note-box" style="margin-top:22px">
+    <b>Ошибки — это состояния формы, а не отдельный экран.</b> Пока приложение соединяется, форма гаснет
+    и кнопка <code>Connect</code> крутит спиннер. Ошибка показывается красным блоком под формой
+    (wrong token / untrusted / unreachable / pin not supported), а ошибка проверки конкретного поля —
+    строкой под этим полем. Кнопка <code>Connect</code> спит, пока не заполнены адрес и токен от 8 символов.
+  </div>
+</section>
+
+<section id="setup">
+  <div class="sec-head">
+    <span class="eyebrow">3.2 · setup</span>
+    <h2>Setup — первый запуск хаба</h2>
+    <p class="sub">Один раз, когда хаб только вынули из коробки. Телефон входит в его собственную сеть,
+      вводит код с наклейки, хаб подключается к домашнему Wi-Fi.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 18px 0">
+            <div style="font-size:22px;font-weight:700">Set up a new hub</div>
+            <div style="font-size:13px;margin-top:12px;line-height:1.6">
+              1. Plug the hub in. After a few seconds it opens its own Wi-Fi network, <code>Keystone-…</code>.
+            </div>
+            <div style="font-size:13px;margin-top:8px;line-height:1.6">
+              2. In your phone's Wi-Fi settings, join it. Its password is the setup code on the hub's label.
+            </div>
+            <div style="font-size:13px;margin-top:8px;line-height:1.6">
+              3. Come back here and type the same code. If the phone says the network has no internet, stay on it.
+            </div>
+            <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700;margin-top:16px">Setup code</div>
+            <div class="field" style="margin-top:5px"><span class="value">XXXX-XXXX-XXXX</span></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+              <div class="btn-secondary" style="padding:10px 14px;font-size:14px">Back</div>
+              <div class="btn-primary" style="padding:10px 14px;font-size:14px">Connect to the hub</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Step 1 · code</span><div class="cap-title">Код с наклейки</div>
+        <div class="cap-note">Отдельного экрана «Готов?» нет — инструкция встроена в первый шаг.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:120px 18px 0;text-align:center">
+            <div class="progress indeterminate" style="width:100%"><div class="fill"></div></div>
+            <div style="margin-top:14px;color:var(--ios-muted);font-size:13px">Connecting to the hub…</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Step 2 · connecting</span><div class="cap-title">Связь с хабом</div>
+        <div class="cap-note">Хаб в этот момент доступен по адресу своей AP — 192.168.4.1:8443.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 18px 0">
+            <div style="font-size:22px;font-weight:700">Set up a new hub</div>
+            <div style="font-size:13px;margin-top:10px;line-height:1.55">Connected. Choose your home Wi-Fi: the hub will join it and use it from now on.</div>
+            <div style="margin-top:12px">
+              <div class="hub-card" style="padding:9px 11px;border-radius:12px;border-color:var(--ios-accent)">
+                <div class="body"><div class="nm" style="font-size:13px">Home-5G</div><div class="meta">strong · password</div></div>
+              </div>
+              <div class="hub-card" style="padding:9px 11px;border-radius:12px;margin-top:6px">
+                <div class="body"><div class="nm" style="font-size:13px">Neighbour</div><div class="meta">weak · password</div></div>
+              </div>
+            </div>
+            <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700;margin-top:14px">Network name</div>
+            <div class="field" style="margin-top:5px"><span class="value">Home-5G</span></div>
+            <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700;margin-top:12px">Wi-Fi password</div>
+            <div class="field" style="margin-top:5px"><span class="value">••••••••••</span></div>
+            <div class="hint-text">The hub cannot tell whether the password is right until it tries, a moment after you tap. Check it carefully.</div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+              <div class="btn-secondary" style="padding:10px 14px;font-size:14px">Back</div>
+              <div class="btn-primary" style="padding:10px 14px;font-size:14px">Set up the hub</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Step 3 · network</span><div class="cap-title">Выбор сети</div>
+        <div class="cap-note">Список приходит с хаба: имя, сила сигнала, тип защиты. Скрытую сеть вводят руками.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:120px 18px 0;text-align:center">
+            <div class="progress indeterminate" style="width:100%"><div class="fill"></div></div>
+            <div style="margin-top:14px;color:var(--ios-muted);font-size:13px">Sending the settings to the hub…</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Step 4 · applying</span><div class="cap-title">Хаб переключается</div>
+        <div class="cap-note">Прогресс-бар на 30 секунд из ТЗ здесь не нужен: реальное ожидание — «about half a minute»
+          на финальном экране.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 18px 0">
+            <div style="font-size:22px;font-weight:700">Set up a new hub</div>
+            <div style="font-size:14px;font-weight:600;margin-top:14px">The hub is joining Home-5G.</div>
+            <div style="font-size:13px;color:var(--ios-muted);margin-top:8px;line-height:1.55">
+              Now put your phone back on your home Wi-Fi (leave <code>Keystone-…</code>). The hub needs about half a minute.
+              The hub has been found on your network.
+            </div>
+            <div class="btn-primary" style="margin-top:18px">Connect to the hub</div>
+            <div class="hint-text">If it does not appear, the Wi-Fi password may have been wrong. The hub then opens its Wi-Fi again: start over from the connect screen.</div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+              <div class="btn-secondary" style="padding:10px 14px;font-size:14px">Back to the connect screen</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Step 5 · finish</span><div class="cap-title">Хаб в сети</div>
+        <div class="cap-note">Переход в приложение происходит по кнопке — автоматического перехода нет,
+          но открытая вкладка по умолчанию — Devices.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="devices">
+  <div class="sec-head">
+    <span class="eyebrow">3.3 · devices</span>
+    <h2>Devices — что в доме</h2>
+    <p class="sub">Главный экран. 90 % открытий — «включить/выключить одну штуку», поэтому сверху приветствие
+      и сцены, а ниже — комнаты и карточки.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <!-- Home -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll">
+            <div class="hero-block" style="padding-top:44px">
+              <div class="greet">Good evening</div>
+              <div class="where">Home</div>
+              <div class="weather">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>2 rooms · 5 devices
+              </div>
+            </div>
+            <div class="scene-row">
+              <span class="scene-pill active">Evening</span>
+              <span class="scene-pill">Night</span>
+              <span class="scene-pill">Away</span>
+            </div>
+            <div class="section-title"><span>Kitchen</span><span class="count">4</span></div>
+            <div class="room-pill">2 of 3 on · 38 W</div>
+            <div class="climate">
+              <div class="climate-head"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-climate"/></svg>Climate</div>
+              <div class="climate-tiles">
+                <div class="climate-tile"><div class="v">21.5 °C</div><div class="l warm">Temp.</div></div>
+                <div class="climate-tile"><div class="v">48 %</div><div class="l cool">Humidity</div></div>
+                <div class="climate-tile"><div class="v">320 lx</div><div class="l good">Light</div></div>
+              </div>
+            </div>
+            <div class="device-grid">
+              <div class="device-btn wide on">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div>
+                <div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div>
+              </div>
+              <div class="device-btn wide">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">Kitchen plug</div></div>
+              </div>
+              <div class="device-btn square">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sensor"/></svg></div>
+                <div class="body"><div class="name">Motion</div></div>
+              </div>
+              <div class="device-btn tall on">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body">
+                  <div class="name">TV plug</div>
+                  <div class="big">38 W</div>
+                  <div class="val dim">1.2 kWh</div>
+                </div>
+              </div>
+            </div>
+            <div class="add-device" style="margin:4px 14px 0"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg>Add a device</div>
+          </div>
+          <div class="toast">Applied 'Night': 5 settings sent</div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Главный экран</span><div class="cap-title">Устройство — это кнопка</div>
+        <div class="cap-note">Устройство — кнопка в сетке, а не карточка с переключателем: тап по кнопке включает и выключает,
+          отдельного тумблера нет. Под именем — что устройство делает сейчас (мощность, яркость, показание);
+          выключенное устройство молчит. Долгое нажатие открывает лист устройства. Форма кнопки выводится из данных:
+          широкая (одна строка) — переключаемое устройство, квадратная — датчик без включения,
+          вертикальная — устройство с двумя и более показаниями. Сетка — три колонки: кнопке, которой нечего
+          много сказать, хватает одной ячейки, а не половины экрана. Над сеткой — сводка комнаты
+          («2 of 3 on · 38 W») и климат-плитки по тем датчикам, что есть в комнате.
+          Палитра экрана — Ember (тёмное стекло, янтарь); та же вёрстка в палитре Sandstone.</div></div>
+    </div>
+
+    <!-- The finger is down -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll">
+            <div class="device-grid" style="padding-top:52px">
+              <div class="device-btn wide">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">Kitchen plug</div></div>
+              </div>
+              <div class="device-btn wide held">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div>
+                <div class="body"><div class="name">Kitchen lamp</div><div class="val">50 %</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Палец на кнопке</span><div class="cap-title">Приложение считает зажатие</div>
+        <div class="cap-note">Палец коснулся кнопки — она сразу приглушается, а через четверть секунды
+          загорается янтарём: так человек видит, что приложение считает его зажатие (через полсекунды
+          откроется лист устройства). Отпустил — кнопка вернулась.</div></div>
+    </div>
+
+    <!-- The device sheet -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll">
+            <div class="section-title"><span>Kitchen</span><span class="count">2</span></div>
+            <div class="device-grid">
+              <div class="device-btn on">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">TV plug</div><div class="val">42 W</div></div>
+              </div>
+              <div class="device-btn on">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></div>
+                <div class="body"><div class="name">Desk lamp</div><div class="val">60 %</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="body">
+              <div class="grabber"></div>
+              <div class="title">TV plug</div>
+              <div class="sheet-sub">Plug · On</div>
+              <div class="sheet-toggle"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg><span>Turn off</span></div>
+              <div class="meters">
+                <div class="meter-row"><span class="m-label">Power draw</span><span class="m-value"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bolt"/></svg>42 W</span></div>
+                <div class="meter-row"><span class="m-label">Energy</span><span class="m-value">1.20 kWh</span></div>
+              </div>
+              <div class="rows" style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid var(--ios-divider)">
+                <span style="font-size:13px">Brightness</span>
+                <span style="font-size:14px;font-weight:600">60 %</span>
+              </div>
+              <div class="slider"><div class="fill" style="width:60%"></div><div class="knob" style="left:60%"></div></div>
+              <div class="rows" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding-top:8px;border-top:1px solid var(--ios-divider)">
+                <span style="font-size:13px">Target</span>
+                <span class="stepper"><span class="step-btn">−</span><span class="step-val">21.5 °C</span><span class="step-btn">+</span></span>
+              </div>
+              <div class="mode-chips" style="margin-top:10px;justify-content:flex-end">
+                <span class="mode-chip">Off</span><span class="mode-chip on">Heat</span><span class="mode-chip">Cool</span><span class="mode-chip">Auto</span>
+              </div>
+              <div class="sheet-row">Rename</div>
+              <div class="sheet-row">Blink</div>
+              <div class="sheet-row danger">Remove device</div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Лист устройства</span><div class="cap-title">Всё, что не помещается в кнопку</div>
+        <div class="cap-note">Долгое нажатие открывает лист: вкл/выкл, метеринг, яркость (слайдер 0–100 %),
+          цветовая температура (2000–6500 K), цвет — «колодец», уставка и режимы, и три редких действия —
+          Rename, Blink, Remove device. Датчики и кнопки приходят в тот же лист: показание, «updated 12 s ago»,
+          «Last pressed: 2 min ago» и объяснение, что у кнопки тут нет настроек. Когда появляется клавиатура,
+          лист поднимается над ней — поле, в которое печатают, остаётся на виду.</div></div>
+    </div>
+
+
+    <!-- Sensors + button + offline -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen ember">
+          <div class="scroll">
+            <div class="section-title"><span>Hallway</span><span class="count">4</span></div>
+            <div class="device-grid">
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-occupancy"/></svg></div>
+                <div class="body"><div class="name">Temperature</div><div class="val dim">21.4 °C</div></div>
+              </div>
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sensor"/></svg></div>
+                <div class="body"><div class="name">Humidity</div><div class="val dim">48 %</div></div>
+              </div>
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-button"/></svg></div>
+                <div class="body"><div class="name">Hallway button</div></div>
+              </div>
+              <div class="device-btn" style="opacity:.55">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sensor"/></svg></div>
+                <div class="body"><div class="name">Window</div><div class="val dim">offline</div></div>
+              </div>
+            </div>
+            <div class="add-device" style="margin:14px 14px 0"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg>Add a device</div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Датчики и кнопка</span><div class="cap-title">Читалки в той же сетке</div>
+        <div class="cap-note">Датчик — та же кнопка, только без включения: под именем показание.
+          Кнопка без настроек объясняет это в листе («This button has no settings here — it can trigger rules.»),
+          а «Last pressed: 2 min ago» живёт там же. Устройство недоступного чипа гаснет и пишет «offline».</div></div>
+    </div>
+
+
+    <!-- Device menu -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="device-grid" style="padding-top:52px">
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">Kitchen plug</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="body">
+              <div class="grabber"></div>
+              <div class="title">Kitchen plug</div>
+              <div class="sheet-row">Rename</div>
+              <div class="sheet-row">Blink</div>
+              <div class="sheet-row danger">Remove device</div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Меню устройства</span><div class="cap-title">Три пункта в листе</div>
+        <div class="cap-note">Долгое нажатие на кнопке устройства открывает bottom sheet: Rename, Blink, Remove device.
+          Действия недоступны для устройств не из Zigbee — тогда в меню только Rename.</div></div>
+    </div>
+
+    <!-- Rename -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="device-grid" style="padding-top:52px">
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">Kitchen plug</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="body">
+              <div class="grabber"></div>
+              <div class="title">Kitchen plug</div>
+              <div style="width:100%;margin-top:12px;padding-top:12px;border-top:1px solid var(--ios-divider)">
+                  <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700">Name</div>
+                  <div class="field" style="margin-top:5px"><span class="value">Living room lamp</span></div>
+                  <div class="hint-text">Up to 15 characters, spaces allowed. Start with a room to group it, e.g. Living room lamp.</div>
+                  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+                    <div class="btn-danger" style="padding:8px 12px;font-size:13px">Remove name</div>
+                    <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Cancel</div>
+                    <div class="btn-primary" style="padding:8px 12px;font-size:13px">Save name</div>
+                  </div>
+                </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Переименование</span><div class="cap-title">Поле имени в листе</div>
+        <div class="cap-note">Rename открывает поле прямо в листе устройства; после сохранения — тост «Device renamed».
+          Имя человеко-читаемое: до 15 символов (кириллица — тоже один символ), пробелы разрешены,
+          а имя, похожее на id (0x10, 123), — нет. Поле получает фокус сразу, а лист поднимается над
+          клавиатурой — перекрыть его нечем.</div></div>
+    </div>
+
+    <!-- Add device -->
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="device-grid" style="padding-top:52px">
+              <div class="device-btn">
+                <div class="icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-switch"/></svg></div>
+                <div class="body"><div class="name">Kitchen plug</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="body">
+              <div class="grabber"></div>
+              <div class="title">Add a device</div>
+              <p>Press the pair button on your Zigbee device (or power-cycle it). You have 2 minutes.</p>
+              <div class="count">1:42</div>
+              <div class="joined"><span style="color:var(--ios-good);font-weight:600">plug1 joined, 5 s ago</span></div>
+              <div style="display:flex;justify-content:flex-end;margin-top:12px">
+                <div class="btn-secondary" style="padding:9px 14px;font-size:13px">Cancel</div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Add a device</span><div class="cap-title">Bottom sheet</div>
+        <div class="cap-note">Кнопка «+ Add a device» внизу списка открывает лист: текст, живой отсчёт
+          (2:00 → 0:00) и список присоединившихся. Инлайн-панели на экране Devices больше нет.</div></div>
+    </div>
+  </div>
+
+  <div class="note-box" style="margin-top:22px">
+    <b>Что из ТЗ осталось за протоколом.</b>
+    Слайдеры яркости и цветовой температуры и пикер цвета — <b>сделаны</b>: значения умеет и сам
+    <code>cmd</code>, не хватало только компонента (пара <code>color_xy</code> переводится из HSV).
+    «today: 1.2 kWh» невозможно: счётчик <code>energy_wh</code> накопительный, «сегодня» хаб не считает.
+  </div>
+</section>
+
+<section id="automations">
+  <div class="sec-head">
+    <span class="eyebrow">3.4 · automations</span>
+    <h2>Automations — автоматика</h2>
+    <p class="sub">Четыре раздела на одной странице, переключаются чипами. Списки читаются как фразы:
+      «когда то-то, то-то», а не как строки параметров.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="screen-bar"><span class="screen-bar-title">Automations</span></div>
+          <div class="scroll" style="padding:0 16px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <span style="padding:6px 11px;border-radius:999px;background:var(--ios-accent);color:#fff;font-size:12.5px;font-weight:700">Scenes (2)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Schedules (3)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Timers (1)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Rules (4)</span>
+            </div>
+            <div class="btn-primary" style="margin-top:16px">Add scene</div>
+            <div style="margin-top:12px">
+              <div class="auto-row">
+                <div class="a-body"><div class="a-title">Evening</div><div class="a-sub">Kitchen lamp on, TV plug off · 3 devices</div></div>
+                <div class="btn-quiet" style="padding:6px 10px;font-size:12.5px">Edit</div>
+                <div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div>
+              </div>
+              <div class="auto-row">
+                <div class="a-body"><div class="a-title">Night</div><div class="a-sub">All lights off · 2 devices</div></div>
+                <div class="btn-quiet" style="padding:6px 10px;font-size:12.5px">Edit</div>
+                <div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Scenes</span><div class="cap-title">Сцены</div>
+        <div class="cap-note">Сцена сохраняется из текущего состояния устройств, а не из ручных значений.
+          Применение подтверждается тостом («Applied 'Night': 5 settings sent»), а не подписью под рядом сцен.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 16px 0">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Scenes (2)</span>
+              <span style="padding:6px 11px;border-radius:999px;background:var(--ios-accent);color:#fff;font-size:12.5px;font-weight:700">Schedules (3)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Timers (1)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Rules (4)</span>
+            </div>
+            <div class="btn-primary" style="margin-top:16px">Add schedule</div>
+            <div style="margin-top:12px">
+              <div class="auto-row"><div class="a-body"><div class="a-title">Weekdays at 07:30</div><div class="a-sub">Turns on Kitchen lamp</div></div><div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div></div>
+              <div class="auto-row"><div class="a-body"><div class="a-title">At sunset</div><div class="a-sub">Turns on Desk lamp</div></div><div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div></div>
+              <div class="auto-row"><div class="a-body"><div class="a-title">Sunset+30</div><div class="a-sub">Turns off TV plug</div></div><div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div></div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Schedules</span><div class="cap-title">Расписания</div>
+        <div class="cap-note">«At sunset» и «Sunset+30» — сдвиг задаётся текстом, ограничение ±180 минут.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 16px 0">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Scenes (2)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Schedules (3)</span>
+              <span style="padding:6px 11px;border-radius:999px;background:var(--ios-accent);color:#fff;font-size:12.5px;font-weight:700">Timers (1)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Rules (4)</span>
+            </div>
+            <div class="btn-primary" style="margin-top:16px">Add timer</div>
+            <div style="margin-top:12px">
+              <div class="auto-row">
+                <div class="a-body"><div class="a-title">Turn off TV plug in 4 minutes</div><div class="a-sub">in 3:41</div></div>
+                <div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Cancel</div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Timers</span><div class="cap-title">Отложенный запуск</div>
+        <div class="cap-note">Обратный отсчёт идёт на экране; длительность вводится в минутах
+          (протокол принимает секунды, до 1 с не дойти).</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 16px 0">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Scenes (2)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Schedules (3)</span>
+              <span style="padding:6px 11px;border-radius:999px;border:1px solid var(--ios-border);font-size:12.5px;font-weight:500">Timers (1)</span>
+              <span style="padding:6px 11px;border-radius:999px;background:var(--ios-accent);color:#fff;font-size:12.5px;font-weight:700">Rules (4)</span>
+            </div>
+            <div class="btn-primary" style="margin-top:16px">Add rule</div>
+            <div style="margin-top:12px">
+              <div class="auto-row"><div class="a-body"><div class="a-title">When Kitchen lamp turns on, turn on Desk lamp</div><div class="a-sub">only between 18:00 and 23:00 · cooldown 60 min</div></div><div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div></div>
+              <div class="auto-row"><div class="a-body"><div class="a-title">When Hallway button is pressed, apply Evening</div><div class="a-sub"></div></div><div class="btn-danger" style="padding:6px 10px;font-size:12.5px">Delete</div></div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Rules</span><div class="cap-title">Правила</div>
+        <div class="cap-note">Строка читается как предложение; окно и cooldown видны сразу, а не спрятаны.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:48px 16px 0">
+            <div style="font-size:17px;font-weight:700">Add rule</div>
+
+            <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700;margin-top:14px">When</div>
+            <div class="field" style="margin-top:5px"><span class="value">Kitchen lamp</span><span style="margin-left:auto;color:var(--ios-muted)">▾</span></div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <div class="field" style="flex:1"><span class="value">on_off</span></div>
+              <div class="seg"><span class="seg-item on">changes</span><span class="seg-item">is</span></div>
+            </div>
+            <div class="field" style="margin-top:6px"><span class="value">on</span></div>
+
+            <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ios-muted);font-weight:700;margin-top:14px">Then</div>
+            <div class="field" style="margin-top:5px"><span class="value">Desk lamp</span><span style="margin-left:auto;color:var(--ios-muted)">▾</span></div>
+            <div class="field" style="margin-top:6px"><span class="value">on_off = on</span></div>
+
+            <div style="margin-top:14px;color:var(--ios-accent);font-size:13px;font-weight:600">More options</div>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+              <div class="btn-secondary" style="padding:10px 14px;font-size:14px">Cancel</div>
+              <div class="btn-primary" style="padding:10px 14px;font-size:14px">Save rule</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Rule form</span><div class="cap-title">Форма правила</div>
+        <div class="cap-note">Оператор — «changes» / «is» (хаб умеет и <code>always</code>, форма его не предлагает).
+          Cooldown вводится в минутах, хотя в протоколе это секунды.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="hub">
+  <div class="sec-head">
+    <span class="eyebrow">3.5 · hub</span>
+    <h2>Hub — сам хаб</h2>
+    <p class="sub">Состояние хаба: связь, Wi-Fi, координаты, мост в Apple Home и здоровье радио-чипов.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="screen-bar"><span class="screen-bar-title">Hub</span></div>
+          <div class="scroll">
+            <div class="hub-stack">
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:2px">
+                <div class="card-h"><span class="t" style="display:flex;align-items:center;gap:8px"><span class="status-dot"></span>Home</span><span style="color:var(--ios-good);font-weight:600;font-size:12px">healthy</span></div>
+                <div class="kv"><span>wss://keystone.local:8443/ws</span></div>
+                <div class="kv"><span>Firmware</span><b>v0.9.4</b></div>
+                <div class="kv"><span>Clock</span><b>21:44 · Europe/Berlin</b></div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Wi-Fi</span><span class="chip">Home-5G</span></div>
+                <div class="kv"><span>IP address</span><b>192.168.0.202</b></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Change network</div>
+                </div>
+                <div class="hint-text">The hub reopens its own network for 30 seconds if the password turns out to be wrong.</div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Location</span></div>
+                <div class="kv"><span>50.08, 14.43</span></div>
+                <div class="kv"><span>Sun</span><b>sunrise 05:41 · sunset 21:14</b></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;flex-wrap:wrap">
+                  <div class="btn-danger" style="padding:8px 12px;font-size:13px">Clear location</div>
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Change location</div>
+                  <div class="btn-primary" style="padding:8px 12px;font-size:13px">Use this phone's location</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Карточки 1–3</span><div class="cap-title">Статус, Wi-Fi, координаты</div>
+        <div class="cap-note">Порядок приложения: статус → Wi-Fi → Location → Apple Home → чипы.
+          Рядом с именем хаба — общий статус-дот: healthy, degraded (молчит чип) или offline.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="hub-stack" style="padding-top:52px">
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:6px">
+                <div class="card-h"><span class="t">Apple Home bridge</span><span style="color:var(--ios-good);font-weight:600;font-size:12px">● ready</span></div>
+                <div style="font-size:12px;color:var(--ios-muted)">Add this hub to Apple Home once — all Zigbee devices will appear inside it automatically.</div>
+                <div style="font-size:11.5px;color:var(--ios-muted)">Home app → + → Add Accessory → More options → enter code:</div>
+                <div class="code-box"><span class="code">3497-0112-332</span><span style="color:var(--ios-accent);font-size:12px;font-weight:600">Share</span></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+                  <div class="btn-primary" style="padding:8px 12px;font-size:13px">Open Apple Home</div>
+                </div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Zigbee coordinator</span><span style="color:var(--ios-good);font-weight:600;font-size:12px">● ready</span></div>
+                <div class="kv"><span>Uptime</span><b>3 h 12 m</b></div>
+                <div class="kv"><span>Free heap</span><b>201 KB</b></div>
+                <div class="kv"><span>Reboots seen</span><b>1</b></div>
+                <div class="kv"><span>Link errors</span><b>0</b></div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Thread bridge</span><span style="color:var(--ios-warn);font-weight:600;font-size:12px">● silent</span></div>
+                <div class="kv"><span>Uptime</span><b>—</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Карточки 4–5</span><div class="cap-title">Мост и чипы</div>
+        <div class="cap-note">Код Matter — крупно, он же по кнопке копируется в буфер обмена.
+          У чипа видны uptime, heap, перезагрузки и ошибки линии; boot_id и счётчики кадров хаб шлёт,
+          но в UI не показываются.</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll">
+            <div class="hub-stack" style="padding-top:52px">
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Firmware</span></div>
+                <div class="kv"><span>Hub</span><b>v0.9.4</b></div>
+                <div class="kv"><span>Zigbee coordinator</span><b>ready</b></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Update from URL</div>
+                </div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:4px">
+                <div class="card-h"><span class="t">Access</span></div>
+                <div class="kv"><span>Token</span><b>•••••••••••• · Show</b></div>
+                <div class="kv"><span>Certificate</span><b>AA:BB:CC:DD:EE:FF…</b></div>
+                <div class="kv"><span>Remote access</span><b>not set up</b></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Set up relay</div>
+                  <div class="btn-primary" style="padding:8px 12px;font-size:13px">New token</div>
+                </div>
+              </div>
+
+              <div class="hub-card" style="flex-direction:column;align-items:stretch;gap:8px">
+                <div class="card-h"><span class="t">Hub actions</span></div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Reboot</div>
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Factory reset</div>
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Forget Wi-Fi</div>
+                  <div class="btn-secondary" style="padding:8px 12px;font-size:13px">Switch hub</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Карточки 6–8</span><div class="cap-title">Прошивка, доступ, действия</div>
+        <div class="cap-note">Обновление — по URL с SHA-256, прогресс виден по ходу. Токен прячется под
+          «Show». Опасное — в модальном окне, «Reboot» и «Factory reset» — ещё и двойным тапом.</div></div>
+    </div>
+  </div>
+
+  <div class="note-box" style="margin-top:22px">
+    <b>Карточки Firmware, Access и Hub actions — <b>сделаны</b> (операции <code>ota.start</code>,
+    <code>ota.status</code>, <code>hub.reboot</code>, <code>hub.factory_reset</code>, <code>access.get</code>,
+    <code>access.token.set</code>, <code>access.relay.set</code>, <code>access.relay.clear</code>,
+    <code>wifi.forget</code> добавлены в протокол — <code>docs/app-protocol.md</code> §5).</b>
+    Опасные действия спрашивают модальным окном; «Reboot» и «Factory reset» — двойным тапом.
+  </div>
+</section>
+
+<section id="history">
+  <div class="sec-head">
+    <span class="eyebrow">3.6 · history</span>
+    <h2>History — журнал</h2>
+    <p class="sub">Что хаб делал и видел. Новые сверху, по дням, тап по строке — фильтр по устройству.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="screens">
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="screen-bar"><span class="screen-bar-title">History</span></div>
+          <div class="scroll" style="padding:0 16px">
+            <div class="hist-day">Today</div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-good)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></span>
+              <span class="h-text">Kitchen lamp turned on</span>
+              <span class="h-time">21:44</span>
+            </div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-accent)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg></span>
+              <span class="h-text">Sent to plug1: turned on by a schedule</span>
+              <span class="h-time">21:40</span>
+            </div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-accent)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-play"/></svg></span>
+              <span class="h-text">Applied scene Evening: 3 settings</span>
+              <span class="h-time">20:12</span>
+            </div>
+            <div class="hist-day">Yesterday</div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-warn)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg></span>
+              <span class="h-text">Thread bridge stopped answering</span>
+              <span class="h-time">18:55</span>
+            </div>
+            <div class="hist-row">
+              <span class="h-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg></span>
+              <span class="h-text">Hub started</span>
+              <span class="h-time">09:02</span>
+            </div>
+            <div style="text-align:center;margin-top:14px">
+              <div class="btn-quiet" style="font-size:13px">Load older</div>
+            </div>
+            <div class="hint-text" style="text-align:center">The hub remembers its last 256 events in memory; a restart starts the list again.</div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Журнал</span><div class="cap-title">События по дням</div>
+        <div class="cap-note">11 видов событий на месте. Текст читается по-человечески:
+          «Sent to plug1: turned on by a schedule».</div></div>
+    </div>
+
+    <div class="screen-fig">
+      <div class="phone"><div class="bezel"></div><div class="island"></div>
+        <div class="screen">
+          <div class="scroll" style="padding:52px 16px 0">
+            <div style="font-size:22px;font-weight:700">History</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding:9px 11px;border-radius:12px;background:var(--ios-accent-soft)">
+              <span style="font-size:13px;color:var(--ios-text)">Only Kitchen lamp</span>
+              <span style="color:var(--ios-accent);font-size:12.5px;font-weight:600">Show everything</span>
+            </div>
+            <div class="hist-day">Today</div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-good)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></span>
+              <span class="h-text">Kitchen lamp turned on</span>
+              <span class="h-time">21:44</span>
+            </div>
+            <div class="hist-row">
+              <span class="h-ic" style="color:var(--ios-good)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-light"/></svg></span>
+              <span class="h-text">Kitchen lamp turned off</span>
+              <span class="h-time">18:02</span>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-home"/></svg>Devices</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-automation"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-hub"/></svg>Hub</div>
+            <div class="tab active"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-history"/></svg>History</div>
+          </div>
+        </div>
+      </div>
+      <div class="fig-cap"><span class="fig-state">Фильтр</span><div class="cap-title">Только одно устройство</div>
+        <div class="cap-note">Тап по строке про устройство оставляет только её события; чип снимается кнопкой.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="spec">
+  <div class="sec-head">
+    <span class="eyebrow">4 · spec</span>
+    <h2>Спека для инженера</h2>
+    <p class="sub">Файлы, из которых собирается интерфейс, и команды, которыми всё собирается.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h4>Файлы</h4>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Файл</th><th>Что в нём</th></tr>
+          <tr><td class="mono">docs/design/tokens.json</td><td>все токены: цвет, радиусы, отступы, типографика, материал, иконки</td></tr>
+          <tr><td class="mono">docs/design/keystone.css</td><td>та же система в CSS — эталон для веба и для сборки мокапов</td></tr>
+          <tr><td class="mono">docs/design/icons/*.svg</td><td>24 знака, 24 × 24, <code>currentColor</code></td></tr>
+          <tr><td class="mono">docs/design/icons/sprite.svg</td><td>тот же набор спрайтом</td></tr>
+          <tr><td class="mono">docs/design/icons/build-icons.mjs</td><td>генератор набора из <code>app/src/ui/Glyph.tsx</code></td></tr>
+          <tr><td class="mono">docs/design/keystone-spec.html</td><td>этот документ (собирается из <code>.src.html</code>)</td></tr>
+          <tr><td class="mono">app/src/ui/theme.ts</td><td>тот же набор в коде приложения — источник истины</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h4>Сборка</h4>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Команда</th><th>Что делает</th></tr>
+          <tr><td class="mono">node docs/design/icons/build-icons.mjs</td><td>пересобирает SVG-набор из кода приложения</td></tr>
+          <tr><td class="mono">node docs/design/build-spec.mjs</td><td>собирает страницу спеки из исходника</td></tr>
+          <tr><td class="mono">ctest --test-dir build</td><td>тесты ядра хаба</td></tr>
+          <tr><td class="mono">cd app &amp;&amp; npm test</td><td>тесты клиента (vitest)</td></tr>
+        </table>
+      </div>
+      <div class="note-box" style="margin-top:16px">
+        <b>Один источник правды.</b> Токены живут в <code>app/src/ui/theme.ts</code>; CSS и JSON — его проекции.
+        Меняешь палитру — меняешь <code>theme.ts</code>, потом генерируешь <code>tokens.json</code> и иконки.
+        Отдельного «дизайн-файла», который разъедется с кодом, в проекте нет и не должно быть.
+      </div>
+    </div>
+  </div>
+
+  <h3>Что протокол умеет и чего в нём нет</h3>
+  <div class="grid2">
+    <div>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Операция</th><th>Где живёт</th></tr>
+          <tr><td class="mono">cmd</td><td>любой writable-атрибут любой сущности</td></tr>
+          <tr><td class="mono">name.set / name.clear</td><td>переименование</td></tr>
+          <tr><td class="mono">rule.add / rule.del</td><td>правила, с окном, условием и cooldown</td></tr>
+          <tr><td class="mono">schedule.add / schedule.del</td><td>расписания, включая «at sunset±N»</td></tr>
+          <tr><td class="mono">timer.add / timer.cancel</td><td>таймеры</td></tr>
+          <tr><td class="mono">scene.put / scene.del / scene.apply</td><td>сцены</td></tr>
+          <tr><td class="mono">location.set / location.clear</td><td>координаты хаба</td></tr>
+          <tr><td class="mono">identify / unpair / pair</td><td>Blink, удаление и добавление устройства</td></tr>
+          <tr><td class="mono">ota.start / ota.status</td><td>обновление образа чипа (карточка Firmware)</td></tr>
+          <tr><td class="mono">hub.reboot / hub.factory_reset</td><td>карточка Hub actions</td></tr>
+          <tr><td class="mono">wifi.set / wifi.forget / wifi.scan</td><td>карточка Wi-Fi</td></tr>
+          <tr><td class="mono">access.get / access.token.set / access.relay.set</td><td>карточка Access</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Чего в протоколе нет</th><th>Как сейчас</th></tr>
+          <tr><td class="mono">chip.reboot</td><td>перезагрузка отдельного чипа — только консоль хаба</td></tr>
+          <tr><td class="mono">ota.abort</td><td>отмена загрузки образа — только консоль хаба</td></tr>
+          <tr><td class="mono">boot_id, rx/tx чипа</td><td>хаб эти поля шлёт, в app-протоколе их нет</td></tr>
+        </table>
+      </div>
+      <p class="sub" style="margin-top:12px">Полный список операций — <code>docs/app-protocol.md</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="sec-head">
+    <span class="eyebrow">5 · reconciliation</span>
+    <h2>ТЗ ↔ приложение</h2>
+    <p class="sub">Два списка: что ТЗ требовал и теперь сделано в приложении, и где ТЗ описывал не то,
+      что есть на самом деле. Первая таблица — визуал (всё это видно в спеке выше), вторая — факты:
+      данные, состав протокола и то, что осталось за консолью хаба.</p>
+    <div class="rule"></div>
+  </div>
+
+  <h3>5.1 Сделано в приложении (визуал по ТЗ)</h3>
+  <p class="sub">Требования ТЗ, которые в приложении теперь выполнены — спека выше это и показывает.</p>
+  <div class="spec-wrap" style="margin-top:14px">
+    <table class="spec state-table">
+      <tr><th>Пункт ТЗ</th><th>Что теперь в приложении</th></tr>
+      <tr><td>§04 «Connecting» во весь экран, форма disabled</td><td>форма остаётся на месте, кнопка Connect крутит спиннер, поля заблокированы</td></tr>
+      <tr><td>§04 кнопка «показать токен»</td><td>рядом с полем Token — глаз, токен можно посмотреть и спрятать</td></tr>
+      <tr><td>§04 «Can't reach the hub. Check Wi-Fi.» + Retry</td><td>красный блок под формой с этой строкой и кнопкой Retry</td></tr>
+      <tr><td>§04 ошибки: wrong token / untrusted / pin not supported</td><td>свои тексты под формой, при wrong token фокус в поле Token</td></tr>
+      <tr><td>§06 «⋯ menu → Rename / Blink / Remove»</td><td>кнопки «⋯» нет: лист с этими тремя пунктами открывается долгим нажатием на кнопку устройства</td></tr>
+      <tr><td>§06 имя устройства <code>[a-z][a-z0-9_]{0,22}</code></td><td>человеко-читаемое имя: до 15 символов, пробелы и кириллица разрешены; имя вида <code>0x10</code> хаб не принимает</td></tr>
+      <tr><td>§06 форма кнопки в сетке</td><td>три формы по данным устройства: широкая (строка), квадратная (датчик), вертикальная (два и более показаний); сетка из трёх колонок — кнопке, которой нечего много сказать, хватает одной ячейки</td></tr>
+      <tr><td>§06 «эффект при зажатии»</td><td>кнопка приглушается сразу и загорается янтарём через 250 мс — человек видит, что приложение считает его зажатие</td></tr>
+      <tr><td>§06 «клавиатура не перекрывает поле имени»</td><td>лист поднимается на высоту клавиатуры (высота меряется своим кодом: <code>KeyboardAvoidingView</code> в react-native-web не делает ничего), поле имени получает фокус сразу</td></tr>
+      <tr><td>§06 сводка «1 room · 1 device»</td><td>плашки прячутся, когда сказать нечего: счётчик — если комнат или устройств больше одного, сводка комнаты — если переключаемых устройств больше одного</td></tr>
+      <tr><td>§06 toast «Applied 'Night': 5 settings sent»</td><td>toast после применения сцены (или «3 sent, 1 skipped»)</td></tr>
+      <tr><td>§06 кнопка: «This button has no settings here…» + «Last pressed»</td><td>подсказка под именем и «Last pressed: 2 min ago»</td></tr>
+      <tr><td>§06 статус-дот слева от имени</td><td>точка: online / offline / unreachable (свой цвет и подпись для скринридера)</td></tr>
+      <tr><td>§06 «updated 12 s ago»</td><td>под показаниями датчика, время живёт (приложение помнит, когда значение изменилось)</td></tr>
+      <tr><td>§06 ползунок яркости с крупными + и −</td><td>слайдер 0–100 % с круглыми «−» и «+» по шагу 10 % (то же у CT)</td></tr>
+      <tr><td>§06 пустое состояние: иллюстрация + текст</td><td>своя иллюстрация (дом с розеткой) и «No devices yet. Tap below to add your first one.»</td></tr>
+      <tr><td>§06 Add a device — bottom sheet</td><td>кнопка «+ Add a device» внизу списка, лист с обратным отсчётом и списком присоединившихся</td></tr>
+      <tr><td>§06 unreachable → toast «Device unreachable»</td><td>тап по приглушённой карточке показывает toast</td></tr>
+      <tr><td>§06 визуальный пинг 0.5 с</td><td>светлая обводка карточки на полсекунды после отправки команды</td></tr>
+      <tr><td>§07 «первый тап меняет контрол на “Delete?”»</td><td>кнопка меняется на «Delete?» + крестик, 3 секунды на отмену</td></tr>
+      <tr><td>§08 статус-дот хаба: healthy / degraded / offline</td><td>точка рядом с именем хаба на карточке Hub status</td></tr>
+      <tr><td>§10 «Authentication failed» + «Go to Connect»</td><td>баннер с этой строкой и кнопкой «Go to Connect»</td></tr>
+      <tr><td>§10 «Not connected» + Retry</td><td>баннер с этой строкой и кнопкой Retry</td></tr>
+      <tr><td>§10 тосты «Scene 'Night' applied», «Device renamed», «Rule saved»</td><td>такие же тексты в тостах (успех — своим тоном, ошибка — красным)</td></tr>
+    </table>
+  </div>
+
+  <h3 style="margin-top:30px">5.2 Правлено в теле документа (факты)</h3>
+  <p class="sub">Фактические расхождения: в приложении данные и операции устроены иначе, чем предполагало ТЗ.
+    Там, где это можно было поправить текстом, ТЗ поправлен; остальное — за протоколом и консолью хаба.</p>
+  <div class="spec-wrap" style="margin-top:14px">
+    <table class="spec state-table">
+      <tr><th>Пункт ТЗ</th><th>В приложении на самом деле</th><th>Что делаем</th></tr>
+      <tr><td>§04 relay = <code>https://…/hub/&lt;id&gt;</code></td><td><code>https://…/hub/&lt;id&gt;</code> — это режим Cloud; Relay — <code>wss://relay…/client/&lt;hub&gt;</code></td><td>исправлено в §04</td></tr>
+      <tr><td>§05 шесть шагов, экран «Готов?», прогресс 30 с</td><td>пять шагов, инструкция встроена в первый, ожидание «about half a minute»</td><td>исправлено в §05</td></tr>
+      <tr><td>§06 «power: 42 W» и «today: 1.2 kWh»</td><td><code>power_w</code> — мгновенная мощность, <code>energy_wh</code> — накопительный счётчик; «за сегодня» хаб не считает</td><td>исправлено в §06</td></tr>
+      <tr><td>§06 одна карточка = одна сущность</td><td>так же, но устройства сгруппированы по комнатам (комната выводится из префикса имени, в протоколе поля нет)</td><td>исправлено в §06 (добавлен раздел «Комнаты»)</td></tr>
+      <tr><td>§07 оператор <code>always</code></td><td>«changes» в приложении — это и есть <code>CmpOp::Always</code> на проводе</td><td>исправлено в §07</td></tr>
+      <tr><td>§08 карточка чипа: boot_id, rx/tx, «Reboot chip»</td><td>хаб эти поля шлёт, в app-протоколе их нет; перезагрузки отдельного чипа пока нет</td><td>осталось за консолью хаба (правка протокола)</td></tr>
+      <tr><td>§08 OTA: отмена загрузки</td><td>хаб умеет <code>ota abort</code> в консоли, в app-протоколе операции нет</td><td>осталось (правка протокола)</td></tr>
+      <tr><td>§08 Access: «Regenerate» сертификата</td><td>сертификат перевыпускается скриптом на хосте, из приложения — только показать fingerprint</td><td>исправлено в §08</td></tr>
+    </table>
+  </div>
+
+  <div class="note-box" style="margin-top:20px">
+    <b>Что требовало бэкенда — и сделано.</b> OTA из приложения, Reboot, Factory reset, Forget Wi-Fi,
+    карточка Access (токен / fingerprint / remote access) — это новые <code>req</code>-операции в
+    <code>core/include/core/app_requests.hpp</code> плюс их разбор в <code>firmware/brain-s3/main/main.cpp</code>.
+    Описаны в <code>docs/app-protocol.md</code> §5.
+  </div>
+</section>
+
+<section id="open">
+  <div class="sec-head">
+    <span class="eyebrow">6 · open</span>
+    <h2>Открытые вопросы</h2>
+    <p class="sub">Что требует решения, прежде чем спека станет контрактом.</p>
+    <div class="rule"></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Вопрос</th><th>Почему он открыт</th></tr>
+          <tr><td>Слайдер или степпер?</td><td><b>закрыто</b>: слайдер 0–100 % с шагом 10 % — в карточке яркости и CT</td></tr>
+          <tr><td>Есть ли цвет вообще?</td><td><b>закрыто</b>: пикер цвета (HSV → CIE x/y) в карточке лампы</td></tr>
+          <tr><td>Опасен ли <code>always</code> в правилах?</td><td>хаб его умеет, но «сработало всегда» — это спам событий; стоит ли показывать в форме</td></tr>
+          <tr><td>Температура и «за окном»?</td><td>окно времени — окно правила, а не климат-расписание</td></tr>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="spec-wrap">
+        <table class="spec">
+          <tr><th>Вопрос</th><th>Почему он открыт</th></tr>
+          <tr><td>Токен и fingerprint на Hub</td><td>карточка Access есть: токен и fingerprint показываются, но сертификат перевыпускает скрипт на хосте — регенерации из приложения нет</td></tr>
+          <tr><td>Reboot / Factory reset</td><td><b>закрыто</b>: операции в протоколе есть, в приложении — карточка Hub actions с модальным подтверждением</td></tr>
+          <tr><td>Пинг-финг на web</td><td>браузер не отдаёт TLS-информацию странице: пиннинг возможен только в нативном модуле и в Node-инструментах</td></tr>
+          <tr><td>История после перезапуска</td><td>журнал живёт в памяти хаба (256 событий) и обнуляется при реконнекте</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer style="margin-top:60px;text-align:center;padding:28px;border-top:1px solid var(--line);color:var(--muted);font-size:12px">
+  keystone · спецификация клиентского приложения v1.0 · 2026
+</footer>
+
+
+</main>
+</body>
+</html>
