@@ -46,6 +46,17 @@ describe('connection form', () => {
     expect(normalizeUrl('wss://hub/ws')).toBe('wss://hub/ws');
     expect(normalizeUrl('10.0.0.5/custom')).toBe('ws://10.0.0.5:8080/custom');
   });
+  it('keeps the security of an address copied from a browser', () => {
+    // https:// is what the browser shows - the WebSocket has to stay on TLS.
+    expect(normalizeUrl('https://relay.example.com/client/home')).toBe('wss://relay.example.com/client/home');
+    expect(normalizeUrl('http://relay.example.com/client/home')).toBe('ws://relay.example.com/client/home');
+  });
+  it('a relay address without a scheme means TLS and the default port', () => {
+    expect(normalizeUrl('relay.example.com/client/home')).toBe('wss://relay.example.com/client/home');
+    expect(normalizeUrl('keystone-esp-production.up.railway.app/client/home')).toBe(
+      'wss://keystone-esp-production.up.railway.app/client/home',
+    );
+  });
   it('recognises relay URLs', () => {
     expect(isRelayUrl('wss://relay.example.com/client/my-hub')).toBe(true);
     expect(isRelayUrl('ws://relay:9090/client/my-hub')).toBe(true);

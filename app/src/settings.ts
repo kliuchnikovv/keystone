@@ -50,12 +50,21 @@ export function cloudUrl(server: string, hubId: string): string {
   return `${base}/hub/${hubId.trim()}`;
 }
 
-/** Accept "192.168.0.202", "hub.local:8080" or a full ws:// URL; fill in the rest. */
+/** Accept "192.168.0.202", "hub.local:8080" or a full ws:// URL; fill in the rest.
+ *
+ * A relay lives outside the LAN, so it is talked to over TLS on the standard
+ * port - and an address copied from a browser (https://...) keeps its security
+ * instead of silently losing it. */
 export function normalizeUrl(input: string): string {
   const s = input.trim();
   if (/^wss?:\/\//i.test(s)) return s;
-  const hostPort = s.replace(/\/.*$/, '');
-  const path = s.includes('/') ? s.slice(s.indexOf('/')) : '/ws';
+  if (/^https:\/\//i.test(s)) return `wss://${s.slice('https://'.length)}`;
+  if (/^http:\/\//i.test(s)) return `ws://${s.slice('http://'.length)}`;
+  const slash = s.indexOf('/');
+  const hostPort = slash >= 0 ? s.slice(0, slash) : s;
+  const path = slash >= 0 ? s.slice(slash) : '/ws';
+  // A relay URL without a scheme: TLS and the default port, not port 8080.
+  if (isRelayUrl(path)) return `wss://${hostPort}${path}`;
   return `ws://${hostPort.includes(':') ? hostPort : hostPort + ':8080'}${path}`;
 }
 
