@@ -50,6 +50,14 @@ export function cloudUrl(server: string, hubId: string): string {
   return `${base}/hub/${hubId.trim()}`;
 }
 
+/** The address the app uses to reach the hub through a relay: the same host, but the
+ * client side of the tunnel (the hub's own address ends in /tunnel/<id>). Empty when
+ * the address is not of that shape - there is nothing to derive then. */
+export function relayClientUrl(tunnelUrl: string): string {
+  const m = tunnelUrl.trim().match(/^(.*)\/tunnel\/([^\s/]+)\s*$/i);
+  return m ? `${m[1]}/client/${m[2]}` : '';
+}
+
 /** Accept "192.168.0.202", "hub.local:8080" or a full ws:// URL; fill in the rest.
  *
  * A relay lives outside the LAN, so it is talked to over TLS on the standard

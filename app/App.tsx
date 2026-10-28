@@ -134,6 +134,18 @@ export default function App() {
     setEditing(true);
   }, []);
 
+  const onUseRelay = useCallback(
+    (url: string) => {
+      // The hub has a relay now: the app talks to the hub through it from now on.
+      const base = session?.settings ?? (settings as Settings);
+      const next = { ...base, url };
+      setSession(null);
+      setSettings(next);
+      void store.save(next);
+    },
+    [session, settings, store],
+  );
+
   const onTokenChange = useCallback(
     async (token: string) => {
       // The hub restarted its server with the new token: store it and reconnect.
@@ -169,13 +181,14 @@ export default function App() {
         onCancel={editing ? () => setEditing(false) : undefined}
       />
     ) : session ? (
-      <HomeBody settings={session.settings} client={session.client} onChangeHub={onChangeHub} onTokenChange={onTokenChange} palette={palette} onPalette={setPalette} />
+      <HomeBody settings={session.settings} client={session.client} onChangeHub={onChangeHub} onTokenChange={onTokenChange} onUseRelay={onUseRelay} palette={palette} onPalette={setPalette} />
     ) : (
       <Home
         key={`${settings.url}|${settings.token}|${settings.fingerprint ?? ''}`}
         settings={settings}
         onChangeHub={onChangeHub}
         onTokenChange={onTokenChange}
+        onUseRelay={onUseRelay}
         palette={palette}
         onPalette={setPalette}
       />

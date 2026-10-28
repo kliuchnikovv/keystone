@@ -26,6 +26,8 @@ export interface HomeProps {
   onChangeHub(): void;
   /** The hub issued a new token: the app stores it and reconnects with it. */
   onTokenChange?(token: string): Promise<void>;
+  /** The hub has a relay: connect through it (the address changes). */
+  onUseRelay?(url: string): void;
   /** The palette the app wears. */
   palette?: PaletteId;
   onPalette?(id: PaletteId): void;
@@ -36,7 +38,7 @@ export interface HomeProps {
 }
 
 /** The signed-in app: connection, tabs, and the toast. */
-export function Home({ settings, onChangeHub, onTokenChange, palette, onPalette, clientOptions, client: given }: HomeProps) {
+export function Home({ settings, onChangeHub, onTokenChange, onUseRelay, palette, onPalette, clientOptions, client: given }: HomeProps) {
   const owned = useHubClient(settings, clientOptions, given === undefined);
   const client = given ?? owned;
   return (
@@ -47,6 +49,7 @@ export function Home({ settings, onChangeHub, onTokenChange, palette, onPalette,
       palette={palette}
       onPalette={onPalette}
       {...(onTokenChange ? { onTokenChange } : {})}
+      {...(onUseRelay ? { onUseRelay } : {})}
     />
   );
 }
@@ -57,6 +60,7 @@ export function HomeBody({
   client,
   onChangeHub,
   onTokenChange,
+  onUseRelay,
   palette,
   onPalette,
 }: {
@@ -64,6 +68,7 @@ export function HomeBody({
   client: HubConnection;
   onChangeHub(): void;
   onTokenChange?(token: string): Promise<void>;
+  onUseRelay?(url: string): void;
   palette?: PaletteId;
   onPalette?(id: PaletteId): void;
 }) {
@@ -102,6 +107,7 @@ export function HomeBody({
             palette={palette}
             onPalette={onPalette}
             {...(onTokenChange ? { onTokenChange } : {})}
+            {...(onUseRelay ? { onUseRelay } : {})}
           />
         )}
       </View>
