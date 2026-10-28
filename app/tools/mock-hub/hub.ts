@@ -161,6 +161,14 @@ export class MockHub {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   /** When set, every command is answered with this ACK status (and changes nothing unless 'ok'). */
   forceAck: AckStatus | null = null;
+  /** The running update, if any: the mock pretends to make progress. */
+  ota: { state: string; pct: number; chip: number; message: string } | null = null;
+  /** The relay the hub would talk to, if one is set up. */
+  relayUrl: string | null = null;
+  /** What the app asked the hub to do to itself. */
+  rebootCalls = 0;
+  factoryResetCalls = 0;
+  wifiForgetCalls = 0;
 
   private constructor(wss: WebSocketServer, opts: Required<MockHubOptions>) {
     this.wss = wss;
@@ -706,6 +714,70 @@ export class MockHub {
           this.unpairCalls.push(e.id);
           this.resync(); // the real hub re-sends the snapshot when a device goes away
         }
+        return ok();
+      }
+      case 'ota.start': {
+        const { chip, url, sha256 } = args;
+        if (chip !== 1 && chip !== 2) return no('bad_args', 'chip: 1 or 2');
+        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return no('bad_args', 'url: http(s)');
+        if (typeof sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(sha256)) return no('bad_args', 'sha256: 64 hex characters');
+        this.ota = { state: 'downloading', pct: 0, chip, message: 'starting…' };
+        return ok();
+      }
+      case 'ota.status': {
+        const o = this.ota;
+        if (!o) return ok({ state: 'idle', pct: 0, chip: 0, message: '' });
+        if (o.state === 'downloading') {
+          o.pct = Math.min(100, o.pct + 25);
+          o.message = `downloading ${o.pct} %`;
+          if (o.pct >= 100) o.state = 'verifying';
+        } else if (o.state === 'verifying') {
+          o.state = 'done';
+          o.message = 'verified';
+        }
+        return ok({ state: o.state, pct: o.pct, chip: o.chip, message: o.message });
+      }
+      case 'access.get': {
+        return ok({
+          token: this.opts.token,
+          fingerprint: 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99',
+          remote: this.relayUrl !== null,
+          relay_url: this.relayUrl ?? '',
+        });
+      }
+      case 'access.token.set': {
+        const { token } = args;
+        if (typeof token !== 'string' || token.length < 8 || token.length > 64) return no('bad_args', 'token: 8..64 characters');
+        if (/[^\x21-\x7e]/.test(token)) return no('bad_args', 'token: printable ASCII without spaces');
+        this.opts.token = token;
+        return ok();
+      }
+      case 'access.relay.set': {
+        const { url, secret } = args;
+        if (typeof url !== 'string' || !/^(wss?|https?):\/\//.test(url)) return no('bad_args', 'url: ws://, wss://, http:// or https://');
+        if (typeof secret !== 'string' || secret.length === 0) return no('bad_args', 'secret');
+        this.relayUrl = url;
+        return ok();
+      }
+      case 'access.relay.clear': {
+        this.relayUrl = null;
+        return ok();
+      }
+      case 'hub.reboot': {
+        this.rebootCalls += 1;
+        return ok();
+      }
+      case 'hub.factory_reset': {
+        this.factoryResetCalls += 1;
+        this.entities = [];
+        this.rules = [];
+        this.schedules = [];
+        this.scenes = [];
+        this.resync();
+        return ok();
+      }
+      case 'wifi.forget': {
+        this.wifiForgetCalls += 1;
         return ok();
       }
       default:

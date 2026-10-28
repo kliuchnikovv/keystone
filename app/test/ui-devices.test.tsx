@@ -2,11 +2,12 @@
 import './setup-dom';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { modeOptions, stepped, stepperFor } from '../src/model/devices';
+import { modeOptions, sliderFor, stepped, stepperFor } from '../src/model/devices';
 import { formatValue } from '../src/model/format';
 import { inputUnit, parseInput } from '../src/model/automation';
 import type { Attr, Entity } from '../src/protocol/messages';
-import { DeviceCard } from '../src/ui/DeviceCard';
+import { DeviceSheet } from '../src/ui/DeviceSheet';
+import { sliderValueAt } from '../src/ui/Slider';
 
 afterEach(cleanup);
 
@@ -19,8 +20,19 @@ const attr = (id: number, name: string, vt: Attr['vt'], value: Attr['value'], fl
 });
 const entity = (device: string, name: string, attrs: Attr[]): Entity => ({ id: 0x200, name, chip: 1, device, attrs });
 
-function card(e: Entity, onSet = vi.fn()) {
-  render(<DeviceCard entity={e} reachable isPending={() => false} onSet={onSet} onRename={async () => true} />);
+function sheet(e: Entity, onSet = vi.fn()) {
+  render(
+    <DeviceSheet
+      entity={e}
+      status="online"
+      reachable
+      visible
+      isPending={() => false}
+      onSet={onSet}
+      onClose={() => {}}
+      onRename={async () => true}
+    />,
+  );
   return onSet;
 }
 
@@ -50,12 +62,14 @@ describe('values of the new device types', () => {
 
 describe('steppers and modes', () => {
   const w: Attr['flags'] = ['r', 'w', 'rep'];
-  it('colour temperature steps in mireds and stays inside the lamp range', () => {
+  it('colour temperature is a slider in kelvin, the wire speaks mireds', () => {
     const ct = attr(4, 'color_temp', 'u16', 250, w);
-    expect(stepperFor(ct)?.up).toBe('warmer');
-    expect(stepped(ct, 1)).toBe(275);
-    expect(stepped({ ...ct, value: 490 }, 1)).toBe(500);
-    expect(stepped({ ...ct, value: 160 }, -1)).toBe(153);
+    expect(stepperFor(ct)).toBeNull();
+    const s = sliderFor(ct);
+    expect(s?.min).toBe(2000);
+    expect(s?.max).toBe(6500);
+    expect(s?.show(250)).toBe(4000);
+    expect(s?.wire(4000)).toBe(250);
   });
   it('target temperature moves half a degree within 5..35', () => {
     const sp = attr(0x40, 'setpoint', 'i16', 205, w);
@@ -70,26 +84,36 @@ describe('steppers and modes', () => {
   });
 });
 
-describe('device cards', () => {
+describe('device sheet', () => {
   const w: Attr['flags'] = ['r', 'w', 'rep'];
-  it('a colour lamp shows brightness and colour temperature controls', () => {
-    const onSet = card(
+  it('a colour lamp shows brightness and colour temperature sliders', () => {
+    sheet(
       entity('light', 'lamp', [
         attr(1, 'on_off', 'bool', true, w),
         attr(2, 'brightness', 'u8', 127, w),
         attr(4, 'color_temp', 'u16', 250, w),
       ]),
     );
-    expect(screen.getByLabelText('lamp brightness').textContent).toBe('50 %');
-    expect(screen.getByLabelText('lamp color temperature').textContent).toBe('4000 K');
-    fireEvent.click(screen.getByLabelText('lamp warmer'));
-    expect(onSet).toHaveBeenCalledWith(4, 275);
-    fireEvent.click(screen.getByLabelText('lamp brighter'));
-    expect(onSet).toHaveBeenCalledWith(2, 152);
+    const brightness = screen.getByLabelText('lamp brightness');
+    expect(brightness.getAttribute('aria-valuetext')).toBe('50 %');
+    expect(brightness.getAttribute('aria-valuemin')).toBe('0');
+    expect(brightness.getAttribute('aria-valuemax')).toBe('100');
+    const colour = screen.getByLabelText('lamp color temperature');
+    expect(colour.getAttribute('aria-valuetext')).toBe('4000 K');
+    expect(colour.getAttribute('aria-valuemin')).toBe('2000');
+    expect(colour.getAttribute('aria-valuemax')).toBe('6500');
+  });
+
+  it('a touch on the track lands on the right value', () => {
+    expect(sliderValueAt(0, 200, 0, 100, 10)).toBe(0);
+    expect(sliderValueAt(100, 200, 0, 100, 10)).toBe(50);
+    expect(sliderValueAt(199, 200, 0, 100, 10)).toBe(100);
+    expect(sliderValueAt(100, 200, 2000, 6500, 100)).toBe(4300);
+    expect(sliderValueAt(500, 0, 0, 100, 10)).toBe(0); // no width yet: the minimum
   });
 
   it('a thermostat shows the temperature, steps the target and switches mode', () => {
-    const onSet = card(
+    const onSet = sheet(
       entity('climate', 'hall', [
         attr(0x10, 'temperature', 'i16', 205),
         attr(0x40, 'setpoint', 'i16', 210, w),
@@ -105,7 +129,7 @@ describe('device cards', () => {
   });
 
   it('a sensor lists its readings, a contact sensor says open or closed', () => {
-    card(
+    sheet(
       entity('sensor', 'bedroom', [
         attr(0x10, 'temperature', 'i16', 195),
         attr(0x11, 'humidity', 'u16', 480),
@@ -116,14 +140,14 @@ describe('device cards', () => {
     expect(screen.getByText('48 %')).toBeTruthy();
     expect(screen.getByText('64 %')).toBeTruthy();
     cleanup();
-    card(entity('contact', 'door', [attr(0x51, 'contact', 'bool', false)]));
+    sheet(entity('contact', 'door', [attr(0x51, 'contact', 'bool', false)]));
     expect(screen.getByText('Open')).toBeTruthy();
   });
 
-  it('a button card hides the pulse and explains itself', () => {
-    card(entity('button', 'remote', [attr(0x60, 'event', 'enum8', 0), attr(0x1f, 'battery', 'u8', 90)]));
+  it('a button hides the pulse and explains itself', () => {
+    sheet(entity('button', 'remote', [attr(0x60, 'event', 'enum8', 0), attr(0x1f, 'battery', 'u8', 90)]));
     expect(screen.queryByText('Idle')).toBeNull();
-    expect(screen.getByText(/start automations/)).toBeTruthy();
+    expect(screen.getByText('This button has no settings here — it can trigger rules.')).toBeTruthy();
     expect(screen.getByText('90 %')).toBeTruthy();
   });
 });

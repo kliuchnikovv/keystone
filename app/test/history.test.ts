@@ -165,7 +165,7 @@ describe('time', () => {
 
   it('shows a clock time when the hub knows the time, how long ago when not', () => {
     const d = new Date(2026, 9, 13, 14, 5, 9);
-    expect(formatEventTime(rec({ kind: 'state', time: d.getTime() / 1000 }), 0)).toBe('14:05:09');
+    expect(formatEventTime(rec({ kind: 'state', time: d.getTime() / 1000 }), 0)).toBe('14:05'); // the brief says 14:32, not 14:32:09
     expect(formatEventTime(rec({ kind: 'state', time: null, age: 90, fetchedAt: 0 }), 0)).toBe('1m ago');
   });
 

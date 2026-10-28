@@ -18,6 +18,7 @@ import type {
 } from '../protocol/messages';
 import { attrLabel, formatValue } from './format';
 import { deviceTitle, primarySwitch } from './devices';
+import { sceneNameProblem } from './names';
 
 // ---- wording -----------------------------------------------------------------------
 
@@ -370,19 +371,14 @@ export function ruleRequest(f: RuleForm): Built {
   }
   const cd = f.cooldown.trim();
   if (cd !== '') {
-    const s = Number(cd) * 60;
-    if (!/^\d+(\.\d+)?$/.test(cd) || !Number.isInteger(Math.round(s)) || Math.round(s) < 1 || Math.round(s) > 65535) {
+    // The protocol counts in seconds; the hub accepts 1..65535.
+    const s = Number(cd);
+    if (!/^\d+$/.test(cd) || !Number.isInteger(s) || s < 1 || s > 65535) {
       return { ok: false, error: 'At most once per: 1 second to 18 hours' };
     }
-    args.cooldown_s = Math.round(s);
+    args.cooldown_s = s;
   }
   return { ok: true, value: args };
-}
-
-/** A device name the hub will accept (see the protocol doc, names). */
-export function nameProblem(name: string): string | null {
-  if (!/^[a-z][a-z0-9_]{0,22}$/.test(name)) return 'Use a-z, 0-9 and _, start with a letter, at most 23 characters';
-  return null;
 }
 
 // ---- scenes ----------------------------------------------------------------------------
@@ -404,7 +400,7 @@ export function captureScene(entities: Entity[], ids: number[]): SceneAction[] {
 }
 
 export function sceneRequest(name: string, actions: SceneAction[]): Built {
-  const problem = nameProblem(name);
+  const problem = sceneNameProblem(name);
   if (problem) return { ok: false, error: problem };
   if (actions.length === 0) return { ok: false, error: 'Choose at least one device that has something to save' };
   if (actions.length > MAX_SCENE_ACTIONS) {

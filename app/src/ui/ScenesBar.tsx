@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import type { HomeState } from '../protocol/store';
@@ -8,9 +7,6 @@ import { radius, useTheme } from './theme';
 /** One tap per scene, above the rooms. Says how many settings went out (and how many could not). */
 export function ScenesBar({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
-  const [note, setNote] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   if (home.scenes.length === 0) return null;
 
   const run = async (name: string) => {
@@ -18,9 +14,7 @@ export function ScenesBar({ home, commands }: { home: HomeState; commands: Comma
     if (res === null) return; // the failure toast says why
     const sent = Number(res.sent ?? 0);
     const skipped = Number(res.skipped ?? 0);
-    setNote(skipped > 0 ? `${name}: ${sent} applied, ${skipped} could not be (a device is gone or read-only)` : `${name} applied`);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setNote(null), 4000);
+    commands.notify(skipped > 0 ? `Applied '${name}': ${sent} sent, ${skipped} skipped` : `Applied '${name}': ${sent} settings sent`);
   };
 
   return (
@@ -39,7 +33,6 @@ export function ScenesBar({ home, commands }: { home: HomeState; commands: Comma
           </Pressable>
         ))}
       </ScrollView>
-      {note && <Text style={{ color: t.muted, fontSize: 12, marginTop: 8 }}>{note}</Text>}
     </View>
   );
 }

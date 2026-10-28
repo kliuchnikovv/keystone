@@ -127,7 +127,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export function formatEventTime(e: Recorded, nowMs: number): string {
   if (e.time === null) return formatAgo(secondsAgo(e, nowMs));
   const d = new Date(e.time * 1000);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** The day heading an event falls under ("Today", "Yesterday", "Mon 12 Oct"); null when the clock was not synced. */

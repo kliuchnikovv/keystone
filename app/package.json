@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Keystone hub client: protocol library, mock hub and (later) the Expo app. See ../docs/app-protocol.md",
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

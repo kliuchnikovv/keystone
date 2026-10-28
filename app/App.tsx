@@ -1,28 +1,150 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { useDiscovery } from './src/hooks/useDiscovery';
+import { useDiscovery, type Discovery } from './src/hooks/useDiscovery';
+import { useHome, useHubClient, type HubConnection } from './src/hooks/useHub';
+import { createPaletteStore } from './src/palette';
 import { createSettingsStore, type Settings } from './src/settings';
 import { defaultStore } from './src/storage';
-import { ConnectScreen } from './src/ui/ConnectScreen';
-import { Home } from './src/ui/Home';
+import { ConnectScreen, type ConnectFailure } from './src/ui/ConnectScreen';
+import { Home, HomeBody } from './src/ui/Home';
 import { SetupScreen } from './src/ui/SetupScreen';
+import { ThemeProvider, type PaletteId } from './src/ui/theme';
 
-// mDNS browsing runs only while this screen is up.
-function ConnectWithDiscovery(props: Omit<ComponentProps<typeof ConnectScreen>, 'discovery'>) {
-  return <ConnectScreen {...props} discovery={useDiscovery()} />;
+/** A connection that is being tried right now: the form stays up, the button spins. */
+function Trying({
+  settings,
+  discovery,
+  onReady,
+  onTry,
+  onSetup,
+}: {
+  settings: Settings;
+  discovery: Discovery;
+  onReady(settings: Settings, client: HubConnection): void;
+  onTry(settings: Settings): void;
+  onSetup(): void;
+}) {
+  const client = useHubClient(settings);
+  const home = useHome(client);
+  const [failure, setFailure] = useState<ConnectFailure | null>(null);
+
+  // New values: the old verdict is about the old values.
+  useEffect(() => setFailure(null), [settings.url, settings.token]);
+
+  useEffect(() => {
+    if (home.status === 'ready') {
+      onReady(settings, client);
+      return;
+    }
+    if (home.status === 'unauthorized') setFailure('token');
+    else if (home.status === 'untrusted') setFailure(home.error === 'pin_unsupported' ? 'pin' : 'certificate');
+    else if (home.status === 'incompatible') setFailure('version');
+    else if (home.status === 'reconnecting') setFailure('unreachable');
+  }, [home.status, home.error, settings, client, onReady]);
+
+  return (
+    <ConnectScreen
+      initial={settings}
+      discovery={discovery}
+      connecting={failure === null}
+      failure={failure}
+      onRetry={() => {
+        client.close();
+        client.connect();
+      }}
+      onSave={onTry}
+      onSetup={onSetup}
+    />
+  );
+}
+
+/** The Connect screen, and the attempt to reach the hub that follows it.
+ * mDNS browsing runs only while this screen is up. */
+function ConnectFlow({
+  initial,
+  pending,
+  onSetup,
+  onConnected,
+  onTry,
+  onCancel,
+}: {
+  initial?: Settings | null;
+  pending: Settings | null;
+  onSetup(): void;
+  onConnected(settings: Settings, client: HubConnection): void;
+  onTry(settings: Settings): void;
+  onCancel?(): void;
+}) {
+  const discovery = useDiscovery();
+  if (pending) {
+    return <Trying settings={pending} discovery={discovery} onReady={onConnected} onTry={onTry} onSetup={onSetup} />;
+  }
+  return (
+    <ConnectScreen
+      {...(initial ? { initial } : {})}
+      discovery={discovery}
+      onSetup={onSetup}
+      onSave={onTry}
+      onCancel={onCancel}
+    />
+  );
 }
 
 export default function App() {
   const store = useMemo(() => createSettingsStore(defaultStore), []);
+  const palettes = useMemo(() => createPaletteStore(defaultStore), []);
   // undefined = still reading the saved settings, null = none (ask for them).
   const [settings, setSettings] = useState<Settings | null | undefined>(undefined);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [session, setSession] = useState<{ settings: Settings; client: HubConnection } | null>(null);
+  const [pending, setPending] = useState<Settings | null>(null);
+  const [editing, setEditing] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
+  // The palette is the app's own look — a setting of the phone.
+  const [palette, setPaletteState] = useState<PaletteId>('sandstone');
 
   useEffect(() => {
     void store.load().then(setSettings);
-  }, [store]);
+    void palettes.load().then(setPaletteState);
+  }, [store, palettes]);
+
+  const setPalette = useCallback(
+    (id: PaletteId) => {
+      setPaletteState(id);
+      void palettes.save(id);
+    },
+    [palettes],
+  );
+
+  const onConnected = useCallback(
+    (s: Settings, client: HubConnection) => {
+      setPending(null);
+      setEditing(false);
+      setSettings(s);
+      setSession({ settings: s, client });
+      void store.save(s);
+    },
+    [store],
+  );
+
+  const onChangeHub = useCallback(() => {
+    // Back to the Connect screen, with the values we had.
+    setSession(null);
+    setPending(null);
+    setEditing(true);
+  }, []);
+
+  const onTokenChange = useCallback(
+    async (token: string) => {
+      // The hub restarted its server with the new token: store it and reconnect.
+      const base = session?.settings ?? (settings as Settings);
+      const next = { ...base, token };
+      await store.save(next);
+      setSession(null);
+      setSettings(next);
+    },
+    [session, settings, store],
+  );
 
   const content =
     settings === undefined ? (
@@ -33,35 +155,36 @@ export default function App() {
       <SetupScreen
         onCancel={() => setSettingUp(false)}
         onDone={(s) => {
-          setNotice(null);
           setSettingUp(false);
           void store.save(s).then(() => setSettings(s));
         }}
       />
-    ) : settings === null ? (
-      <ConnectWithDiscovery
-        notice={notice}
+    ) : settings === null || editing || pending !== null ? (
+      <ConnectFlow
+        initial={settings}
+        pending={pending}
         onSetup={() => setSettingUp(true)}
-        onSave={(s) => {
-          setNotice(null);
-          void store.save(s).then(() => setSettings(s));
-        }}
+        onConnected={onConnected}
+        onTry={(s) => setPending(s)}
+        onCancel={editing ? () => setEditing(false) : undefined}
       />
+    ) : session ? (
+      <HomeBody settings={session.settings} client={session.client} onChangeHub={onChangeHub} onTokenChange={onTokenChange} palette={palette} onPalette={setPalette} />
     ) : (
       <Home
         key={`${settings.url}|${settings.token}|${settings.fingerprint ?? ''}`}
         settings={settings}
-        onChangeHub={() => {
-          setNotice(null);
-          setSettings(null);
-        }}
+        onChangeHub={onChangeHub}
+        onTokenChange={onTokenChange}
+        palette={palette}
+        onPalette={setPalette}
       />
     );
 
   return (
-    <>
+    <ThemeProvider palette={palette}>
       {content}
       <StatusBar style="auto" />
-    </>
+    </ThemeProvider>
   );
 }

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { Entity, Rule, Schedule, Timer } from '../src/protocol/messages';
 import {
   addableSettings, draftsFromCurrentState, draftsRequest, inputText, sceneDrafts, describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, validDate, localDate, describeDate, formatCountdown, inputUnit,
-  nameProblem, opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
+  opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
 } from '../src/model/automation';
+import { nameProblem, sceneNameProblem } from '../src/model/names';
 import { defaultEntities } from '../tools/mock-hub/hub';
 
 const ents = defaultEntities(); // plug1 (256), lamp (257), motion sensor (258)
@@ -166,7 +167,7 @@ describe('request builders', () => {
     const f = base();
     f.between = { from: '18:00', to: '23:00' };
     f.and = { option: opt('plug1 · Power draw'), op: '>', value: '5' };
-    f.cooldown = '5';
+    f.cooldown = '300';
     expect(ruleRequest(f)).toEqual({
       ok: true,
       value: {
@@ -201,14 +202,24 @@ describe('request builders', () => {
     expect(bad((f) => (f.and = { option: null, op: '>', value: '1' }))).toBe('Only while: pick what to look at');
     expect(bad((f) => (f.cooldown = '0'))).toMatch(/At most once per/);
     expect(bad((f) => (f.cooldown = 'x'))).toMatch(/At most once per/);
-    expect(bad((f) => (f.cooldown = '2000'))).toMatch(/At most once per/); // beyond 65535 s
+    expect(bad((f) => (f.cooldown = '1.5'))).toMatch(/At most once per/); // seconds are whole
+    expect(bad((f) => (f.cooldown = '70000'))).toMatch(/At most once per/); // beyond 65535 s
   });
 });
 
 describe('names', () => {
-  it('match the hub rule', () => {
-    for (const n of ['lamp', 'kitchen_2', 'a'.repeat(23)]) expect(nameProblem(n)).toBeNull();
-    for (const n of ['', 'Lamp', '1lamp', '_lamp', 'my lamp', '0x10', 'a'.repeat(24)]) expect(nameProblem(n)).not.toBeNull();
+  it('a device name a person can read', () => {
+    for (const n of ['lamp', 'Living room', 'Kitchen lamp', 'Lamp (main)', 'Кухня розетка', 'abcdefghijklmno']) {
+      expect(nameProblem(n)).toBeNull();
+    }
+    for (const n of ['', ' lead', 'trail ', '0x10', '123', 'bad/name', 'a'.repeat(16), 'Кухня розетка длинная']) {
+      expect(nameProblem(n)).not.toBeNull();
+    }
+  });
+
+  it('a scene name stays machine-like', () => {
+    for (const n of ['lamp', 'kitchen_2', 'a'.repeat(23)]) expect(sceneNameProblem(n)).toBeNull();
+    for (const n of ['', 'Lamp', 'my lamp', 'a'.repeat(24)]) expect(sceneNameProblem(n)).not.toBeNull();
   });
 });
 

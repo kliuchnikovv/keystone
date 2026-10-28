@@ -1,5 +1,5 @@
 // Rooms. The hub protocol has no room field — an entity is just an id, a device type
-// and a name — so a room is read off the name prefix (`kitchen_plug`, `hall_sensor`).
+// and a name — so a room is read off the name (`kitchen_plug`, `Living room lamp`).
 // Anything we do not recognise stays unassigned rather than being guessed into a room.
 import type { Entity } from '../protocol/messages';
 
@@ -36,17 +36,28 @@ const ROOM_WORDS: Record<string, string> = {
   ground: 'Ground floor',
 };
 
+/** Two-word room names, as a person would write them. */
+const ROOM_PHRASES: Record<string, string> = {
+  'living room': 'Living room',
+  'dining room': 'Dining room',
+  'kids room': 'Kids room',
+  'guest room': 'Guest room',
+  'utility room': 'Utility room',
+};
+
 /** The room an entity belongs to, or null when its name does not say. */
 export function roomOf(e: Entity): string | null {
   if (e.name === null) return null;
-  const parts = e.name.split('_');
-  const head = parts[0] ?? '';
-  const one = ROOM_WORDS[head];
-  if (one !== undefined) return one;
-  if (parts.length > 1) {
-    const two = ROOM_WORDS[`${head}_${parts[1]}`];
-    if (two !== undefined) return two;
+  const words = e.name.split(/[\s_]+/).filter((w) => w.length > 0);
+  const head = words[0];
+  if (head === undefined) return null;
+  const second = words[1];
+  if (second !== undefined) {
+    const phrase = ROOM_PHRASES[`${head.toLowerCase()} ${second.toLowerCase()}`];
+    if (phrase !== undefined) return phrase;
   }
+  const one = ROOM_WORDS[head.toLowerCase()];
+  if (one !== undefined) return one;
   return null;
 }
 

@@ -5,7 +5,7 @@ import { describeWifi, signalText, wifiRequest } from '../model/automation';
 import type { WifiNetwork } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
-import { useTheme } from './theme';
+import { radius, useTheme } from './theme';
 
 /**
  * The hub's Wi-Fi: which network it is on, and a way to move it to another. The hub tries the new network
@@ -41,7 +41,7 @@ export function WifiCard({ home, commands }: { home: HomeState; commands: Comman
   };
 
   return (
-    <View accessibilityLabel="Wi-Fi" style={[styles.card, { backgroundColor: t.card, borderColor: t.border }]}>
+    <View accessibilityLabel="Wi-Fi" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
       <Text style={[styles.h2, { color: t.text }]}>Wi-Fi</Text>
       <Text style={{ color: t.muted }}>{describeWifi(home.hub)}</Text>
       {sent && !open && (
@@ -78,13 +78,13 @@ export function WifiCard({ home, commands }: { home: HomeState; commands: Comman
             The hub keeps the new network only if it gets an address there within about 30 seconds; otherwise it goes back.
           </Text>
           <View style={styles.row}>
-            <Button kind="plain" label="Cancel" onPress={() => setOpen(false)} />
+            <Button kind="secondary" label="Cancel" onPress={() => setOpen(false)} />
             <Button label="Connect" onPress={connect} />
           </View>
         </View>
       ) : (
         <View style={styles.row}>
-          <Button kind="plain" label="Change network" onPress={() => { setError(null); setSent(null); setOpen(true); }} />
+          <Button kind="secondary" size="compact" label="Change network" onPress={() => { setError(null); setSent(null); setOpen(true); }} />
         </View>
       )}
     </View>
@@ -92,8 +92,8 @@ export function WifiCard({ home, commands }: { home: HomeState; commands: Comman
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 4 },
+  card: { borderWidth: 1, padding: 14, gap: 4 },
   h2: { fontSize: 17, fontWeight: '600' },
   row: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
-  net: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  net: { borderWidth: 1, borderRadius: radius.field, paddingHorizontal: 14, paddingVertical: 10 },
 });

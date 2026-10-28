@@ -5,8 +5,8 @@ import type { ReactNode } from 'react';
 // lucide geometry as the design mockups (24×24 grid, round caps, 2 px stroke).
 export type GlyphName =
   | 'light' | 'switch' | 'sensor' | 'occupancy' | 'contact' | 'cover' | 'lock' | 'climate' | 'button'
-  | 'home' | 'automation' | 'hub' | 'history' | 'plus' | 'pencil' | 'chevron' | 'play' | 'check'
-  | 'bolt' | 'chip' | 'signal';
+  | 'home' | 'automation' | 'hub' | 'history' | 'plus' | 'pencil' | 'chevron' | 'back' | 'play' | 'check'
+  | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff';
 
 export interface GlyphProps {
   name: GlyphName;
@@ -166,6 +166,8 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
       );
     case 'chevron':
       return <Path d="m9 18 6-6-6-6" {...c} />;
+    case 'back':
+      return <Path d="m15 18-6-6 6-6" {...c} />;
     case 'play':
       return <Path d="m6 3 14 9-14 9z" {...on} />;
     case 'check':
@@ -192,6 +194,22 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
           <Path d="M5 12.6a11 11 0 0 1 14 0" {...c} />
           <Path d="M8.5 16.1a6 6 0 0 1 7 0" {...on} />
           <Path d="M12 20h.01" {...c} />
+        </>
+      );
+    case 'eye':
+      return (
+        <>
+          <Path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" {...c} />
+          <Circle cx="12" cy="12" r="3" {...on} />
+        </>
+      );
+    case 'eyeOff':
+      return (
+        <>
+          <Path d="M9.9 9.9a3 3 0 1 0 4.2 4.2" {...c} />
+          <Path d="M10.7 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13 13 0 0 1-1.7 2.7" {...c} />
+          <Path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" {...c} />
+          <Path d="M2 2l20 20" {...c} />
         </>
       );
   }

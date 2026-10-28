@@ -19,6 +19,14 @@ describe('rooms come from the device name', () => {
     expect(roomOf(device('dining_room_light'))).toBe('Dining room');
   });
 
+  it('reads a room out of a name a person wrote', () => {
+    expect(roomOf(device('Living room lamp'))).toBe('Living room');
+    expect(roomOf(device('Kitchen plug'))).toBe('Kitchen');
+    expect(roomOf(device('Bedroom light'))).toBe('Bedroom');
+    expect(roomOf(device('Dining room light'))).toBe('Dining room');
+    expect(roomOf(device('living room plug'))).toBe('Living room');
+  });
+
   it('leaves a name that does not name a room alone', () => {
     // `front_door` starts with "front", which is not a room — better unassigned than wrong.
     expect(roomOf(device('front_door'))).toBeNull();

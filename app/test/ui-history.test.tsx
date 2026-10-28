@@ -43,7 +43,7 @@ describe('History tab', () => {
 
     act(() => hub.setValue(0x0102, 0x50, true));
     await waitFor(() => expect(screen.getByLabelText(/Motion sensor 0x0102 detected someone/)).toBeTruthy(), { timeout: 6000 });
-    const rows = screen.getAllByLabelText(/, \d\d:\d\d:\d\d$/);
+    const rows = screen.getAllByLabelText(/, \d\d:\d\d$/);
     expect(rows[0]!.getAttribute('aria-label')).toMatch(/^Motion sensor 0x0102 detected someone/);
     expect(rows[rows.length - 1]!.getAttribute('aria-label')).toMatch(/^Hub started/);
   }, 15000);
@@ -51,8 +51,8 @@ describe('History tab', () => {
   it('a command from the app shows as what the hub sent and what the device then did', async () => {
     renderHome();
     await screen.findByText('lamp');
-    fireEvent.click(screen.getByLabelText('lamp power'));
-    await waitFor(() => expect((screen.getByLabelText('lamp power') as HTMLInputElement).checked).toBe(true));
+    fireEvent.click(screen.getByLabelText('Device lamp'));
+    await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: 'History' }));
     await events().findByText('Sent to lamp: turned on from the app');
     await events().findByText('lamp turned on');
