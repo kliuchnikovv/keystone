@@ -39,6 +39,10 @@ class EntityRegistry {
   using Entity = EntityT<MaxAttrs>;
   using Names = EntityNames<MaxEntities, MaxNameLen>;
 
+  /** How long a name may be, in bytes (without the terminator). Buffers that hold a
+   * name have to be at least this big - the compiler checks that, too. */
+  static constexpr std::size_t kMaxNameLen = MaxNameLen;
+
   // Add or replace an entity from a decoded DECLARE, owned by `chip_id`. Returns
   // false if the entity has more than MaxAttrs attributes or the table is full.
   bool declare(std::uint8_t chip_id, const hubproto::DeclareView& view) noexcept;
