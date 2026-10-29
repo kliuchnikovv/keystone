@@ -39,6 +39,10 @@ Matter-over-WiFi.
   C++17, **zero radio deps**. Host-testable.
 - `firmware/brain-s3/` — ESP-IDF app: the brain (ESP32-S3-Zero).
 - `firmware/zigbee-c6/` — ESP-IDF app: the Zigbee coordinator (ESP32-C6).
+- `relay/` — the remote-access relay server, **Go** (one static binary): `policy.go`
+  (the security rules, unit-tested), `server.go` (sockets, tunnels, status page),
+  `main.go` (flags and environment). `go test ./...` inside it. The wire protocol
+  must not change: the hub firmware speaks it.
 - `firmware/thread-c6/` — ESP-IDF app: Matter Bridge over on-chip Thread
   (ESP32-C6, chip 0x02); built in the esp-matter Docker image
   (`scripts/matter-build.sh thread-c6`).
@@ -51,9 +55,11 @@ Matter-over-WiFi.
 - `app/` — the phone/web client (Expo, TypeScript): protocol library, screens, a mock
   hub, conformance tools, and the native pinning/mDNS module (`modules/keystone-net`,
   not yet built on a device). See `app/README.md`.
-- `scripts/` — `matter-build.sh` (esp-matter Docker build), `gen-hub-cert.sh` (TLS identity).
+- `scripts/` — `matter-build.sh` (esp-matter Docker build), `gen-hub-cert.sh` (TLS identity),
+  `build-relay.sh` (the Go relay binary), `make-label.sh` (the label that goes on the box).
 - `docs/` — per-phase notes (wiring, expected output), `ota.md`, `app-protocol.md`
-  (the app protocol and its status), and the backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
+  (the app protocol and its status), **the roadmap (`roadmap.md` — the single source of
+  truth for priorities)**, and the per-subsystem backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
   `matter-backlog.md`).
 - `docs/design/` — the client app's design system: `keystone-spec.html` (the spec: palette,
   typography, icons, every screen with its states, tables for the engineer), `tokens.json`
@@ -136,6 +142,8 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 
 - **Design & rationale:** [SPEC.md](SPEC.md) (the source of truth).
 - **Current phase status & what's verified:** [CLAUDE.md](CLAUDE.md) § Status.
+- **What we are building towards & the order of the work:** [docs/roadmap.md](docs/roadmap.md).
+- **The demo procedure, box to working home:** [docs/golden-path.md](docs/golden-path.md).
 - **Per-phase wiring/output notes:** `docs/`.
 - **Client app design system:** [docs/design/keystone-spec.html](docs/design/keystone-spec.html)
   (open it in a browser) and the brief it implements, [docs/design-brief.md](docs/design-brief.md).

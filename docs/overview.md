@@ -7,6 +7,7 @@
 - **Инварианты архитектуры** (нарушать нельзя): [SPEC.md](../SPEC.md) §3
 - **Текущий статус по фичам, с датами и верификацией:** [CLAUDE.md § Status](../CLAUDE.md)
 - **Домениые бэклоги:** [brain](brain-backlog.md), [matter](matter-backlog.md), [zigbee](zigbee-backlog.md), [app-protocol](app-protocol.md), [cross-cutting](backlog.md)
+- **Роадмап и приоритеты:** [roadmap.md](roadmap.md) — единственный источник правды о порядке работ
 
 ---
 
@@ -111,6 +112,10 @@ Matter-controller в масштабе, Thread border router, полноценн�
 
 ## 3. Сводный бэклог
 
+> ⚠️ **Приоритеты живут в [roadmap.md](roadmap.md)** — это единственный источник правды
+> о порядке работ. Таблица ниже — срез на момент её написания (29.10.2026), не источник:
+> часть пунктов уже сделана или переехала в роадмап.
+
 Приоритизация моя, обоснования короткие. Три яруса: Now = завершить то, что уже
 начато или блокирует MVP; Next = нужно скоро, но не блокер; Later = в идее.
 
@@ -118,7 +123,7 @@ Matter-controller в масштабе, Thread border router, полноценн�
 
 | # | Что | Почему сейчас | Источник |
 |---|---|---|---|
-| N1 | **Карточка Apple Home bridge на Hub-вкладке** приложения: статус thread-c6, большой код `3497-0112-332`, инструкция, deep link `Open Apple Home`. | Пользователь [описал флоу](../CLAUDE.md) — финальный шаг first-time setup, без него человек не поймёт, как добавить хаб в Apple Home. | — (новое, из обсуждения) |
+| N1 | ✅ **Карточка Apple Home bridge на Hub-вкладке** приложения: большой код `3497-0112-332`, кнопка «скопировать», инструкция. | Финальный шаг first-time setup, без него человек не поймёт, как добавить хаб в Apple Home. | [app/src/ui/HubScreen.tsx](../app/src/ui/HubScreen.tsx) |
 | N2 | **Прогон iOS-билда на физическом iPhone**: Local Network permission, три pin-проверки (правильный, неверный, подменённый сертификат), discovery через mDNS. | Swift-модуль ни разу не выполнялся на устройстве; симулятор не воспроизводит LAN-permission. | [docs/ios-build.md](ios-build.md), [app-protocol.md](app-protocol.md) §10 |
 | N3 | **Setup через AP на телефоне**: виден ли `Keystone-XXXX`, отвечает ли 192.168.4.1:8443 по WPA2, Swift/Kotlin `connectLearning`. | Полный setup-флоу не прогонялся — Pi в стенде одноинтерфейсный. | [app-protocol.md §11](app-protocol.md), [brain-backlog.md §3](brain-backlog.md) |
 | N4 | **Unpair на реальном устройстве**: сам Leave + HELLO + Matter-сторона (Undeclare→`app_bridge_remove_device`). | Код написан и прошит, но проверка снимает единственный плаг — нужен второй или готовность переподключать. | [zigbee-backlog.md §6](zigbee-backlog.md), [matter-backlog.md](matter-backlog.md) |
