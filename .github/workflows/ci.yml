@@ -1,0 +1,58 @@
+name: ci
+
+# The cheapest insurance in the project: the host tests, the app tests and the
+# relay tests run on every push. Nothing here needs hardware.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host:
+    name: host tests (libhubproto + core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build -j2
+      - name: test
+        run: ctest --test-dir build --output-on-failure
+
+  app:
+    name: app tests (vitest + tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: install
+        run: npm ci
+        working-directory: app
+      - name: typecheck
+        run: npm run typecheck
+        working-directory: app
+      - name: test
+        run: npm test
+        working-directory: app
+
+  relay:
+    name: relay tests (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: vet
+        run: go vet ./...
+        working-directory: relay
+      - name: test
+        run: go test ./...
+        working-directory: relay
