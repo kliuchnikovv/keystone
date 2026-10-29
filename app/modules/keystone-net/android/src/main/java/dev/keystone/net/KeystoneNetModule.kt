@@ -3,6 +3,7 @@ package dev.keystone.net
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.util.Log
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import okhttp3.OkHttpClient
@@ -53,6 +54,9 @@ private class PinTrust(private val pin: ByteArray?) : X509TrustManager {
     seen = hex(digest)
     if (pin != null && !MessageDigest.isEqual(digest, pin)) {
       mismatch = true
+      // The console log is the only place a person can see this: the app shows a
+      // banner, but the log says which certificate was expected and which one came.
+      Log.w("KeystoneNet", "certificate mismatch - expected ${hex(pin)}, the server presented ${hex(digest)}")
       throw CertificateException("certificate does not match the pinned fingerprint")
     }
   }
@@ -109,6 +113,13 @@ class KeystoneNetModule : Module() {
 
   /** `pin` null = learn: accept any certificate and report its fingerprint in `open`. */
   private fun openSocket(id: String, url: String, pin: ByteArray?) {
+    // Which peer this is, and how it is being trusted: the console log is where
+    // a person looks when a connection does not come up.
+    if (pin != null) {
+      Log.i("KeystoneNet", "connecting to $url, pinning the certificate ${hex(pin)}")
+    } else {
+      Log.i("KeystoneNet", "connecting to $url, accepting the certificate it presents")
+    }
     val trust = PinTrust(pin)
     val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
     val client = OkHttpClient.Builder()

@@ -48,6 +48,13 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
   }
 
   func start(url: URL) {
+    // Which peer this is, and how it is being trusted: the console log is where
+    // a person looks when a connection does not come up.
+    if let p = pin {
+      NSLog("KeystoneNet: connecting to %@, pinning the certificate %@", url.absoluteString, hexColon(p))
+    } else {
+      NSLog("KeystoneNet: connecting to %@, accepting the certificate it presents", url.absoluteString)
+    }
     let s = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
     session = s
     let t = s.webSocketTask(with: url)
@@ -101,12 +108,21 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
     }
     let digest = Array(SHA256.hash(data: SecCertificateCopyData(leaf) as Data))
     seen = hexColon(digest)
-    if pin == nil || digest == pin! {
-      completionHandler(.useCredential, URLCredential(trust: trust))
-    } else {
+    if let p = pin {
+      if digest == p {
+        completionHandler(.useCredential, URLCredential(trust: trust))
+        return
+      }
       mismatch = true
+      // The console log is the only place a person can see this: the app shows a
+      // banner, but the log says which certificate was expected and which one came.
+      NSLog("KeystoneNet: certificate mismatch - expected %@, the server presented %@",
+            hexColon(p), hexColon(digest))
       completionHandler(.cancelAuthenticationChallenge, nil)
+      return
     }
+    // No pin: accept what the server presents and report it (first-time setup).
+    completionHandler(.useCredential, URLCredential(trust: trust))
   }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol proto: String?) {
