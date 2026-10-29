@@ -4,14 +4,28 @@
 // client until the peer certificate's fingerprint matches, so the token is never sent to
 // a server that does not hold the pinned certificate.
 import { connect } from 'node:tls';
+import { isIP } from 'node:net';
 import { WebSocket } from 'ws';
 import { sameFingerprint, normalizeFingerprint } from '../src/protocol/fingerprint';
 import type { PinMismatchEvent, SocketFactory, SocketLike } from '../src/protocol/client';
 
+/**
+ * The TLS server name to offer.
+ *
+ * RFC 6066 forbids an IP address in the SNI extension, and Node refuses it
+ * outright ("Setting the TLS ServerName to an IP address is not permitted").
+ * A hub is very often addressed by IP ("192.168.0.202 is enough"), so an empty
+ * server name — no SNI at all — is what we send in that case; the certificate
+ * is checked by its pin anyway.
+ */
+export function tlsServername(host: string): string {
+  return isIP(host) ? '' : host;
+}
+
 /** The fingerprint a server presents (for trust-on-first-use: show it, let a person compare). */
 export function fetchFingerprint(host: string, port: number, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const s = connect({ host, port, rejectUnauthorized: false, servername: host }, () => {
+    const s = connect({ host, port, rejectUnauthorized: false, servername: tlsServername(host) }, () => {
       const fp = s.getPeerCertificate().fingerprint256;
       s.end();
       const n = normalizeFingerprint(fp ?? '');
@@ -36,7 +50,7 @@ export interface TlsInfo {
 /** What a TLS server presents and negotiates (for checks and for showing a person). */
 export function tlsInfo(host: string, port: number, timeoutMs = 5000): Promise<TlsInfo> {
   return new Promise((resolve, reject) => {
-    const s = connect({ host, port, rejectUnauthorized: false, servername: host }, () => {
+    const s = connect({ host, port, rejectUnauthorized: false, servername: tlsServername(host) }, () => {
       const c = s.getPeerCertificate();
       const info: TlsInfo = {
         fingerprint: normalizeFingerprint(c.fingerprint256 ?? '') ?? '',
