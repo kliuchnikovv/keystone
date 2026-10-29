@@ -1,6 +1,7 @@
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { agoText } from '../model/devices';
 import type { HomeState } from '../protocol/store';
+import { isRelayUrl } from '../settings';
 import { useTheme } from './theme';
 
 /** What the banner offers: retry the connection, or go back to the Connect screen. */
@@ -52,12 +53,28 @@ function staleNote(s: HomeState): string {
   return age ? ` — the last known state (${age})` : ' — the last known state';
 }
 
-/** For a wss:// hub: what to try when it will not connect (a browser hides why TLS failed). */
+/**
+ * For a wss:// address: what to try when it will not connect.
+ *
+ * Three shapes, three answers:
+ *  - a hub (`…/ws`): its certificate is self-signed, and a browser accepts it once;
+ *  - a relay (`…/client/<hub-id>`): its certificate is signed by a public CA, so there
+ *    is nothing to accept - and the address has to be the client side of the tunnel;
+ *  - anything else: usually the relay's own home page, which is what a person copies
+ *    off the status page, and it is not an address the app can talk to.
+ */
 export function secureHint(url: string, s: HomeState): string | null {
   if (!/^wss:\/\//i.test(url)) return null;
   if (s.status !== 'connecting' && s.status !== 'reconnecting' && s.status !== 'authenticating') return null;
-  const host = url.replace(/^wss:\/\//i, '').replace(/\/.*$/, '');
-  return `Not connecting? In a browser, open https://${host}/ once and accept the hub's certificate, then come back.`;
+  const rest = url.replace(/^wss:\/\//i, '');
+  const host = rest.replace(/\/.*$/, '');
+  if (isRelayUrl(url)) {
+    return "A relay's certificate is signed by a public CA - there is nothing to accept in a browser. The app talks to the client side of the tunnel: …/client/<hub-id>.";
+  }
+  if (/\/ws\s*$/i.test(rest)) {
+    return `Not connecting? In a browser, open https://${host}/ once and accept the hub's certificate, then come back.`;
+  }
+  return `This address is neither a hub (…/ws) nor a relay (…/client/<hub-id>). If it is a relay, use the client side of the tunnel - the relay's status page says which address that is.`;
 }
 
 export function Banner({ state, url, action }: { state: HomeState; url?: string; action?: BannerAction | null }) {

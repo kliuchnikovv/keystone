@@ -686,7 +686,7 @@ Locally: `scripts/build-relay.sh` puts the binary into `build/` (`go test ./...`
 |---|---|
 | `PORT` | the port to listen on (Railway sets it) |
 | `RELAY_SECRET` | the shared secret the hub authenticates with — **required** |
-| `RELAY_STATUS_TOKEN` | if set, the status page shows the hub ids only to whoever sends this token (`Authorization: Bearer …` or `?token=`); without it the page shows counters only |
+| `RELAY_STATUS_TOKEN` | if set, the status page shows the hub ids only to whoever sends this token (`Authorization: Bearer …` or `?token=`); without it the page shows counters only. With the token the page also says **the address the app has to use** for each hub — `wss://<host>/client/<hub-id>`: a person copies an address from there, and the relay's own home page is not an address the app can talk to |
 | `RELAY_ALLOWED_ORIGINS` | comma-separated browser origins allowed to open a socket. Native clients (the hub, the phone app, the console) send no `Origin` and are always allowed; a browser is refused unless it is listed here |
 
 TLS is terminated in front of the container. The hub verifies the relay's certificate

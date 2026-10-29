@@ -152,16 +152,20 @@ func TestAuthLimiterSweeps(t *testing.T) {
 
 func TestStatusPageBody(t *testing.T) {
 	counts := map[string]int{"home": 2}
-	body := StatusPageBody([]string{"home"}, counts, false)
+	body := StatusPageBody([]string{"home"}, counts, false, "relay.example.com")
 	if !contains(body, "1 hub(s) connected") {
 		t.Fatalf("the counters must be there: %q", body)
 	}
 	if contains(body, "home") {
 		t.Fatalf("without a token the hub ids must be hidden: %q", body)
 	}
-	body = StatusPageBody([]string{"home"}, counts, true)
+	body = StatusPageBody([]string{"home"}, counts, true, "relay.example.com")
 	if !contains(body, "home: 2 client(s)") {
 		t.Fatalf("the token holder sees the ids: %q", body)
+	}
+	// The address the app has to use - a person copies it from here.
+	if !contains(body, "wss://relay.example.com/client/home") {
+		t.Fatalf("the page must say where the app points: %q", body)
 	}
 }
 

@@ -280,7 +280,7 @@ func (r *relay) status(w http.ResponseWriter, req *http.Request) {
 	}
 	ids, counts := r.snapshotHubs()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = io.WriteString(w, StatusPageBody(ids, counts, r.statusToken != ""))
+	_, _ = io.WriteString(w, StatusPageBody(ids, counts, r.statusToken != "", req.Host))
 }
 
 func (r *relay) handleTunnel(w http.ResponseWriter, req *http.Request, hubID, ip string) {

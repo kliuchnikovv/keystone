@@ -326,6 +326,20 @@ describe('Banner hint for wss://', () => {
     expect(secureHint('wss://hub/ws', { ...base, status: 'ready' })).toBeNull();
     expect(secureHint('wss://hub/ws', { ...base, status: 'unauthorized' })).toBeNull();
   });
+
+  it('does not ask for a browser exception on a relay, and names the address to use', async () => {
+    const { secureHint } = await import('../src/ui/Banner');
+    const { initialState } = await import('../src/protocol/store');
+    const base = { ...initialState, status: 'reconnecting' as const };
+    // A relay's certificate is signed by a public CA: there is nothing to accept.
+    const relay = secureHint('wss://relay.example.com/client/home', base);
+    expect(relay).not.toContain('accept the hub');
+    expect(relay).toContain('/client/<hub-id>');
+    // The relay's own home page is not an address the app can talk to.
+    const root = secureHint('wss://relay.example.com/', base);
+    expect(root).toContain('/client/<hub-id>');
+    expect(root).not.toContain('accept the hub');
+  });
 });
 
 describe('The state cache', () => {

@@ -181,7 +181,11 @@ func (l *AuthLimiter) Sweep(now time.Time) {
 // StatusPageBody renders the status page. The status page of a public relay
 // must not be a directory of the homes on it: without a token only the
 // counters are shown.
-func StatusPageBody(hubIDs []string, clientCounts map[string]int, idsAllowed bool) string {
+//
+// With a token the page also says where the app should point for each hub:
+// a person copies an address from here, and the relay's own home page is not
+// the address the app talks to.
+func StatusPageBody(hubIDs []string, clientCounts map[string]int, idsAllowed bool, host string) string {
 	var b strings.Builder
 	b.WriteString("Keystone Relay\n")
 	b.WriteString(itoa(len(hubIDs)) + " hub(s) connected")
@@ -191,6 +195,9 @@ func StatusPageBody(hubIDs []string, clientCounts map[string]int, idsAllowed boo
 	}
 	for _, id := range hubIDs {
 		b.WriteString("\n  " + id + ": " + itoa(clientCounts[id]) + " client(s)")
+		if host != "" {
+			b.WriteString("\n      app address: wss://" + host + "/client/" + id)
+		}
 	}
 	b.WriteString("\n")
 	return b.String()
