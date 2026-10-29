@@ -44,6 +44,23 @@ export function isCloudUrl(url: string): boolean {
   return /^https?:\/\/[^\s/]+(:\d+)?\/hub\/[^\s/]+\s*$/i.test(url.trim());
 }
 
+/**
+ * The certificate to pin for this address, or undefined when there is none to pin.
+ *
+ * A hub presents its own self-signed certificate, and pinning that fingerprint is
+ * what tells the app it is talking to *its* hub. A relay presents its own
+ * certificate - a CA-signed one that the platform checks the usual way - and the
+ * hub's certificate never appears on the wire. Pinning the hub's fingerprint
+ * there would refuse every connection, so through a relay the hub's identity
+ * rests on its token instead (and the relay is a trusted party: it sees the
+ * traffic - see docs/relay-security.md).
+ */
+export function pinnedFingerprintFor(url: string, fingerprint?: string): string | undefined {
+  if (!fingerprint) return undefined;
+  if (isRelayUrl(url)) return undefined;
+  return fingerprint;
+}
+
 export function cloudUrl(server: string, hubId: string): string {
   const s = server.trim().replace(/\/+$/, '');
   const base = /^https?:\/\//i.test(s) ? s : `https://${s}`;

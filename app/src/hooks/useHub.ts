@@ -4,7 +4,7 @@ import { chooseSocketFactory } from '../native/platform';
 import { HubClient, type HubClientOptions } from '../protocol/client';
 import { CloudClient } from '../protocol/cloud-client';
 import type { HomeState } from '../protocol/store';
-import { isCloudUrl, type Settings } from '../settings';
+import { isCloudUrl, pinnedFingerprintFor, type Settings } from '../settings';
 import type { AckStatus, HistoryPush, Value } from '../protocol/messages';
 
 /** The public surface both HubClient and CloudClient expose. */
@@ -33,12 +33,15 @@ export function useHubClient(settings: Settings, options: Partial<HubClientOptio
       if (isCloudUrl(settings.url)) {
         return new CloudClient({ url: settings.url, token: settings.token });
       }
+      // A relay presents its own certificate, not the hub's: pinning the hub's
+      // fingerprint there would refuse the connection (docs/relay-security.md).
+      const pin = pinnedFingerprintFor(settings.url, settings.fingerprint);
       return new HubClient({
         url: settings.url,
         token: settings.token,
         clientName: 'keystone-app',
         socketFactory: chooseSocketFactory(keystoneNet()),
-        ...(settings.fingerprint ? { pinnedFingerprint: settings.fingerprint } : {}),
+        ...(pin ? { pinnedFingerprint: pin } : {}),
         ...options,
       });
     },

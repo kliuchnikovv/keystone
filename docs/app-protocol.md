@@ -415,6 +415,14 @@ whose certificate is replaced is caught on the next reconnect. Trust-on-first-us
 by a person: `npm run probe -- --url wss://…` without `--fingerprint` prints what the
 hub presents and stops.
 
+**Through a relay the pin is dropped.** A relay is a different peer: it presents **its
+own** certificate (a CA-signed one, checked by the platform the usual way), and the hub's
+self-signed certificate never appears on the wire. Pinning the hub's fingerprint there
+would refuse every connection, so `Settings.pinnedFingerprintFor()` returns nothing for
+a `/client/<hub-id>` address and the platform's own TLS validation takes over. The hub's
+identity then rests on its **token** (the hub refuses a wrong one), and the relay is a
+trusted party — it sees the traffic (see [relay-security.md](relay-security.md)).
+
 **By platform** (what is implemented and what was actually exercised):
 
 | Platform | How it trusts the hub | Status |

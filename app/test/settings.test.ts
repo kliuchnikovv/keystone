@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloudUrl, createSettingsStore, isCloudUrl, isPlaintext, isRelayUrl, isSecure, normalizeUrl, relayClientUrl, validateSettings, type KeyValueStore } from '../src/settings';
+import { cloudUrl, createSettingsStore, isCloudUrl, isPlaintext, isRelayUrl, isSecure, normalizeUrl, pinnedFingerprintFor, relayClientUrl, validateSettings, type KeyValueStore } from '../src/settings';
 
 function memoryStore(initial: Record<string, string> = {}, failing = false): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -73,6 +73,19 @@ describe('connection form', () => {
   it('validates relay URLs', () => {
     expect(validateSettings({ url: 'wss://relay.example.com/client/my-hub', token: '12345678' })).toBeNull();
     expect(validateSettings({ url: 'ws://relay:9090/client/my-hub', token: '12345678' })).toBeNull();
+  });
+  it('pins the hub certificate only when it is the one on the wire', () => {
+    const fp = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+    // A direct hub presents its own self-signed certificate: pin it.
+    expect(pinnedFingerprintFor('wss://192.168.0.202:8443/ws', fp)).toBe(fp);
+    expect(pinnedFingerprintFor('wss://hub.local/ws', fp)).toBe(fp);
+    // A relay presents its own CA-signed certificate, and the hub's never appears:
+    // pinning the hub's fingerprint there would refuse every connection.
+    expect(pinnedFingerprintFor('wss://relay.example.com/client/my-hub', fp)).toBeUndefined();
+    expect(pinnedFingerprintFor('ws://relay:9090/client/my-hub', fp)).toBeUndefined();
+    // Nothing to pin.
+    expect(pinnedFingerprintFor('wss://192.168.0.202:8443/ws', undefined)).toBeUndefined();
+    expect(pinnedFingerprintFor('wss://192.168.0.202:8443/ws', '')).toBeUndefined();
   });
   it('knows when the link is unencrypted', () => {
     expect(isPlaintext('ws://hub:8080/ws')).toBe(true);
