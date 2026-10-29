@@ -504,7 +504,7 @@ code).
 4. ✅ **App screens** (Expo, `app/`): connect screen, device cards with switches /
    brightness / live values, offline marking when a chip is silent, failure messages, chip
    health, auto-reconnect that keeps the last known state (a **state cache** on the
-   device - a file on a phone, localStorage in a browser - so the app still shows the
+   device — a file on a phone, localStorage in a browser — so the app still shows the
    devices and their last values while the hub is out of reach; the banner says how old
    they are); **Automations** tab (schedules,
    timers with a live countdown, rules with time window / extra condition / cooldown, each
@@ -541,11 +541,12 @@ code).
    same ring. Later: `command` events say who asked (`what`), new events are pushed (`type: "history"`), repeated
    `state` and crash-loop `chip` events are not recorded again.
 
-9. **Remote access / relay** (hub + relay server + app + console; NOT hardware-verified):
+9. **Remote access / relay** (hub + relay server + app + console; hardware-verified):
    §13. The brain connects out to a relay server (`esp_websocket_client`); a cloud relay
    exposes HTTP+SSE for apps; a console tool gives a full REPL. The connect screen has
-   Local / Cloud / Relay modes. 299 vitest, 355 host tests. Not tested on hardware or
-   end-to-end through a live relay.
+   Local / Cloud / Relay modes. The ESP relay client was verified on the real hub
+   against a public relay (commit `2d5be9e`): it dialed out, registered the tunnel and
+   answered a client that came through the public wss endpoint.
 
 10. ✅ **Firmware update, access and hub actions** (hub side; §5.2): `ota.start` /
     `ota.status` (the co-processor update the console's `ota` command drives, with the
@@ -560,7 +561,15 @@ code).
 
 Remote access lets a phone or web app reach the hub from outside the LAN through a
 relay server on a VPS.  Three deployment options exist; all share the hub's token-based
-auth end-to-end — the relay sees ciphertext, never the token.
+auth end-to-end.
+
+**The relay is a trusted component.**  Inside the tunnel the hub protocol travels as
+plain JSON (the hub's relay client decodes it directly, `firmware/brain-s3/main/relay_client.cpp`),
+so the relay sees the hub token and the traffic.  Each hop is protected by TLS — the
+hub verifies the relay's certificate against the Mozilla CA bundle — but the relay
+itself is not blind to the content.  See [relay-security.md](relay-security.md) for the
+threat model, the findings and the target design (per-hub secret, TLS mandatory,
+limits).
 
 ### 13.1 Architecture options
 
@@ -642,11 +651,44 @@ Live state updates are printed as they happen (`--quiet` to suppress).
 
 ### 13.7 Not verified / not done
 
-- The ESP relay client has not been tested on hardware (needs a reachable relay).
 - The cloud relay has no persistent state (sessions are in memory).
-- No auth rate limiting on the cloud relay (the hub has its own lockout).
-- No TLS termination: put the relay behind nginx/caddy in production.
+- No auth rate limiting on the **cloud** relay (the hub has its own lockout, and the
+  tunnel relay has one since 29.10.2026).
 - The app's Cloud mode has not been tested against a live cloud relay + hub.
+- The relay still uses **one shared secret for all hubs** (`RELAY_SECRET`); the target
+  is a per-hub secret that never crosses the wire (nonce + HMAC). See
+  [relay-security.md](relay-security.md).
+- The relay sees the hub token and the traffic inside the tunnel — it is a trusted
+  component, not a blind one.
+
+### 13.8 Deploying the relay
+
+`relay.Dockerfile` builds the relay from `relay/` (Go — one static binary, no runtime
+inside the image):
+
+```bash
+docker build -f relay.Dockerfile -t keystone-relay .
+docker run --rm -p 9090:9090 -e RELAY_SECRET=<secret> keystone-relay
+```
+
+Locally: `scripts/build-relay.sh` puts the binary into `build/` (`go test ./...` in
+`relay/` runs the policy and the server tests).
+
+| Variable | Meaning |
+|---|---|
+| `PORT` | the port to listen on (Railway sets it) |
+| `RELAY_SECRET` | the shared secret the hub authenticates with — **required** |
+| `RELAY_STATUS_TOKEN` | if set, the status page shows the hub ids only to whoever sends this token (`Authorization: Bearer …` or `?token=`); without it the page shows counters only |
+| `RELAY_ALLOWED_ORIGINS` | comma-separated browser origins allowed to open a socket. Native clients (the hub, the phone app, the console) send no `Origin` and are always allowed; a browser is refused unless it is listed here |
+
+TLS is terminated in front of the container. The hub verifies the relay's certificate
+against the Mozilla CA bundle, so the certificate has to come from a public CA —
+the deployed relay uses a Let's Encrypt certificate for `*.up.railway.app`, and
+plain HTTP answers `301` to HTTPS.
+
+The deployed instance (29.10.2026) was checked from outside: TLS valid, HTTP
+redirects to HTTPS, the status page answered `200` with the hub ids — that page is
+now behind a token.
 
 Out of scope for v1: multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

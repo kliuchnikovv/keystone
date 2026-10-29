@@ -7,18 +7,21 @@
 # The port and the shared secret come from the environment (Railway sets PORT
 # itself and passes RELAY_SECRET as a service variable), so the container needs
 # no arguments.
-FROM node:22-alpine
+#
+# The relay is Go (relay/): one static binary, so the image carries no runtime
+# at all. See docs/relay-security.md for the threat model.
+FROM golang:1-alpine AS build
 
-WORKDIR /srv
+WORKDIR /src
+COPY relay/go.mod relay/go.sum ./
+RUN go mod download
+COPY relay/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/relay .
 
-# The relay is one file: the ws server plus tsx to run the TypeScript.
-COPY app/tools/relay-server.ts ./relay-server.ts
-RUN npm init -y >/dev/null \
- && npm install --no-audit --no-fund ws@8.22.0 tsx@4.23.15
-
-ENV NODE_ENV=production
+FROM alpine:3.20
+RUN adduser -D -u 10001 relay
+COPY --from=build /out/relay /usr/local/bin/relay
+USER relay
 ENV PORT=9090
 EXPOSE 9090
-
-USER node
-CMD ["node_modules/.bin/tsx", "relay-server.ts"]
+ENTRYPOINT ["/usr/local/bin/relay"]
