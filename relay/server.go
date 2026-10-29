@@ -251,7 +251,7 @@ func (r *relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// A browser always does, and a website must not be able to spend a client's
 	// slot on the hub, so browser origins are refused unless listed explicitly.
 	if !OriginAllowed(req.Header.Get("Origin"), r.allowedOrigins) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "forbidden: browser origins are refused unless RELAY_ALLOWED_ORIGINS lists this one", http.StatusForbidden)
 		return
 	}
 	if parts[0] == "tunnel" {

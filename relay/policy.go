@@ -63,13 +63,21 @@ func OriginAllowed(origin string, allowlist []string) bool {
 	if origin == "" {
 		return true
 	}
-	o := strings.ToLower(strings.TrimSpace(origin))
+	o := normalizeOrigin(origin)
 	for _, a := range allowlist {
-		if strings.ToLower(strings.TrimSpace(a)) == o {
+		if normalizeOrigin(a) == o {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeOrigin puts an origin into one shape: lower case, no spaces, no
+// trailing slash. A browser sends "https://app.example", a person writes
+// "https://app.example/" — the trailing slash must not make them differ.
+func normalizeOrigin(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimRight(s, "/")
 }
 
 // ParseOriginAllowlist reads the RELAY_ALLOWED_ORIGINS value: a comma-separated list.

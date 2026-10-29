@@ -56,6 +56,12 @@ func TestOriginAllowed(t *testing.T) {
 	if !OriginAllowed("HTTPS://APP.EXAMPLE", []string{"https://app.example"}) {
 		t.Fatal("the comparison must not care about the case")
 	}
+	if !OriginAllowed("https://app.example", []string{"https://app.example/"}) {
+		t.Fatal("a trailing slash must not make a listed origin different")
+	}
+	if OriginAllowed("https://app.example", []string{"https://app.example.evil"}) {
+		t.Fatal("a listed origin must match exactly")
+	}
 }
 
 func TestParseOriginAllowlist(t *testing.T) {
