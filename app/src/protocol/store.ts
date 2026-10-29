@@ -27,6 +27,10 @@ export interface HomeState {
   status: ConnectionStatus;
   /** Last error code worth showing (e.g. "busy"), cleared on `ready`. */
   error: string | null;
+  /** True while the data on screen is the last known state, not what the hub says right now. */
+  stale: boolean;
+  /** When the data on screen was last known to be true (epoch ms); null while it is live. */
+  savedAt: number | null;
   hub: HubInfo | null;
   entities: Entity[];
   chips: Chip[];
@@ -39,6 +43,8 @@ export interface HomeState {
 export const initialState: HomeState = {
   status: 'idle',
   error: null,
+  stale: false,
+  savedAt: null,
   hub: null,
   entities: [],
   chips: [],
@@ -53,9 +59,14 @@ export function withStatus(s: HomeState, status: ConnectionStatus, error: string
   return { ...s, status, error };
 }
 
-/** Forget what a previous connection knew (a new snapshot replaces it anyway). */
-export function cleared(s: HomeState): HomeState {
-  return { ...initialState, status: s.status, error: s.error };
+/**
+ * The link is gone: keep what we know — the devices, their names, the last values —
+ * and say that it is not live any more. `at` is when the data was last known to be
+ * true; an already stale state keeps its older moment.
+ */
+export function markedStale(s: HomeState, at: number): HomeState {
+  if (s.stale && s.savedAt !== null) return s;
+  return { ...s, stale: true, savedAt: at };
 }
 
 /** Apply one hub message. Messages that carry no state (acks, errors) return `s`. */
@@ -68,6 +79,9 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       const base = (m.part ?? 0) === 0 ? initialState : s;
       const next: HomeState = {
         ...s,
+        // The hub speaks now: what is on screen is live again.
+        stale: false,
+        savedAt: null,
         entities: [...base.entities, ...(m.entities ?? [])],
         chips: [...base.chips, ...(m.chips ?? [])],
         rules: [...base.rules, ...(m.rules ?? [])],

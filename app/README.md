@@ -9,6 +9,12 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `src/protocol/` — wire types, the pure `reduce()` that applies hub messages, and
   `HubClient` (handshake + token, request/ack correlation, reconnect with back-off;
   works with `useSyncExternalStore`). No React, no Node-only APIs.
+- `src/protocol/cache.ts`, `src/statecache.ts` (a file on the phone) /
+  `src/statecache.web.ts` (localStorage in a browser), `src/hooks/useStateCache.ts` —
+  the **state cache**: the last state the hub sent, kept on the device. The app shows it
+  while the hub is out of reach (the banner says how old it is: "the last known state
+  (3 min ago)") and after the app is closed and opened again. The cache belongs to one
+  hub: another address gets another home, not this one's devices.
 - `src/model/` — plain functions that turn protocol data into what people see
   (value formatting, device titles, chip health, error messages) and what people
   type into `req` arguments (units, ranges, wording of rules/schedules/timers).

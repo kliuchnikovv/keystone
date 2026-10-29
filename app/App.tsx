@@ -34,6 +34,9 @@ function Trying({
 
   useEffect(() => {
     if (home.status === 'ready') {
+      // The connection is ours no more: the app takes it, and it must not be closed
+      // when this screen goes away.
+      client.handOver();
       onReady(settings, client);
       return;
     }

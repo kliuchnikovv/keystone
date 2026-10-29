@@ -2,17 +2,22 @@
 import './setup-dom';
 import { longPress } from './helpers';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
+import { useHome, useHubClient, type HubConnection } from '../src/hooks/useHub';
+import { readStateCache } from '../src/statecache';
 import { ConnectScreen } from '../src/ui/ConnectScreen';
 import { Home } from '../src/ui/Home';
+import { __resetFiles } from './stubs/expo-file-system';
 import { MockHub } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
 let hub: MockHub;
 
 beforeEach(async () => {
+  __resetFiles(); // the state cache of one test is not the next test's
   hub = await MockHub.start({ helloTimeoutMs: 500, ackDelayMs: 10 });
 });
 afterEach(async () => {
@@ -167,8 +172,7 @@ describe('Hub tab', () => {
   });
 });
 
-describe('Connection problems', () => {
-  it('a wrong token is explained and can be edited', async () => {
+describe('Connection problems', () => {  it('a wrong token is explained and can be edited', async () => {
     const onChangeHub = vi.fn();
     renderHome({ token: 'wrong-token', onChangeHub });
     await screen.findByText('Authentication failed');
@@ -177,14 +181,15 @@ describe('Connection problems', () => {
     expect(onChangeHub).toHaveBeenCalled();
   });
 
-  it('a lost connection says so, drops the stale picture and recovers by itself', async () => {
+  it('a lost connection says so, keeps the last known picture and recovers by itself', async () => {
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.dropAll());
-    await screen.findByText('Reconnecting after a drop');
-    expect(screen.queryByText('plug1')).toBeNull(); // no stale devices shown as current
-    await screen.findByText('plug1');
-    expect(screen.queryByText('Reconnecting after a drop')).toBeNull();
+    await screen.findByText(/Reconnecting after a drop/);
+    expect(screen.queryByText('plug1')).toBeTruthy(); // the last known state stays on screen
+    expect(screen.getByText(/the last known state/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/Reconnecting after a drop/)).toBeNull());
+    expect(screen.queryByText('plug1')).toBeTruthy();
   });
 });
 
@@ -320,5 +325,80 @@ describe('Banner hint for wss://', () => {
     expect(secureHint('ws://192.168.0.202:8080/ws', base)).toBeNull();
     expect(secureHint('wss://hub/ws', { ...base, status: 'ready' })).toBeNull();
     expect(secureHint('wss://hub/ws', { ...base, status: 'unauthorized' })).toBeNull();
+  });
+});
+
+describe('The state cache', () => {
+  it('the last known state is on screen when the hub is away', async () => {
+    renderHome();
+    await screen.findByText('plug1');
+    // The app remembers what the hub said.
+    await waitFor(async () => expect(await readStateCache()).toContain('plug1'));
+
+    // The hub goes away and the app is closed and opened again.
+    const awayUrl = hub.url;
+    const awayToken = hub.token;
+    await hub.close();
+    hub = await MockHub.start({ helloTimeoutMs: 500, ackDelayMs: 10 }); // a fresh one for the cleanup
+    cleanup();
+    render(
+      <Home
+        settings={{ url: awayUrl, token: awayToken }}
+        onChangeHub={() => {}}
+        clientOptions={{ socketFactory: wsFactory, backoffMs: { min: 20, max: 60 }, requestTimeoutMs: 2000 }}
+      />,
+    );
+
+    await screen.findByText('plug1'); // from the cache: the devices are still there
+    expect(screen.getByText(/the last known state/)).toBeTruthy();
+    expect(screen.getByLabelText('Device plug1')).toBeTruthy();
+  });
+
+  it('the cache of another hub is not shown', async () => {
+    renderHome();
+    await screen.findByText('plug1');
+    await waitFor(async () => expect(await readStateCache()).toContain('plug1'));
+    cleanup();
+
+    // Another hub: its devices must not leak into this app.
+    render(
+      <Home
+        settings={{ url: 'ws://127.0.0.1:1/ws', token: 'other-token' }}
+        onChangeHub={() => {}}
+        clientOptions={{ socketFactory: wsFactory, backoffMs: { min: 20, max: 60 } }}
+      />,
+    );
+    await screen.findByText('Waiting for the hub…');
+    expect(screen.queryByText('plug1')).toBeNull();
+  });
+});
+
+describe('Handing the connection over', () => {
+  it('the connection stays open when the screen that made it goes away', async () => {
+    let handed: HubConnection | null = null;
+
+    function Owner({ onReady }: { onReady(c: HubConnection): void }) {
+      const client = useHubClient({ url: hub.url, token: hub.token }, { socketFactory: wsFactory });
+      const home = useHome(client);
+      useEffect(() => {
+        if (home.status === 'ready') {
+          client.handOver();
+          onReady(client);
+        }
+      }, [home.status, client, onReady]);
+      return <div data-testid="owner">{home.status}</div>;
+    }
+
+    function App() {
+      const [client, setClient] = useState<HubConnection | null>(null);
+      if (client) return <div data-testid="app">{client.getSnapshot().status}</div>;
+      return <Owner onReady={setClient} />;
+    }
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('app')).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(handed).toBeNull();
+    expect(screen.getByTestId('app').textContent).toBe('ready');
   });
 });

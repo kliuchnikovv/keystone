@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import { HubClient, HubError, type HubClientOptions, type SocketLike } from '../src/protocol/client';
-import { attrValue, type HomeState } from '../src/protocol/store';
+import { attrValue, initialState, type HomeState } from '../src/protocol/store';
 import { MockHub, MAX_CLIENTS } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
@@ -649,9 +649,15 @@ describe('reconnecting', () => {
     await until(() => attrValue(c.getSnapshot(), 0x0100, 0x13) === 99, 'before drop');
     hub.dropAll();
     await until(() => c.getSnapshot().status === 'reconnecting', 'reconnecting');
-    expect(c.getSnapshot().entities).toEqual([]); // stale data is not shown as current
+    // The link is gone, but what we knew stays on screen — marked as not live.
+    expect(c.getSnapshot().entities).not.toEqual([]);
+    expect(attrValue(c.getSnapshot(), 0x0100, 0x13)).toBe(99);
+    expect(c.getSnapshot().stale).toBe(true);
+    expect(c.getSnapshot().savedAt).not.toBeNull();
     await ready(c);
     expect(attrValue(c.getSnapshot(), 0x0100, 0x13)).toBe(99); // the hub's current value
+    expect(c.getSnapshot().stale).toBe(false); // live again
+    expect(c.getSnapshot().savedAt).toBeNull();
     expect(states).toContain('reconnecting');
   });
 
@@ -818,5 +824,56 @@ describe('history', () => {
     expect(p.latest).toBe(301);
     expect(p.oldest).toBe(46);
     expect(p.events).toHaveLength(24);
+  });
+});
+
+describe('the cached state', () => {
+  const cached = {
+    ...initialState,
+    stale: true,
+    savedAt: 1700000000000,
+    entities: [
+      {
+        id: 0x0100,
+        name: 'plug1',
+        chip: 1,
+        device: 'switch',
+        attrs: [{ id: 0x01, name: 'on_off', vt: 'bool' as const, flags: ['r' as const, 'w' as const], value: true }],
+      },
+    ],
+  };
+
+  it('shows what the app knows until the hub says otherwise', () => {
+    const c = client();
+    c.hydrate(cached);
+    expect(c.getSnapshot().entities.map((e) => e.name)).toEqual(['plug1']);
+    expect(c.getSnapshot().stale).toBe(true);
+    expect(c.getSnapshot().savedAt).toBe(1700000000000);
+  });
+
+  it('the hub\'s snapshot replaces the cache, and the state is live again', async () => {
+    const c = client();
+    c.hydrate(cached);
+    c.connect();
+    await ready(c);
+    expect(c.getSnapshot().entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null]);
+    expect(c.getSnapshot().stale).toBe(false);
+    expect(c.getSnapshot().savedAt).toBeNull();
+  });
+
+  it('a cache that arrives after the hub spoke is ignored', async () => {
+    const c = client();
+    c.connect();
+    await ready(c);
+    c.hydrate(cached);
+    expect(c.getSnapshot().entities).toHaveLength(3);
+    expect(c.getSnapshot().stale).toBe(false);
+  });
+
+  it('a handed-over connection says so', () => {
+    const c = client();
+    expect(c.isHandedOver).toBe(false);
+    c.handOver();
+    expect(c.isHandedOver).toBe(true);
   });
 });

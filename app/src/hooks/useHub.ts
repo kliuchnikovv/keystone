@@ -16,6 +16,12 @@ export interface HubConnection {
   req(op: string, args?: Record<string, unknown>): Promise<Record<string, unknown>>;
   connect(): void;
   close(): void;
+  /** Show what the app already knows (the cached state) until the hub says otherwise. */
+  hydrate(state: HomeState): void;
+  /** The connection is not ours to close any more: it was handed to someone else. */
+  handOver(): void;
+  /** True after `handOver()`. */
+  readonly isHandedOver: boolean;
 }
 
 /** One connection per (url, token); it lives as long as the component that asked.
@@ -39,10 +45,15 @@ export function useHubClient(settings: Settings, options: Partial<HubClientOptio
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [settings.url, settings.token, settings.fingerprint],
   );
+  // The last known state is kept by the screen that shows the home (see
+  // useStateCache): the connection may outlive the component that made it.
   useEffect(() => {
     if (!autoConnect) return;
     client.connect();
-    return () => client.close();
+    return () => {
+      // A handed-over connection lives on in someone else's hands.
+      if (!client.isHandedOver) client.close();
+    };
   }, [client, autoConnect]);
   return client;
 }

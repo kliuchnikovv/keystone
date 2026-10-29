@@ -25,7 +25,7 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
   const [openId, setOpenId] = useState<number | null>(null);
   const [removingId, setRemovingId] = useState<number | null>(null);
   const now = useNow(1000);
-  const activity = useEntityActivity(home.entities);
+  const activity = useEntityActivity(home.entities, home.savedAt);
   const offline = home.status !== 'ready';
 
   const open = home.entities.find((e) => e.id === openId) ?? null;
@@ -282,7 +282,9 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 10, fontWeight: '500', marginTop: 4 },
   grid: { marginTop: 10, position: 'relative' },
   cell: { position: 'absolute' },
-  offline: { opacity: 0.6 },
+  // Without the hub the values on screen are the last known ones: dim them a little,
+  // but keep them readable — they are what the user came to see.
+  offline: { opacity: 0.75 },
   add: {
     flexDirection: 'row',
     alignItems: 'center',

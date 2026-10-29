@@ -13,7 +13,7 @@ import {
   PROTOCOL_VERSION,
   parseServerMessage,
 } from './messages';
-import { type ConnectionStatus, type HomeState, cleared, initialState, reduce, withStatus } from './store';
+import { type ConnectionStatus, type HomeState, initialState, markedStale, reduce, withStatus } from './store';
 
 /** The subset of the standard WebSocket API this client uses. */
 export interface SocketLike {
@@ -111,6 +111,10 @@ export class HubClient {
   private stopped = false;
   private lastRx = 0;
   private staleTimer: ReturnType<typeof setInterval> | null = null;
+  /** The hub has sent a snapshot: its word is the last one, the cache is history. */
+  private live = false;
+  /** The connection lives on in someone else's hands: it must not be closed with us. */
+  private handedOver = false;
   private readonly opts: Required<Omit<HubClientOptions, 'socketFactory'>> & { socketFactory: SocketFactory };
 
   constructor(options: HubClientOptions) {
@@ -142,6 +146,28 @@ export class HubClient {
     this.historyListeners.add(fn);
     return () => this.historyListeners.delete(fn);
   };
+
+  /**
+   * Show what the app already knows (the state it kept from last time) until the hub
+   * says otherwise. Nothing happens once the hub has spoken: its word is the last one.
+   */
+  hydrate(state: HomeState): void {
+    if (this.live) return;
+    this.set({ ...state, status: this.state.status, error: this.state.error });
+  }
+
+  /**
+   * The connection is not ours to close any more: it was handed to someone else
+   * (the Connect screen gives its client to the app). It stays open after we go away.
+   */
+  handOver(): void {
+    this.handedOver = true;
+  }
+
+  /** True after `handOver()`. */
+  get isHandedOver(): boolean {
+    return this.handedOver;
+  }
 
   private set(next: HomeState): void {
     if (next === this.state) return;
@@ -196,7 +222,8 @@ export class HubClient {
     sock.onclose = () => this.socketClosed(sock);
   }
 
-  /** The socket is gone (it said so, or it went silent): fail what was waiting and reconnect. */
+  /** The socket is gone (it said so, or it went silent): fail what was waiting and reconnect.
+   * What we know stays on screen — it is the last known state, not the live one. */
   private socketClosed(sock: SocketLike): void {
     if (this.socket !== sock) return;
     this.socket = null;
@@ -204,7 +231,7 @@ export class HubClient {
     this.failPending(new HubError('disconnected'));
     const s = this.state.status;
     if (this.stopped || s === 'unauthorized' || s === 'incompatible' || s === 'untrusted') return;
-    this.set(withStatus(cleared(this.state), 'reconnecting', this.state.error));
+    this.set(withStatus(markedStale(this.state, Date.now()), 'reconnecting', this.state.error));
     this.scheduleRetry();
   }
 
@@ -231,7 +258,8 @@ export class HubClient {
     this.staleTimer = null;
   }
 
-  /** Stop for good: no further reconnects. Pending requests fail with `closed`. */
+  /** Stop for good: no further reconnects. Pending requests fail with `closed`.
+   * What we know stays on screen — the app may still show the last known state. */
   close(): void {
     this.stopped = true;
     this.clearRetry();
@@ -239,7 +267,7 @@ export class HubClient {
     const sock = this.socket;
     this.socket = null;
     this.failPending(new HubError('closed'));
-    this.set(withStatus(cleared(this.state), 'closed'));
+    this.set(withStatus(markedStale(this.state, Date.now()), 'closed'));
     try {
       sock?.close();
     } catch {
@@ -313,6 +341,7 @@ export class HubClient {
         this.connectionError(m.code);
         return;
       case 'snapshot':
+        this.live = true;
         this.set(reduce(this.state, m));
         if (this.state.status === 'ready') this.attempt = 0; // handshake fully done
         return;
@@ -326,7 +355,7 @@ export class HubClient {
 
   private fatal(status: ConnectionStatus, error: string): void {
     this.stopped = true;
-    this.set(withStatus(cleared(this.state), status, error));
+    this.set(withStatus(markedStale(this.state, Date.now()), status, error));
   }
 
   /** A hub-level error with no request id: handshake refusals and the like. */

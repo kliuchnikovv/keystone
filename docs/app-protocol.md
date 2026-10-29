@@ -503,7 +503,10 @@ code).
    (mock or real) and all pass on the brain (36 with `--mutate` over TLS); heap measured (§9).
 4. ✅ **App screens** (Expo, `app/`): connect screen, device cards with switches /
    brightness / live values, offline marking when a chip is silent, failure messages, chip
-   health, auto-reconnect with the stale picture cleared; **Automations** tab (schedules,
+   health, auto-reconnect that keeps the last known state (a **state cache** on the
+   device - a file on a phone, localStorage in a browser - so the app still shows the
+   devices and their last values while the hub is out of reach; the banner says how old
+   they are); **Automations** tab (schedules,
    timers with a live countdown, rules with time window / extra condition / cooldown, each
    readable as a sentence, delete with a second tap), renaming a device. Verified in a real
    browser against the real brain: a click toggles the plug in 280–490 ms, and

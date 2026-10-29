@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Entity, ServerMessage } from '../src/protocol/messages';
-import { attrValue, cleared, findEntity, initialState, reduce, withStatus } from '../src/protocol/store';
+import { attrValue, findEntity, initialState, markedStale, reduce, withStatus } from '../src/protocol/store';
 import { defaultChips, defaultEntities } from '../tools/mock-hub/hub';
 
 const snapshot = (): ServerMessage => ({
@@ -100,11 +100,20 @@ describe('reduce', () => {
     expect(reduce(a, { type: 'error', code: 'busy' })).toBe(a);
   });
 
-  it('cleared keeps only the connection status', () => {
+  it('the state kept when the link drops is marked as not live', () => {
     const a = withStatus(reduce(initialState, snapshot()), 'reconnecting', 'busy');
-    const c = cleared(a);
-    expect(c.entities).toEqual([]);
-    expect(c.hub).toBeNull();
+    const c = markedStale(a, 1000);
+    expect(c.entities).toHaveLength(3); // the devices stay on screen
+    expect(c.stale).toBe(true);
+    expect(c.savedAt).toBe(1000);
     expect(c).toMatchObject({ status: 'reconnecting', error: 'busy' });
+    // An already stale state keeps the moment it was stale at.
+    expect(markedStale(c, 2000).savedAt).toBe(1000);
+  });
+
+  it('a snapshot makes the state live again', () => {
+    const a = markedStale(reduce(initialState, snapshot()), 1000);
+    expect(reduce(a, snapshot()).stale).toBe(false);
+    expect(reduce(a, snapshot()).savedAt).toBeNull();
   });
 });

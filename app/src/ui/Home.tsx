@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useCommands } from '../hooks/useCommands';
 import { useHome, useHubClient, type HubConnection } from '../hooks/useHub';
+import { useStateCache } from '../hooks/useStateCache';
 import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
 import { Banner, type BannerAction } from './Banner';
@@ -76,6 +77,8 @@ export function HomeBody({
   const ios = Platform.OS === 'ios';
   const home = useHome(client);
   const commands = useCommands(client);
+  // What the hub said last time, kept on the phone: shown while it is away.
+  useStateCache(client, settings.url);
   const [tab, setTab] = useState<Tab>('devices');
 
   // What the banner offers: a retry when the socket is gone, a way back to Connect when

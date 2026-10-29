@@ -1,4 +1,5 @@
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { agoText } from '../model/devices';
 import type { HomeState } from '../protocol/store';
 import { useTheme } from './theme';
 
@@ -16,9 +17,12 @@ export function connectionNotice(s: HomeState): { text: string; tone: 'warn' | '
     case 'idle':
     case 'connecting':
     case 'authenticating':
-      return { text: 'Connecting…', tone: 'warn' };
+      return { text: `Connecting…${staleNote(s)}`, tone: 'warn' };
     case 'reconnecting':
-      return { text: s.error === 'busy' ? 'The hub has too many clients; retrying…' : 'Reconnecting after a drop', tone: 'warn' };
+      return {
+        text: `${s.error === 'busy' ? 'The hub has too many clients; retrying…' : 'Reconnecting after a drop'}${staleNote(s)}`,
+        tone: 'warn',
+      };
     case 'unauthorized':
       return { text: 'Authentication failed', tone: 'bad' };
     case 'incompatible':
@@ -34,8 +38,18 @@ export function connectionNotice(s: HomeState): { text: string; tone: 'warn' | '
         tone: 'bad',
       };
     case 'closed':
-      return { text: 'Not connected', tone: 'bad' };
+      return { text: `Not connected${staleNote(s)}`, tone: 'bad' };
   }
+}
+
+/**
+ * What the screen is showing when the hub is not answering: the last state we know,
+ * and how old it is. Without this the numbers would look live, and they are not.
+ */
+function staleNote(s: HomeState): string {
+  if (!s.stale) return '';
+  const age = s.savedAt !== null ? agoText(s.savedAt, Date.now()) : null;
+  return age ? ` — the last known state (${age})` : ' — the last known state';
 }
 
 /** For a wss:// hub: what to try when it will not connect (a browser hides why TLS failed). */
