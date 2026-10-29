@@ -22,7 +22,8 @@
     "relay-tunnel": "tsx tools/relay-tunnel.ts",
     "start": "expo start",
     "web": "expo start --web",
-    "export:web": "expo export --platform web"
+    "export:web": "expo export --platform web",
+    "relay-probe": "tsx tools/relay-probe.ts"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.2",
