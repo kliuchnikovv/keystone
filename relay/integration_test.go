@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -118,6 +119,66 @@ func TestRelayServer(t *testing.T) {
 		}
 		if !strings.HasPrefix(string(data), "!open:") {
 			t.Fatalf("want !open:<cid>, got %q", data)
+		}
+	})
+
+	t.Run("a frame sent before the hub is ready still reaches the tunnel", func(t *testing.T) {
+		client, _, err := websocket.Dial(ctx, wsBase+"/client/home", nil)
+		if err != nil {
+			t.Fatalf("the client must connect: %v", err)
+		}
+		defer client.Close(websocket.StatusNormalClosure, "")
+		// The client speaks before the hub has answered - this is what the app
+		// does: it sends its hello the moment the socket opens.
+		payload := `{"type":"hello","v":1,"token":"a-token"}`
+		if err := client.Write(ctx, websocket.MessageText, []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err := tunnel.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := string(data)
+		// Other clients come and go on the same tunnel; wait for our own !open:.
+		for !strings.HasPrefix(open, "!open:") {
+			if !strings.HasPrefix(open, "!close:") {
+				t.Fatalf("want !open:<cid>, got %q", open)
+			}
+			if _, data, err = tunnel.Read(ctx); err != nil {
+				t.Fatal(err)
+			}
+			open = string(data)
+		}
+		cid := parseCID(strings.TrimPrefix(open, "!open:"))
+		// Wait until the frame really waits in the relay's buffer: otherwise the
+		// test would depend on a race between the client and the tunnel.
+		h := r.getHub("home")
+		buffered := false
+		deadline := time.Now().Add(2 * time.Second)
+		for !buffered && time.Now().Before(deadline) {
+			h.mu.Lock()
+			b := h.buffered[cid]
+			buffered = b != nil && len(b.frames) > 0
+			h.mu.Unlock()
+			if !buffered {
+				time.Sleep(5 * time.Millisecond)
+			}
+		}
+		if !buffered {
+			t.Fatal("the frame must wait for the hub")
+		}
+		if err := tunnel.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf("!ready:%d", cid))); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err = tunnel.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The tunnel speaks "<cid>:<payload>"; a frame without the id is dropped
+		// by the firmware and the client's hello never arrives.
+		want := fmt.Sprintf("%d:%s", cid, payload)
+		if string(data) != want {
+			t.Fatalf("want %q, got %q", want, string(data))
 		}
 	})
 

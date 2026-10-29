@@ -605,6 +605,13 @@ The relay assigns a numeric `cid` (client id) to each remote client.  The hub/tu
 matches it to a virtual or local socket.  The hub-protocol payload (`hello`, `welcome`,
 `cmd`, `state`, …) is forwarded as-is — the relay does not inspect it.
 
+**Every frame that goes to the hub/tunnel carries the client id — including the ones
+that waited for the hub.** A client speaks before the hub has answered `!ready:` (the
+app sends its `hello` the moment the socket opens), so those frames wait in the relay
+until the hub is ready. The firmware drops a frame it cannot read (one without
+`<cid>:`), and such a client is then dropped by the hub's hello timeout (5 s) with
+"hub disconnected". Prefix the buffered frames too.
+
 ### 13.3 ESP relay client (brain-s3)
 
 `firmware/brain-s3/main/relay_client.{hpp,cpp}`.  Console:

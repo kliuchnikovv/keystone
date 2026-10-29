@@ -353,8 +353,12 @@ func (r *relay) handleTunnel(w http.ResponseWriter, req *http.Request, hubID, ip
 		switch {
 		case strings.HasPrefix(msg, "!ready:"):
 			cid := parseCID(msg[len("!ready:"):])
+			// The frames that waited for the hub carry the client's id too: the
+			// tunnel speaks "<cid>:<payload>", and a frame without it is dropped
+			// by the firmware. The hello of a client always lands here - the app
+			// sends it the moment the socket opens, long before the hub answers.
 			for _, frame := range h.takeBuffered(cid) {
-				_ = conn.write(ctx, frame)
+				_ = conn.write(ctx, fmt.Sprintf("%d:%s", cid, frame))
 			}
 		case strings.HasPrefix(msg, "!close:"):
 			cid := parseCID(msg[len("!close:"):])
