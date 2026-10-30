@@ -372,18 +372,38 @@ void ws_event_handler(void*, esp_event_base_t, std::int32_t event_id, void* even
 
 bool configure(const char* url, const char* secret) {
   if (url == nullptr || url[0] == '\0') return false;
-  // An empty secret means: the one baked into the firmware. It is not written to
-  // NVS - the firmware image is where that secret lives.
   const bool manual = secret != nullptr && secret[0] != '\0';
-  const char* sec = manual ? secret : baked_secret();
-  if (sec == nullptr || sec[0] == '\0') return false;
-  if (std::strlen(url) >= sizeof(g_url) || std::strlen(sec) >= sizeof(g_secret)) return false;
   nvs_handle_t h;
   if (nvs_open(kNvs, NVS_READWRITE, &h) != ESP_OK) return false;
+  // An empty secret means: keep the one this hub already has. That is the secret
+  // in NVS (a relay a person set up by hand) or, if there is none, the one baked
+  // into the firmware - which is not written to NVS.
+  char sec[sizeof(g_secret)] = {};
+  bool from_baked = false;
+  if (manual) {
+    std::strncpy(sec, secret, sizeof(sec) - 1);
+  } else {
+    std::size_t sl = sizeof(sec);
+    if (nvs_get_str(h, "relay_sec", sec, &sl) != ESP_OK || sec[0] == '\0') {
+      const char* b = baked_secret();
+      if (b == nullptr) b = "";
+      std::strncpy(sec, b, sizeof(sec) - 1);
+      from_baked = true;
+    }
+  }
+  if (sec[0] == '\0') {
+    nvs_close(h);
+    return false;
+  }
+  if (std::strlen(url) >= sizeof(g_url)) {
+    nvs_close(h);
+    return false;
+  }
   nvs_set_str(h, "relay_url", url);
   if (manual) {
     nvs_set_str(h, "relay_sec", secret);
-  } else {
+  } else if (from_baked) {
+    // The baked secret stays where it is: in the firmware image.
     nvs_erase_key(h, "relay_sec");
   }
   nvs_erase_key(h, "relay_off");  // a relay that was asked for is a relay that is wanted
@@ -391,7 +411,7 @@ bool configure(const char* url, const char* secret) {
   nvs_close(h);
   std::strncpy(g_url, url, sizeof(g_url) - 1);
   std::strncpy(g_secret, sec, sizeof(g_secret) - 1);
-  g_secret_baked = !manual;
+  g_secret_baked = from_baked;
   return true;
 }
 
