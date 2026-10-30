@@ -120,6 +120,9 @@
   .grabber { width: 36px; height: 4px; border-radius: 99px; background: var(--line); margin: 0 auto 12px; }
   .sheet h4 { margin: 0 0 4px; font-size: 17px; letter-spacing: -.01em; }
   .sheet .sub { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 4px; }
+  .disclosure {
+    margin-top: 12px; color: var(--accent); font-size: 12.5px; font-weight: 600;
+  }
   .tip {
     margin-top: 14px; background: rgba(47,125,79,.07); border: 1px solid rgba(47,125,79,.22);
     border-radius: 12px; padding: 11px 13px; font-size: 12px; color: #215c3a; line-height: 1.5;
@@ -218,7 +221,7 @@
 
     <div class="phone-wrap">
       <div class="phone-cap">Лист «Удалённый доступ»
-        <span>Секрет не обязателен</span>
+        <span>Поля секрета нет — только ссылка</span>
       </div>
       <div class="phone">
         <div class="statusbar"><span>9:41</span><span>●●● ▮</span></div>
@@ -237,9 +240,8 @@
           <div class="label">Адрес туннеля</div>
           <div class="input">wss://keystone-esp-production.up.railway.app/tunnel/hub-a1b2c3d4</div>
 
-          <div class="label">Секрет <span class="pill">не нужен</span></div>
-          <div class="input"><span class="ph">оставьте пустым — хаб возьмёт свой</span></div>
-          <div class="note">Секрет живёт в прошивке хаба. Поле нужно только для релея, который вы подняли сами.</div>
+          <div class="disclosure">I run my own relay — it needs a secret</div>
+          <div class="note">Секрет нужен только релею, который вы подняли сами. У нашего он уже есть в прошивке хаба.</div>
 
           <div class="btn primary">Сохранить</div>
           <div class="btn ghost">Отмена</div>
@@ -278,6 +280,7 @@
     <h3>Что за макетом</h3>
     <ul>
       <li>Секрет релея уезжает в прошивку хаба при прошивке коробки: <code>scripts/gen-hub-relay.sh</code> — <code>RELAY_HUB_SECRETS=id:secret</code> у релея, <code>relay_identity.h</code> у хаба.</li>
+      <li>Поля «секрет» в обычном случае нет: у нашего релея он уже есть в хабе. Ссылка появляется только для своего релея.</li>
       <li>В NVS секрета нет: хаб достаёт его из образа и в NVS не кладёт.</li>
       <li>Релей проверяет секрет по id хаба: <code>RELAY_HUB_SECRETS</code>, а общий <code>RELAY_SECRET</code> остаётся запасным вариантом.</li>
       <li>Инициализация нового хаба — только рядом с ним; QR или одноразовый код с наклейки.</li>
