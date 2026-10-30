@@ -57,6 +57,8 @@ describe('the hub tab', () => {
     click('Set up relay');
     await screen.findByLabelText('Relay URL');
     type('Relay URL', 'https://relay.example.com');
+    // The secret is only for a relay the person runs themselves.
+    click('I run my own relay');
     type('Secret', 'shared-secret');
     click('Save');
     await waitFor(() => expect(screen.getByText('https://relay.example.com')).toBeTruthy());
@@ -70,7 +72,6 @@ describe('the hub tab', () => {
     click('Set up relay');
     await screen.findByLabelText('Relay URL');
     type('Relay URL', 'wss://relay.example.com/tunnel/home');
-    type('Secret', 'shared-secret');
     click('Save');
     // The hub's own address ends in /tunnel/, the app's one in /client/.
     await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());

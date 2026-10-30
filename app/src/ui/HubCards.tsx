@@ -140,6 +140,9 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
+  // The secret is only needed for a relay the person runs themselves. Our relay
+  // knows the hub already, so the field stays out of the way until it is asked for.
+  const [showSecret, setShowSecret] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The hub's own address ends in /tunnel/<id>; the app talks to the client side.
   const clientUrl = info?.relay_url ? relayClientUrl(info.relay_url) : '';
@@ -252,6 +255,8 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
           label={info?.relay_url ? 'Change relay' : 'Set up relay'}
           onPress={() => {
             setUrl(info?.relay_url ?? '');
+            setSecret('');
+            setShowSecret(false);
             setOpen(true);
           }}
         />
@@ -271,11 +276,25 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
         </Text>
         <Text style={[styles.label, { color: t.muted }]}>Relay URL</Text>
         <Input label="Relay URL" value={url} onChangeText={setUrl} placeholder="wss://relay.example.com:9090/tunnel/my-hub" keyboardType="url" />
-        <Text style={[styles.label, { color: t.muted }]}>Secret</Text>
-        <Input label="Secret" value={secret} onChangeText={setSecret} placeholder="leave empty — the hub uses its own" secureTextEntry />
-        <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 4 }}>
-          The secret is baked into the hub's firmware when the box is flashed. Fill this in only for a relay you run yourself.
-        </Text>
+        {showSecret ? (
+          <>
+            <Text style={[styles.label, { color: t.muted }]}>Secret</Text>
+            <Input label="Secret" value={secret} onChangeText={setSecret} placeholder="the same secret on both sides" secureTextEntry />
+            <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 4 }}>
+              For a relay you run yourself. The hub keeps it; it is never sent back.
+            </Text>
+          </>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="I run my own relay"
+            onPress={() => setShowSecret(true)}
+            hitSlop={8}
+            style={{ marginTop: 10 }}
+          >
+            <Text style={{ color: t.accent, fontSize: 12.5, fontWeight: '600' }}>I run my own relay — it needs a secret</Text>
+          </Pressable>
+        )}
         <ErrorText text={error} />
         <View style={styles.row}>
           <Button kind="secondary" label="Cancel" onPress={() => setOpen(false)} />
