@@ -131,6 +131,7 @@ func (h *hub) snapshotClients() []*conn {
 
 type relay struct {
 	secret         string
+	hubSecrets     map[string]string
 	statusToken    string
 	allowedOrigins []string
 	maxClients     int
@@ -144,6 +145,7 @@ type relay struct {
 func newRelay(secret, statusToken string, allowedOrigins []string, maxClients, maxHubs int) *relay {
 	return &relay{
 		secret:         secret,
+		hubSecrets:     map[string]string{},
 		statusToken:    statusToken,
 		allowedOrigins: allowedOrigins,
 		maxClients:     maxClients,
@@ -151,6 +153,29 @@ func newRelay(secret, statusToken string, allowedOrigins []string, maxClients, m
 		limiter:        NewAuthLimiter(AuthFailures, AuthWindow, AuthBlock),
 		hubs:           make(map[string]*hub),
 	}
+}
+
+// setHubSecrets gives some hubs a secret of their own.
+func (r *relay) setHubSecrets(secrets map[string]string) {
+	r.hubSecrets = secrets
+}
+
+// secretFor returns the secret a hub with this id has to present, and whether
+// there is one at all. A hub with its own secret does not share the relay's.
+func (r *relay) secretFor(hubID string) (string, bool) {
+	if s, ok := r.hubSecrets[hubID]; ok && s != "" {
+		return s, true
+	}
+	if r.secret != "" {
+		return r.secret, true
+	}
+	return "", false
+}
+
+// secretMatches checks what a hub presented against the secret that belongs to it.
+func (r *relay) secretMatches(hubID, presented string) bool {
+	expected, ok := r.secretFor(hubID)
+	return ok && SecretMatches(presented, expected)
 }
 
 func (r *relay) log(tag, msg string) {
@@ -330,7 +355,7 @@ func (r *relay) handleTunnel(w http.ResponseWriter, req *http.Request, hubID, ip
 				conn.close(websocket.StatusPolicyViolation, "rate limited")
 				break
 			}
-			if strings.HasPrefix(msg, "!auth:") && SecretMatches(msg[len("!auth:"):], r.secret) {
+			if strings.HasPrefix(msg, "!auth:") && r.secretMatches(hubID, msg[len("!auth:"):]) {
 				r.limiter.Success(ip)
 				if !r.registerTunnel(conn, hubID) {
 					_ = conn.write(ctx, "!error:too many hubs")

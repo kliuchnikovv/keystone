@@ -9,6 +9,9 @@
 //
 //	PORT                    the port to listen on (a PaaS sets it)
 //	RELAY_SECRET            the shared secret the hubs authenticate with — required
+//	                        unless every hub has a secret of its own
+//	RELAY_HUB_SECRETS       "id:secret,id2:secret2" — a secret per hub, baked into
+//	                        that hub's firmware when the box is flashed
 //	RELAY_STATUS_TOKEN      if set, the status page shows the hub ids only to
 //	                        whoever sends this token; without it, counters only
 //	RELAY_ALLOWED_ORIGINS   comma-separated browser origins allowed to connect
@@ -54,13 +57,17 @@ func main() {
 	if sec == "" {
 		sec = os.Getenv("RELAY_SECRET")
 	}
-	if sec == "" {
+	// Some hubs have a secret of their own: it is baked into their firmware when
+	// the box is flashed, and only that hub's line here knows it.
+	hubSecrets := ParseHubSecrets(os.Getenv("RELAY_HUB_SECRETS"))
+	if sec == "" && len(hubSecrets) == 0 {
 		fmt.Fprintln(os.Stderr,
-			"relay: no shared secret. Set the RELAY_SECRET variable (a PaaS passes it "+
-				"in the environment) or run it with --secret <shared-secret>.")
+			"relay: no secret at all. Set RELAY_SECRET (one secret for every hub) or "+
+				"RELAY_HUB_SECRETS (\"id:secret,...\", one secret per hub) — without one, "+
+				"anybody could register a tunnel under your hub id.")
 		os.Exit(2)
 	}
-	if len(sec) < 16 {
+	if len(sec) < 16 && sec != "" {
 		fmt.Fprintln(os.Stderr,
 			"relay: the shared secret is short. Use at least 16 random characters — it is "+
 				"the only thing that keeps a stranger from registering a tunnel under your hub id.")
@@ -69,6 +76,7 @@ func main() {
 	statusToken := os.Getenv("RELAY_STATUS_TOKEN")
 	origins := ParseOriginAllowlist(os.Getenv("RELAY_ALLOWED_ORIGINS"))
 	r := newRelay(sec, statusToken, origins, *maxClients, *maxHubs)
+	r.setHubSecrets(hubSecrets)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", listenPort),
@@ -94,6 +102,9 @@ func main() {
 	}()
 
 	r.log("relay", fmt.Sprintf("listening on port %d", listenPort))
+	if len(hubSecrets) > 0 {
+		r.log("relay", fmt.Sprintf("%d hub(s) with a secret of their own", len(hubSecrets)))
+	}
 	if statusToken != "" {
 		r.log("relay", "status page: token required")
 	} else {

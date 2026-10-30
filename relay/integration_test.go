@@ -18,6 +18,7 @@ func TestRelayServer(t *testing.T) {
 	const statusToken = "status-token-123"
 
 	r := newRelay(secret, statusToken, nil, MaxClientsPerHub, MaxHubs)
+	r.setHubSecrets(map[string]string{"solo": "the-secrets-of-one-hub-only"})
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	wsBase := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -193,6 +194,43 @@ func TestRelayServer(t *testing.T) {
 		want := fmt.Sprintf("%d:%s", cid, payload)
 		if string(data) != want {
 			t.Fatalf("want %q, got %q", want, string(data))
+		}
+	})
+
+	t.Run("a hub with a secret of its own uses it", func(t *testing.T) {
+		soloCtx, soloCancel := context.WithCancel(ctx)
+		defer soloCancel()
+		solo, _, err := websocket.Dial(soloCtx, wsBase+"/tunnel/solo", nil)
+		if err != nil {
+			t.Fatalf("the tunnel must connect: %v", err)
+		}
+		if err := solo.Write(ctx, websocket.MessageText, []byte("!auth:the-secrets-of-one-hub-only")); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err := solo.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "!ok" {
+			t.Fatalf("want !ok, got %q", data)
+		}
+		solo.Close(websocket.StatusNormalClosure, "")
+
+		// The relay's shared secret must not open a hub that has a secret of its own.
+		again, _, err := websocket.Dial(soloCtx, wsBase+"/tunnel/solo", nil)
+		if err != nil {
+			t.Fatalf("the tunnel must connect: %v", err)
+		}
+		defer again.Close(websocket.StatusNormalClosure, "")
+		if err := again.Write(ctx, websocket.MessageText, []byte("!auth:"+secret)); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err = again.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(data), "!error:unauthorized") {
+			t.Fatalf("the shared secret must not open this hub, got %q", data)
 		}
 	})
 

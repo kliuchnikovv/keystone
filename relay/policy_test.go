@@ -95,6 +95,30 @@ func TestParseOriginAllowlist(t *testing.T) {
 	}
 }
 
+func TestParseHubSecrets(t *testing.T) {
+	got := ParseHubSecrets("home:secret-one, kitchen:secret-two")
+	if len(got) != 2 || got["home"] != "secret-one" || got["kitchen"] != "secret-two" {
+		t.Fatalf("unexpected secrets: %v", got)
+	}
+	if len(ParseHubSecrets("")) != 0 {
+		t.Fatal("an empty value means no hub has a secret of its own")
+	}
+	if len(ParseHubSecrets("home:")) != 0 {
+		t.Fatal("a hub without a secret is not a hub with a secret")
+	}
+	if len(ParseHubSecrets("bad id:secret")) != 0 {
+		t.Fatal("an id with a space is not a hub id")
+	}
+	if len(ParseHubSecrets("home-without-a-secret")) != 0 {
+		t.Fatal("an entry without a colon is not a pair")
+	}
+	// The secret itself may contain a colon: only the first one separates.
+	withColon := ParseHubSecrets("home:abc:def")
+	if len(withColon) != 1 || withColon["home"] != "abc:def" {
+		t.Fatalf("unexpected secret: %v", withColon)
+	}
+}
+
 func TestAuthLimiterBlocksAfterTooManyFailures(t *testing.T) {
 	l := NewAuthLimiter(3, time.Minute, time.Minute)
 	now := time.Unix(1_000_000, 0)

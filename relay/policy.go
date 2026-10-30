@@ -119,6 +119,33 @@ func ParseOriginAllowlist(value string) []string {
 	return out
 }
 
+// ParseHubSecrets reads the RELAY_HUB_SECRETS value: "id:secret,id2:secret2".
+//
+// A hub that has its own secret does not share the relay's: the secret is baked
+// into that hub's firmware when the box is flashed, and only that hub's line
+// knows it. A hub that is not listed falls back to the relay's shared secret,
+// so a relay can serve both kinds at once.
+//
+// The id is the one the hub uses in its tunnel URL, so a wrong id here means the
+// hub cannot register - it is worth getting right.
+func ParseHubSecrets(value string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(value, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		id, secret, found := strings.Cut(p, ":")
+		id = strings.TrimSpace(id)
+		secret = strings.TrimSpace(secret)
+		if !found || !HubIDValid(id) || secret == "" {
+			continue
+		}
+		out[id] = secret
+	}
+	return out
+}
+
 type failEntry struct {
 	count        int
 	first        time.Time
