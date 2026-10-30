@@ -16,6 +16,17 @@
 #include "core/app_protocol.hpp"
 #include "core/json.hpp"
 
+// The relay this hub belongs to, its id there and a secret of its own. They are
+// written into the firmware when the box is flashed (scripts/gen-hub-relay.sh),
+// so the receiver of the box never has to type a secret.
+#if __has_include("relay_identity.h")
+#include "relay_identity.h"
+#else
+#define KEYSTONE_RELAY_HOST ""
+#define KEYSTONE_RELAY_ID ""
+#define KEYSTONE_RELAY_SECRET ""
+#endif
+
 namespace relay {
 namespace {
 
@@ -38,6 +49,7 @@ char g_token[core::app::kMaxToken + 1] = {};
 char g_secret[64] = {};
 char g_url[256] = {};
 VClient g_vclients[kMaxVClients];
+bool g_secret_baked = false;  // the secret came from the firmware, not from NVS
 std::atomic<bool> g_tunnel_authed{false};
 bool g_started = false;
 
@@ -359,16 +371,27 @@ void ws_event_handler(void*, esp_event_base_t, std::int32_t event_id, void* even
 // ---- public API ------------------------------------------------------------------
 
 bool configure(const char* url, const char* secret) {
-  if (url == nullptr || secret == nullptr || url[0] == '\0' || secret[0] == '\0') return false;
-  if (std::strlen(url) >= sizeof(g_url) || std::strlen(secret) >= sizeof(g_secret)) return false;
+  if (url == nullptr || url[0] == '\0') return false;
+  // An empty secret means: the one baked into the firmware. It is not written to
+  // NVS - the firmware image is where that secret lives.
+  const bool manual = secret != nullptr && secret[0] != '\0';
+  const char* sec = manual ? secret : baked_secret();
+  if (sec == nullptr || sec[0] == '\0') return false;
+  if (std::strlen(url) >= sizeof(g_url) || std::strlen(sec) >= sizeof(g_secret)) return false;
   nvs_handle_t h;
   if (nvs_open(kNvs, NVS_READWRITE, &h) != ESP_OK) return false;
   nvs_set_str(h, "relay_url", url);
-  nvs_set_str(h, "relay_sec", secret);
+  if (manual) {
+    nvs_set_str(h, "relay_sec", secret);
+  } else {
+    nvs_erase_key(h, "relay_sec");
+  }
+  nvs_erase_key(h, "relay_off");  // a relay that was asked for is a relay that is wanted
   nvs_commit(h);
   nvs_close(h);
   std::strncpy(g_url, url, sizeof(g_url) - 1);
-  std::strncpy(g_secret, secret, sizeof(g_secret) - 1);
+  std::strncpy(g_secret, sec, sizeof(g_secret) - 1);
+  g_secret_baked = !manual;
   return true;
 }
 
@@ -377,11 +400,15 @@ void clear_config() {
   if (nvs_open(kNvs, NVS_READWRITE, &h) == ESP_OK) {
     nvs_erase_key(h, "relay_url");
     nvs_erase_key(h, "relay_sec");
+    // The relay baked into the firmware must not come back on the next boot:
+    // "clear" means the hub does not want a relay.
+    nvs_set_str(h, "relay_off", "1");
     nvs_commit(h);
     nvs_close(h);
   }
   g_url[0] = '\0';
   g_secret[0] = '\0';
+  g_secret_baked = false;
 }
 
 void describe(char* buf, std::size_t cap) {
@@ -392,11 +419,16 @@ void describe(char* buf, std::size_t cap) {
   const bool conn = g_ws != nullptr && esp_websocket_client_is_connected(g_ws);
   std::size_t n_authed = 0;
   if (g_mu != nullptr) { Guard g; n_authed = authed_count_locked(); }
-  std::snprintf(buf, cap, "relay: %s, tunnel %s%s, %u remote client(s)\n  url: %s\n",
+  // The id is the last part of the tunnel URL: /tunnel/<id>.
+  char id[80] = {};
+  const char* slash = std::strrchr(g_url, '/');
+  if (slash != nullptr && slash[1] != '\0') std::snprintf(id, sizeof(id), "%s", slash + 1);
+  std::snprintf(buf, cap, "relay: %s, tunnel %s%s, %u remote client(s)\n  url: %s\n  id: %s, secret: %s\n",
                 g_started ? "running" : "stopped",
                 conn ? "connected" : "disconnected",
                 (conn && g_tunnel_authed) ? " (authenticated)" : "",
-                static_cast<unsigned>(n_authed), g_url);
+                static_cast<unsigned>(n_authed), g_url, id,
+                g_secret_baked ? "baked into the firmware" : "in NVS");
 }
 
 bool configured_url(char* out, std::size_t cap) {
@@ -405,18 +437,67 @@ bool configured_url(char* out, std::size_t cap) {
   return g_url[0] != '\0';
 }
 
+const char* baked_host() { return KEYSTONE_RELAY_HOST; }
+const char* baked_id() { return KEYSTONE_RELAY_ID; }
+const char* baked_secret() { return KEYSTONE_RELAY_SECRET; }
+
 bool start(const char* token, HubInfoFn info) {
   if (g_url[0] == '\0') {
-    // Try loading from NVS.
+    bool off = false;
     nvs_handle_t h;
-    if (nvs_open(kNvs, NVS_READONLY, &h) != ESP_OK) return false;
-    std::size_t ul = sizeof(g_url), sl = sizeof(g_secret);
-    const bool ok = nvs_get_str(h, "relay_url", g_url, &ul) == ESP_OK &&
-                    nvs_get_str(h, "relay_sec", g_secret, &sl) == ESP_OK &&
-                    g_url[0] != '\0';
-    nvs_close(h);
-    if (!ok) { g_url[0] = '\0'; g_secret[0] = '\0'; return false; }
-    ESP_LOGI(kTag, "loaded relay config from NVS: %s", g_url);
+    if (nvs_open(kNvs, NVS_READONLY, &h) == ESP_OK) {
+      std::size_t ul = sizeof(g_url), sl = sizeof(g_secret);
+      const bool have_url = nvs_get_str(h, "relay_url", g_url, &ul) == ESP_OK && g_url[0] != '\0';
+      const bool have_sec = nvs_get_str(h, "relay_sec", g_secret, &sl) == ESP_OK && g_secret[0] != '\0';
+      char flag[8] = {};
+      std::size_t fl = sizeof(flag);
+      off = nvs_get_str(h, "relay_off", flag, &fl) == ESP_OK && flag[0] == '1';
+      nvs_close(h);
+      if (have_url) {
+        if (!have_sec) {
+          // No secret in NVS: the one baked into the firmware is used.
+          const char* b = baked_secret();
+          if (b != nullptr && b[0] != '\0') {
+            std::strncpy(g_secret, b, sizeof(g_secret) - 1);
+            g_secret_baked = true;
+          }
+        }
+        ESP_LOGI(kTag, "loaded relay config from NVS: %s", g_url);
+      } else {
+        g_url[0] = '\0';
+        g_secret[0] = '\0';
+      }
+    }
+    if (g_url[0] == '\0' && !off) {
+      // Nothing was configured: use the relay that was baked into the firmware.
+      const char* host = baked_host();
+      const char* id = baked_id();
+      const char* sec = baked_secret();
+      if (host != nullptr && id != nullptr && sec != nullptr && host[0] != '\0' && id[0] != '\0' &&
+          sec[0] != '\0') {
+        char url[256];
+        const int n = std::snprintf(url, sizeof(url), "wss://%s/tunnel/%s", host, id);
+        if (n > 0 && static_cast<std::size_t>(n) < sizeof(url)) {
+          std::strncpy(g_url, url, sizeof(g_url) - 1);
+          std::strncpy(g_secret, sec, sizeof(g_secret) - 1);
+          g_secret_baked = true;
+          ESP_LOGI(kTag, "relay baked into the firmware: %s", g_url);
+          // The address goes to NVS so the app can show it; the secret does not.
+          nvs_handle_t h2;
+          if (nvs_open(kNvs, NVS_READWRITE, &h2) == ESP_OK) {
+            nvs_set_str(h2, "relay_url", g_url);
+            nvs_erase_key(h2, "relay_sec");
+            nvs_commit(h2);
+            nvs_close(h2);
+          }
+        }
+      }
+    }
+    if (g_url[0] == '\0') { g_secret[0] = '\0'; return false; }
+    if (g_secret[0] == '\0') {
+      ESP_LOGW(kTag, "the relay address is set but there is no secret - the tunnel cannot open");
+      return false;
+    }
   }
 
   if (g_mu == nullptr) g_mu = xSemaphoreCreateMutex();

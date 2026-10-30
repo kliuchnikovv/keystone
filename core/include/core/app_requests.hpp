@@ -760,15 +760,23 @@ Outcome access_token_parse(const Reader& r, int args, char* token, std::size_t c
   return Outcome::done();
 }
 
-/** `access.relay.set {url, secret}`: the remote-access relay, like the `relay` console command. */
+/** `access.relay.set {url, secret}`: the remote-access relay, like the `relay` console command.
+ *
+ * The secret may be left out: a hub that was flashed with a secret of its own (the
+ * receiver of the box never types one) uses the one in its firmware instead. */
 template <typename Reader>
 Outcome access_relay_parse(const Reader& r, int args, RelayRequest& out) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   if (!r.get_string(r.find(args, "url"), out.url, sizeof(out.url)) || !relay_url_valid(out.url)) {
     return Outcome::fail(Err::BadArgs, "url: ws://, wss://, http:// or https://");
   }
-  if (!r.get_string(r.find(args, "secret"), out.secret, sizeof(out.secret)) || out.secret[0] == '\0') {
-    return Outcome::fail(Err::BadArgs, "secret");
+  const int s = r.find(args, "secret");
+  if (s >= 0) {
+    if (!r.get_string(s, out.secret, sizeof(out.secret))) {
+      return Outcome::fail(Err::BadArgs, "secret");
+    }
+  } else {
+    out.secret[0] = '\0';
   }
   return Outcome::done();
 }

@@ -3418,15 +3418,17 @@ int cmd_relay(int argc, char** argv) {
     printf("relay credentials erased; tunnel stopped\n");
     return 0;
   }
-  if (argc != 3) {
+  if (argc < 2 || argc > 3) {
     printf("usage:\n"
            "  relay                          show status\n"
-           "  relay <url> <secret>           save credentials and connect\n"
+           "  relay <url> [<secret>]         save the address and connect\n"
+           "                                 (no secret: the one baked into the firmware is used)\n"
            "  relay clear                    disconnect and erase credentials\n"
            "  url example: wss://relay.example.com:9090/tunnel/my-hub\n");
     return 1;
   }
-  if (!relay::configure(argv[1], argv[2])) {
+  const char* sec = argc == 3 ? argv[2] : "";
+  if (!relay::configure(argv[1], sec)) {
     printf("bad relay credentials\n");
     return 1;
   }

@@ -31,6 +31,10 @@ node_modules/
 dist/
 .expo/
 
+# The hub's relay identity (scripts/gen-hub-relay.sh): the secret the hub uses to
+# register with the relay. Never in git.
+firmware/*/main/relay_identity.h
+
 # The hub's TLS identity (scripts/gen-hub-cert.sh): never commit the private key.
 firmware/*/main/hub_key.pem
 firmware/*/main/hub_cert.pem

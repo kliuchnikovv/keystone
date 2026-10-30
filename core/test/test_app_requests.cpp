@@ -864,8 +864,7 @@ TEST_CASE("access.relay.set takes a relay url and a secret") {
       R"({"url":"","secret":"s3cret"})",
       R"({"url":"relay.example.com","secret":"s3cret"})",
       R"({"url":"ftp://relay.example.com","secret":"s3cret"})",
-      R"({"url":"wss://relay.example.com","secret":""})",
-      R"({"url":"wss://relay.example.com"})",
+      R"({"url":"wss://relay.example.com","secret":123})",
       R"({"secret":"s3cret"})",
       R"({})",
   };
@@ -875,4 +874,15 @@ TEST_CASE("access.relay.set takes a relay url and a secret") {
     CHECK_FALSE(o.ok);
     CHECK(o.err == Err::BadArgs);
   }
+}
+
+TEST_CASE("access.relay.set may leave the secret out") {
+  // A hub that was flashed with a secret of its own uses the one in its firmware:
+  // the person who receives the box never types a secret.
+  core::app::RelayRequest req;
+  REQUIRE(relay_parse(R"({"url":"wss://relay.example.com/tunnel/my-hub"})", req).ok);
+  CHECK(std::string(req.url) == "wss://relay.example.com/tunnel/my-hub");
+  CHECK(std::string(req.secret).empty());
+  REQUIRE(relay_parse(R"({"url":"wss://relay.example.com/tunnel/my-hub","secret":""})", req).ok);
+  CHECK(std::string(req.secret).empty());
 }
