@@ -184,7 +184,7 @@ so they also update the desired state (reconciler).
 | `hub.factory_reset` | — | answers `ok`, then ~500 ms later erases the hub's own settings (rules, names, schedules, timers, scenes, desired state, the app token, the relay credentials, the location) and reboots. The Wi-Fi credentials stay, and the co-processors keep their own partitions (their networks and images). See §5.2 |
 | `access.get` | — | `result: {token, fingerprint, remote, relay_url}` (§5.2) |
 | `access.token.set` | `token` (8..64 printable ASCII characters, no spaces) | the same rule as the console's `webtoken`. Answers `ok`, then ~300 ms later saves the token and restarts the app server: **the connection drops and the client must reconnect with the new token** |
-| `access.relay.set` | `url` (`ws://`, `wss://`, `http://` or `https://`), `secret` | the remote-access relay (§13), like the console's `relay <url> <secret>`: the credentials are saved and the hub connects out. The secret is never sent back |
+| `access.relay.set` | `url` (`ws://`, `wss://`, `http://` or `https://`), `secret` (optional) | the remote-access relay (§13), like the console's `relay <url> [<secret>]`: the address is saved and the hub connects out. The secret may be left out — a hub that was flashed with a secret of its own (`scripts/gen-hub-relay.sh`) uses the one in its firmware, and the person who received the box never types one. The secret is never sent back |
 | `access.relay.clear` | — | disconnects the tunnel and erases the relay credentials |
 | `wifi.forget` | — | answers `ok`, then ~300 ms later erases the saved Wi-Fi credentials and disconnects: the hub comes up on its setup access point (§11) |
 
