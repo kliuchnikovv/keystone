@@ -44,23 +44,41 @@ func TestHubIDValid(t *testing.T) {
 }
 
 func TestOriginAllowed(t *testing.T) {
-	if !OriginAllowed("", nil) {
+	const host = "relay.example"
+	if !OriginAllowed("", nil, host) {
 		t.Fatal("a native client sends no Origin and must be allowed")
 	}
-	if OriginAllowed("https://evil.example", nil) {
+	if OriginAllowed("https://evil.example", nil, host) {
 		t.Fatal("a browser origin that is not listed must be refused")
 	}
-	if !OriginAllowed("https://app.example", []string{"https://app.example"}) {
+	if !OriginAllowed("https://app.example", []string{"https://app.example"}, host) {
 		t.Fatal("a listed origin must be allowed")
 	}
-	if !OriginAllowed("HTTPS://APP.EXAMPLE", []string{"https://app.example"}) {
+	if !OriginAllowed("HTTPS://APP.EXAMPLE", []string{"https://app.example"}, host) {
 		t.Fatal("the comparison must not care about the case")
 	}
-	if !OriginAllowed("https://app.example", []string{"https://app.example/"}) {
+	if !OriginAllowed("https://app.example", []string{"https://app.example/"}, host) {
 		t.Fatal("a trailing slash must not make a listed origin different")
 	}
-	if OriginAllowed("https://app.example", []string{"https://app.example.evil"}) {
+	if OriginAllowed("https://app.example", []string{"https://app.example.evil"}, host) {
 		t.Fatal("a listed origin must match exactly")
+	}
+	// The phone app on iOS is SocketRocket, and it mirrors the address it dials
+	// into the Origin header: the relay's own origin is not a foreign site.
+	if !OriginAllowed("https://relay.example", nil, host) {
+		t.Fatal("the relay's own origin must be allowed")
+	}
+	if !OriginAllowed("https://relay.example", nil, "relay.example:8443") {
+		t.Fatal("the port must not make the relay's own origin different")
+	}
+	if OriginAllowed("https://relay.example.evil", nil, host) {
+		t.Fatal("a host that only starts the same must be refused")
+	}
+	if OriginAllowed("https://relay.example@evil.example", nil, host) {
+		t.Fatal("an origin with a user name must not slip through")
+	}
+	if OriginAllowed("null", nil, host) {
+		t.Fatal("an origin of null must be refused")
 	}
 }
 

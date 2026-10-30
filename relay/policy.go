@@ -10,6 +10,8 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -52,15 +54,23 @@ func HubIDValid(id string) bool {
 	return hubIDPattern.MatchString(id)
 }
 
-// OriginAllowed decides which browser origins may open a socket to the relay.
+// OriginAllowed decides which origins may open a socket to the relay.
 //
-// Native clients — the hub itself, the phone app, the console — send no Origin
-// header at all, so they are always allowed. A browser always sends one, and a
-// website in a browser must not be able to spend a client's slot on the hub, so
-// browser origins are refused unless they are listed explicitly
-// (RELAY_ALLOWED_ORIGINS).
-func OriginAllowed(origin string, allowlist []string) bool {
+// A browser always sends an Origin, and a website in a browser must not be able
+// to spend a client's slot on the hub, so a foreign origin is refused unless it
+// is listed explicitly (RELAY_ALLOWED_ORIGINS).
+//
+// A native client is a different case. React Native's WebSocket on iOS is
+// SocketRocket, and it mirrors the address it dials into the Origin header
+// ("wss" becomes "https") — the phone app therefore sends the relay's own
+// origin. That is the same origin, not a foreign site, and it is allowed: only
+// the host has to match, because the scheme the relay sees is not the scheme
+// the client used (TLS is terminated in front of this process).
+func OriginAllowed(origin string, allowlist []string, reqHost string) bool {
 	if origin == "" {
+		return true
+	}
+	if sameHost(origin, reqHost) {
 		return true
 	}
 	o := normalizeOrigin(origin)
@@ -70,6 +80,21 @@ func OriginAllowed(origin string, allowlist []string) bool {
 		}
 	}
 	return false
+}
+
+// sameHost reports whether the origin points at the host the request came to.
+// A page on another site cannot fake this: a browser sends the origin of the
+// page it runs on, not the address of the socket it opens.
+func sameHost(origin, reqHost string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(reqHost)
+	if err != nil {
+		host = reqHost
+	}
+	return host != "" && strings.EqualFold(u.Hostname(), host)
 }
 
 // normalizeOrigin puts an origin into one shape: lower case, no spaces, no

@@ -12,6 +12,7 @@
 //	RELAY_STATUS_TOKEN      if set, the status page shows the hub ids only to
 //	                        whoever sends this token; without it, counters only
 //	RELAY_ALLOWED_ORIGINS   comma-separated browser origins allowed to connect
+//	                        (the relay's own origin is always allowed)
 //
 // TLS is terminated in front of this process: the hub verifies the relay's
 // certificate against the Mozilla CA bundle, so the certificate has to come
@@ -101,7 +102,7 @@ func main() {
 	if len(origins) > 0 {
 		r.log("relay", "browser origins allowed: "+strings.Join(origins, ", "))
 	} else {
-		r.log("relay", "browser origins allowed: none")
+		r.log("relay", "browser origins allowed: none (the relay's own origin is always allowed)")
 	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

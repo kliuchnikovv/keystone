@@ -247,10 +247,12 @@ func (r *relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "expected a websocket", http.StatusBadRequest)
 		return
 	}
-	// Native clients (the hub, the phone app, the console) send no Origin header.
-	// A browser always does, and a website must not be able to spend a client's
-	// slot on the hub, so browser origins are refused unless listed explicitly.
-	if !OriginAllowed(req.Header.Get("Origin"), r.allowedOrigins) {
+	// A browser always sends an Origin, and a website must not be able to spend a
+	// client's slot on the hub, so a foreign origin is refused unless it is listed
+	// explicitly. A native client is fine: the hub sends none at all, and the
+	// phone app on iOS sends the relay's own origin (SocketRocket mirrors the
+	// address it dials into the header).
+	if !OriginAllowed(req.Header.Get("Origin"), r.allowedOrigins, req.Host) {
 		origin := req.Header.Get("Origin")
 		r.log("relay", fmt.Sprintf("refused origin %q from %s", origin, clientIP(req)))
 		http.Error(w, fmt.Sprintf("forbidden: origin %q is refused unless RELAY_ALLOWED_ORIGINS lists it", origin), http.StatusForbidden)

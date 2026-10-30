@@ -61,6 +61,20 @@ func TestRelayServer(t *testing.T) {
 		}
 	})
 
+	t.Run("a native client that mirrors the address may connect", func(t *testing.T) {
+		// React Native's WebSocket on iOS is SocketRocket: it puts the address
+		// it dials into the Origin header. That is the relay's own origin, not a
+		// foreign site, so it must not be refused.
+		host := strings.TrimPrefix(srv.URL, "http://")
+		c, _, err := websocket.Dial(ctx, wsBase+"/client/home", &websocket.DialOptions{
+			HTTPHeader: http.Header{"Origin": []string{"http://" + host}},
+		})
+		if err != nil {
+			t.Fatalf("the client must connect: %v", err)
+		}
+		c.Close(websocket.StatusNormalClosure, "")
+	})
+
 	t.Run("an invalid hub id is refused", func(t *testing.T) {
 		_, _, err := websocket.Dial(ctx, wsBase+"/tunnel/bad%20id", nil)
 		if err == nil {
