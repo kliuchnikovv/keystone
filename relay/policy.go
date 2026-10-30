@@ -8,8 +8,10 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"net"
 	"net/url"
 	"regexp"
@@ -144,6 +146,19 @@ func ParseHubSecrets(value string) map[string]string {
 		out[id] = secret
 	}
 	return out
+}
+
+// DeriveHubSecret computes the secret of a hub from the relay's master key.
+//
+// This is what makes a new home a one-line job: the relay derives the secret of
+// every id itself, so a hub that was flashed with the derived secret registers
+// on its own, and nothing has to be added to the relay's configuration. The
+// master key never leaves the relay's environment, and the secret of one hub
+// says nothing about the secret of another.
+func DeriveHubSecret(master, hubID string) string {
+	mac := hmac.New(sha256.New, []byte(master))
+	mac.Write([]byte("hub:" + hubID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 type failEntry struct {

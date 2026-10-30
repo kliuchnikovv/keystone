@@ -10,8 +10,11 @@
 //	PORT                    the port to listen on (a PaaS sets it)
 //	RELAY_SECRET            the shared secret the hubs authenticate with — required
 //	                        unless every hub has a secret of its own
-//	RELAY_HUB_SECRETS       "id:secret,id2:secret2" — a secret per hub, baked into
-//	                        that hub's firmware when the box is flashed
+//	RELAY_MASTER_SECRET     the key every hub's secret is derived from: a new home
+//	                        needs nothing here, the hub carries its secret in its
+//	                        firmware and the relay derives the same value
+//	RELAY_HUB_SECRETS       "id:secret,id2:secret2" — a secret per hub, for the
+//	                        hubs that have one of their own
 //	RELAY_STATUS_TOKEN      if set, the status page shows the hub ids only to
 //	                        whoever sends this token; without it, counters only
 //	RELAY_ALLOWED_ORIGINS   comma-separated browser origins allowed to connect
@@ -57,13 +60,16 @@ func main() {
 	if sec == "" {
 		sec = os.Getenv("RELAY_SECRET")
 	}
-	// Some hubs have a secret of their own: it is baked into their firmware when
-	// the box is flashed, and only that hub's line here knows it.
+	// The master key: the relay derives the secret of every hub from it, so a new
+	// home needs nothing here - the hub carries its secret in its firmware.
+	master := os.Getenv("RELAY_MASTER_SECRET")
+	// Some hubs have a secret of their own, given as a pair.
 	hubSecrets := ParseHubSecrets(os.Getenv("RELAY_HUB_SECRETS"))
-	if sec == "" && len(hubSecrets) == 0 {
+	if sec == "" && master == "" && len(hubSecrets) == 0 {
 		fmt.Fprintln(os.Stderr,
-			"relay: no secret at all. Set RELAY_SECRET (one secret for every hub) or "+
-				"RELAY_HUB_SECRETS (\"id:secret,...\", one secret per hub) — without one, "+
+			"relay: no secret at all. Set RELAY_MASTER_SECRET (the relay derives every "+
+				"hub's secret from it), RELAY_SECRET (one secret for every hub) or "+
+				"RELAY_HUB_SECRETS (\"id:secret,...\", one pair per hub) - without one, "+
 				"anybody could register a tunnel under your hub id.")
 		os.Exit(2)
 	}
@@ -76,6 +82,7 @@ func main() {
 	statusToken := os.Getenv("RELAY_STATUS_TOKEN")
 	origins := ParseOriginAllowlist(os.Getenv("RELAY_ALLOWED_ORIGINS"))
 	r := newRelay(sec, statusToken, origins, *maxClients, *maxHubs)
+	r.setMaster(master)
 	r.setHubSecrets(hubSecrets)
 
 	srv := &http.Server{
@@ -102,6 +109,9 @@ func main() {
 	}()
 
 	r.log("relay", fmt.Sprintf("listening on port %d", listenPort))
+	if master != "" {
+		r.log("relay", "master key: set (every hub's secret is derived from it)")
+	}
 	if len(hubSecrets) > 0 {
 		r.log("relay", fmt.Sprintf("%d hub(s) with a secret of their own", len(hubSecrets)))
 	}

@@ -119,6 +119,25 @@ func TestParseHubSecrets(t *testing.T) {
 	}
 }
 
+func TestDeriveHubSecret(t *testing.T) {
+	// The same derivation the flashing script does with openssl:
+	//   printf 'hub:%s' <id> | openssl dgst -sha256 -hmac <master>
+	// The vector keeps the two sides from drifting apart.
+	const master = "test-master-key"
+	if got := DeriveHubSecret(master, "home"); got != "67ea0ff381559896cc0ee1e1dffab32483e6eb8824846b524e36e58fb4aa62d7" {
+		t.Fatalf("the derived secret must match the script's: %s", got)
+	}
+	if got := DeriveHubSecret(master, "hub-a1b2c3d4"); got != "7d105bb1e92383637381d1d48ec7996be9aa54816fa57eb07eecbb2399d51259" {
+		t.Fatalf("the derived secret must match the script's: %s", got)
+	}
+	if DeriveHubSecret(master, "home") == DeriveHubSecret(master, "kitchen") {
+		t.Fatal("two hubs must not share a secret")
+	}
+	if DeriveHubSecret("another-master", "home") == DeriveHubSecret(master, "home") {
+		t.Fatal("another master key must give another secret")
+	}
+}
+
 func TestAuthLimiterBlocksAfterTooManyFailures(t *testing.T) {
 	l := NewAuthLimiter(3, time.Minute, time.Minute)
 	now := time.Unix(1_000_000, 0)

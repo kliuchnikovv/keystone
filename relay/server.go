@@ -131,6 +131,7 @@ func (h *hub) snapshotClients() []*conn {
 
 type relay struct {
 	secret         string
+	master         string
 	hubSecrets     map[string]string
 	statusToken    string
 	allowedOrigins []string
@@ -160,11 +161,21 @@ func (r *relay) setHubSecrets(secrets map[string]string) {
 	r.hubSecrets = secrets
 }
 
+// setMaster sets the key the relay derives the secret of every hub from. With it
+// a new home needs nothing on the relay: the hub carries its secret in its
+// firmware, and the relay derives the same value from this key.
+func (r *relay) setMaster(master string) {
+	r.master = master
+}
+
 // secretFor returns the secret a hub with this id has to present, and whether
 // there is one at all. A hub with its own secret does not share the relay's.
 func (r *relay) secretFor(hubID string) (string, bool) {
 	if s, ok := r.hubSecrets[hubID]; ok && s != "" {
 		return s, true
+	}
+	if r.master != "" {
+		return DeriveHubSecret(r.master, hubID), true
 	}
 	if r.secret != "" {
 		return r.secret, true

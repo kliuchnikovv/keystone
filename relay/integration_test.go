@@ -234,6 +234,34 @@ func TestRelayServer(t *testing.T) {
 		}
 	})
 
+	t.Run("a hub whose secret is derived from the master registers", func(t *testing.T) {
+		// Nothing was added to the relay for this hub: it derives the secret
+		// itself, so a new home needs no configuration there.
+		masterRelay := newRelay("", "", nil, MaxClientsPerHub, MaxHubs)
+		masterRelay.setMaster("the-master-key")
+		masterSrv := httptest.NewServer(masterRelay)
+		defer masterSrv.Close()
+		base := "ws" + strings.TrimPrefix(masterSrv.URL, "http")
+
+		tunnelCtx, tunnelCancel := context.WithCancel(ctx)
+		defer tunnelCancel()
+		tunnel, _, err := websocket.Dial(tunnelCtx, base+"/tunnel/kitchen", nil)
+		if err != nil {
+			t.Fatalf("the tunnel must connect: %v", err)
+		}
+		defer tunnel.Close(websocket.StatusNormalClosure, "")
+		if err := tunnel.Write(ctx, websocket.MessageText, []byte("!auth:"+DeriveHubSecret("the-master-key", "kitchen"))); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err := tunnel.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "!ok" {
+			t.Fatalf("want !ok, got %q", data)
+		}
+	})
+
 	t.Run("a wrong secret is refused", func(t *testing.T) {
 		bad, _, err := websocket.Dial(ctx, wsBase+"/tunnel/home", nil)
 		if err != nil {
