@@ -755,7 +755,9 @@ export class MockHub {
       case 'access.relay.set': {
         const { url, secret } = args;
         if (typeof url !== 'string' || !/^(wss?|https?):\/\//.test(url)) return no('bad_args', 'url: ws://, wss://, http:// or https://');
-        if (typeof secret !== 'string' || secret.length === 0) return no('bad_args', 'secret');
+        // The secret is optional: a hub that was flashed with a secret of its own
+        // uses the one in its firmware.
+        if (secret !== undefined && typeof secret !== 'string') return no('bad_args', 'secret');
         this.relayUrl = url;
         return ok();
       }

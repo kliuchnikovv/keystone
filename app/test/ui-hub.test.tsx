@@ -78,6 +78,16 @@ describe('the hub tab', () => {
     expect(used).toEqual(['wss://relay.example.com/client/home']);
   });
 
+  it('sets up a relay without a secret — the hub uses the one in its firmware', async () => {
+    await openHub();
+    click('Set up relay');
+    await screen.findByLabelText('Relay URL');
+    type('Relay URL', 'wss://relay.example.com/tunnel/home');
+    // No secret: the person who received the box never types one.
+    click('Save');
+    await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());
+  });
+
   it('starts an update and follows it', async () => {
     await openHub();
     click('Update from URL');
