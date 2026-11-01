@@ -114,6 +114,7 @@ Incremental events (no `id`, pushed as they happen):
 | `rules` / `schedules` / `timers` | the new full list, after any change (also by another client or the console) |
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
 | `hub` | `hub`: the whole hub object as in `welcome` — when the location changes or the clock becomes known (today's `sun`) |
+| `matter` | `state`, `entity`, `code`, `message` — how the attempt to add a Matter device stands (§5.3) |
 
 **What the real hub does today.** Live attribute changes are pushed as `state`
 events and chip health as `chip` events (on change, and every 10 s for telemetry).
@@ -177,6 +178,8 @@ so they also update the desired state (reconciler).
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
+| `matter.commission` | `kind` (0 = service data, 1 = advertisement, 2 = QR code), `payload` (hex bytes) | asks the hub to add a Matter device the phone found. Fire-and-forget like `pair`: `ok {state:"started"}` means the bytes were handed to the Matter chip; how it goes is reported by the `matter` event (§5.3). `bad_args` when the payload is not the shape the kind promises, `unsupported` when the hub has no Matter chip — or when its Matter chip is alive and has no commissioner (the hub asks once, learns this, and refuses straight away after that) |
+| `matter.status` | — | where the attempt stands: `result: {state, entity, code, message}` (§5.3) |
 | `history` | all optional: `before` (a `seq`: only events strictly older), `limit` (1..24, default 24), `entity` (only events about this device, also one that has since been removed) | a newest-first page of the event history (§5.1): `result: {now, latest, oldest, more, events}` |
 | `ota.start` | `chip` (1 = Zigbee C6, 2 = Thread C6), `url` (`http://` or `https://`), `sha256` (64 hex characters) | updates that co-processor over the UART link, exactly as the console's `ota <chip> <url> <sha256>`. The hub downloads the image itself, so the URL must be reachable **from the hub**; the client uploads nothing. One update at a time: `busy` while another runs. See §5.2 |
 | `ota.status` | — | where the update stands: `result: {state, pct, chip, message}` (§5.2) |
@@ -228,6 +231,68 @@ The ops that change the hub itself answer `ok` **first** and do the work a momen
 later (300 ms, 500 ms for the factory reset), so the reply reaches the client before
 the connection drops or the hub reboots. A client must expect the connection to drop
 after `hub.reboot`, `hub.factory_reset` and `access.token.set`, and reconnect.
+
+### 5.3 Adding a Matter device
+
+The phone has no Matter stack and cannot hold one: it cannot commission anything by
+itself. What it can do is **read what a device says about itself over Bluetooth** (or
+read its QR code) and hand those bytes to the hub, which does have the stack — on the
+Matter chip (0x02).
+
+```jsonc
+// the phone found a device and hands the bytes it read
+{ "type": "req", "id": 12, "op": "matter.commission",
+  "args": { "kind": 1, "payload": "0001f1ff0080000fa1b2c3d4" } }
+// → { "type": "res", "id": 12, "ok": true, "result": { "state": "started" } }
+```
+
+`kind` says what the bytes are, because the hub's stack parses each kind its own way:
+
+| kind | what the bytes are | what the hub needs them for |
+|---|---|---|
+| 0 | the commissioning service data (UUID 0xFFF6), exactly 7 bytes | only to **recognise** the device (its discriminator and setup hash) — not enough to commission it |
+| 1 | the bytes of the enhanced commissioning advertisement (company 0xFFF1), as they came out of the air (at least 11 bytes) | commissioning |
+| 2 | the payload of a QR code (`MT:…`, the standard commissioning payload), at least 11 bytes | commissioning |
+
+The phone never interprets the bytes beyond that: the hub checks only that they are
+the shape the kind promises (`bad_args` otherwise — odd length, a character that is
+not a hex digit, the wrong length for the kind) and passes them on unchanged.
+
+The answer is fire-and-forget, like `pair`: `ok` means the bytes reached the Matter
+chip, not that the device was added. How the attempt goes is reported by the `matter`
+event, which every client receives:
+
+```json
+{"type":"matter","state":"adding","entity":0,"code":"ok","message":"the hub is working on it"}
+```
+
+- `state`: `idle` · `scanning` · `commissioning` · `adding` · `done` · `failed`;
+- `entity`: the device the hub produced (0 while there is none yet);
+- `code`: `ok` · `no_device` (the device did not answer) · `bad_payload` (the hub did
+  not understand the payload) · `no_setup_hash` (the device did not share its setup
+  code — the QR code is needed) · `busy` (another device is being added) ·
+  `unsupported` (this hub cannot add Matter devices: there is no Matter chip, or the
+  chip is alive and simply has no commissioner) · `timeout` (nobody answered — the
+  chip itself is silent) · `failed`;
+- `message`: one short line for a person — the hub's own words, so that a client that
+  does not know the codes can still say something useful.
+
+`matter.status` answers the same thing on demand (`result: {state, entity, code,
+message}`) — a client asks it when it opens the screen, so that a half-finished
+attempt is visible after a reconnect.
+
+Three honest limits the client must respect. The **hub** commissions the device,
+not the phone: Bluetooth only tells the phone *which* device is in the room, the hub
+does the rest — so the device has to be reachable by the hub (on the home network,
+or over the transport the hub's Matter stack offers). The code printed on the
+label of a device (11 digits) carries no setup hash, so it cannot commission
+anything by itself — the QR code or the advertisement can. And a **native Matter
+device cannot be bridged**: a bridge aggregates *non-Matter* devices as its own
+endpoints, while a Matter device joins a fabric as a node of its own. If the hub
+commissions it, the device lands in the hub's own fabric — controllable from the
+Keystone app, but invisible to Apple Home, whose fabric the phone administers. So a
+client must not promise that a device it added will appear in Apple Home; that
+needs the Home app itself (scan the QR code there).
 
 ### 5.1 History
 
@@ -564,6 +629,13 @@ code).
     so the reply gets out before the connection drops or the hub reboots. The parsing and
     the validation live in `core/app_requests.hpp` (host-tested), the encoders in
     `core/app_protocol.hpp`.
+
+11. 🚧 **Matter commissioning** (hub + app; §5.3): the phone reads a Matter device over
+    Bluetooth and hands the hub the bytes it read; the hub passes them to the Matter chip
+    and reports how the attempt went (`matter.commission`, `matter.status`, the `matter`
+    push). The phone does not interpret the payload — the kind says how the hub's stack
+    parses it. Hub, protocol and app are done and host-tested; the **commissioner itself
+    (on the Matter chip) is not** — see the RAM gate in `docs/matter-backlog.md`.
 
 ## 13. Remote access (relay)
 

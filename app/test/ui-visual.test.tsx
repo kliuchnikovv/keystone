@@ -102,13 +102,14 @@ describe('Device button', () => {
 });
 
 describe('Devices list', () => {
-  it('offers to add a device at the bottom, in a sheet', async () => {
+  it('offers to add a device at the bottom, and it opens the search', async () => {
     renderHome();
     await screen.findByText('plug1');
     const add = screen.getByLabelText('Add a device');
     expect(add).toBeTruthy();
     fireEvent.click(add);
-    expect(await screen.findByText(/You have 2 minutes/)).toBeTruthy();
+    expect(await screen.findByText('Find devices')).toBeTruthy();
+    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
   });
 

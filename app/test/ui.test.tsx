@@ -112,18 +112,24 @@ describe('Devices', () => {
 });
 
 describe('Adding, finding and removing devices', () => {
-  it('"Add a device" opens the network, counts down, and shows what joins', async () => {
+  it('"Add a device" opens the search, the network, and shows what joins', async () => {
     renderHome();
     await screen.findByText('plug1');
     fireEvent.click(screen.getByLabelText('Add a device'));
-    await screen.findByText(/You have 2 minutes/);
+    // The search is a screen of its own.
+    expect(await screen.findByText('Find devices')).toBeTruthy();
+    // Opening it opens the Zigbee network for two minutes.
+    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
+    expect(screen.getByText(/^\d:\d\d$/)).toBeTruthy();
     act(() => hub.simulateJoin(0x0200, 'new_plug'));
-    await screen.findByText(/new_plug joined/);
-    expect(card('new_plug')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Cancel'));
-    await waitFor(() => expect(screen.queryByText(/You have 2 minutes/)).toBeNull());
+    await screen.findByText('new_plug');
+    expect(screen.getByText(/joined/)).toBeTruthy();
+    // Back to the devices.
+    fireEvent.click(screen.getByLabelText('Back'));
+    await waitFor(() => expect(screen.queryByText('Find devices')).toBeNull());
     expect(screen.getByLabelText('Add a device')).toBeTruthy();
+    expect(await screen.findByLabelText('Device new_plug')).toBeTruthy();
   });
 
   it('a device can be made to blink, and removal needs a second tap', async () => {

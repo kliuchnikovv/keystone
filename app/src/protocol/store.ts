@@ -5,6 +5,7 @@ import type {
   Chip,
   Entity,
   HubInfo,
+  MatterEvent,
   Rule,
   Scene,
   Schedule,
@@ -38,6 +39,8 @@ export interface HomeState {
   schedules: Schedule[];
   timers: Timer[];
   scenes: Scene[];
+  /** How the last attempt to add a Matter device stands; null while none was made. */
+  matter: MatterEvent | null;
 }
 
 export const initialState: HomeState = {
@@ -52,6 +55,7 @@ export const initialState: HomeState = {
   schedules: [],
   timers: [],
   scenes: [],
+  matter: null,
 };
 
 export function withStatus(s: HomeState, status: ConnectionStatus, error: string | null = null): HomeState {
@@ -130,6 +134,8 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       return { ...s, schedules: m.schedules };
     case 'timers':
       return { ...s, timers: m.timers };
+    case 'matter':
+      return { ...s, matter: m };
     case 'hub':
       return { ...s, hub: m.hub };
     case 'time':

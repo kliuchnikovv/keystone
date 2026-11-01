@@ -16,6 +16,8 @@ import {
   type ErrorCode,
   type HistoryEvent,
   type HubInfo,
+  type MatterCode,
+  type MatterState,
   type WifiNetwork,
   type Rule,
   type Scene,
@@ -242,6 +244,16 @@ export class MockHub {
   readonly scenesApplied: string[] = [];
   readonly identifyCalls: number[] = [];
   readonly unpairCalls: number[] = [];
+  /** What the app asked for with matter.commission (for tests). */
+  readonly matterCalls: { kind: number; payload: string }[] = [];
+  /** How the attempt to add a Matter device stands (the hub's Matter chip does the work). */
+  matter: { state: MatterState; code: MatterCode; entity: number; message: string } | null = null;
+
+  /** What the Matter chip says about the attempt (for tests). */
+  simulateMatter(state: MatterState, code: MatterCode = 'ok', entity = 0, message = ''): void {
+    this.matter = { state, code, entity, message };
+    this.broadcast({ type: 'matter', state, code, entity, message });
+  }
 
   /** A device joining while the network is open: it appears in every client's list. */
   simulateJoin(id: number, name: string | null = null): void {
@@ -715,6 +727,29 @@ export class MockHub {
           this.resync(); // the real hub re-sends the snapshot when a device goes away
         }
         return ok();
+      }
+      case 'matter.commission': {
+        // The app hands the bytes it read from the air; the hub's Matter stack parses
+        // them. The kinds are the ones the app knows: 0 — the commissioning service
+        // data (only identifies the device), 1 — the enhanced advertisement (the whole
+        // onboarding payload), 2 — the payload of a QR code.
+        const { kind, payload } = args;
+        if (kind !== 0 && kind !== 1 && kind !== 2) return no('bad_args', 'kind: 0, 1 or 2');
+        if (typeof payload !== 'string' || payload.length % 2 !== 0 || !/^[0-9a-f]*$/.test(payload)) {
+          return no('bad_args', 'payload: hex');
+        }
+        const bytes = payload.length / 2;
+        if (kind === 0 && bytes !== 7) return no('bad_args', 'payload: 7 bytes of service data');
+        if (kind !== 0 && bytes < 11) return no('bad_args', 'payload: at least 11 bytes');
+        this.matterCalls.push({ kind, payload });
+        // The hub starts the attempt; the Matter chip reports how far it got (a `matter` push).
+        this.matter = { state: 'scanning', code: 'ok', entity: 0, message: 'the hub is working on it' };
+        return ok({ state: 'started' });
+      }
+      case 'matter.status': {
+        const m = this.matter;
+        if (!m) return ok({ state: 'idle', entity: 0, code: 'ok', message: '' });
+        return ok({ state: m.state, entity: m.entity, code: m.code, message: m.message });
       }
       case 'ota.start': {
         const { chip, url, sha256 } = args;

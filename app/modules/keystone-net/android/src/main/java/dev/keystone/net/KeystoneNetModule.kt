@@ -26,6 +26,8 @@ import javax.net.ssl.X509TrustManager
 private const val EVENT_SOCKET = "onSocketEvent"
 private const val EVENT_HUB_FOUND = "onHubFound"
 private const val EVENT_HUB_LOST = "onHubLost"
+private const val EVENT_BLE_ADVERTISEMENT = "onBleAdvertisement"
+private const val EVENT_BLE_STATE = "onBleState"
 private const val SERVICE_TYPE = "_keystone._tcp."
 
 private fun hex(bytes: ByteArray): String =
@@ -79,7 +81,7 @@ class KeystoneNetModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("KeystoneNet")
-    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST)
+    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST, EVENT_BLE_ADVERTISEMENT, EVENT_BLE_STATE)
 
     Function("connect") { id: String, url: String, fingerprint: String -> connect(id, url, fingerprint) }
     Function("connectLearning") { id: String, url: String -> openSocket(id, url, null) }
@@ -87,6 +89,12 @@ class KeystoneNetModule : Module() {
     Function("close") { id: String -> conns.remove(id)?.ws?.close(1000, null); Unit }
     Function("startDiscovery") { startDiscovery() }
     Function("stopDiscovery") { stopDiscovery() }
+
+    // The Bluetooth search is not implemented on Android yet: the app is told the radio
+    // is not available rather than being left with an empty list it cannot explain.
+    Function("startBleScan") { Unit }
+    Function("stopBleScan") { Unit }
+    Function("bleStatus") { mapOf<String, Any?>("state" to "unsupported", "authorization" to "notDetermined") }
 
     OnDestroy {
       stopDiscovery()

@@ -27,6 +27,38 @@ export interface NativeSubscription {
   remove(): void;
 }
 
+/** What the Bluetooth stack says about itself. */
+export type BleState =
+  | 'unknown'
+  | 'resetting'
+  | 'unsupported'
+  | 'unauthorized'
+  | 'poweredOff'
+  | 'ready';
+
+export type BleAuthorization = 'notDetermined' | 'allowed' | 'denied' | 'restricted';
+
+/** One device seen in the air. */
+export interface NativeBleAdvertisement {
+  /** The system's id for this peripheral — stable while it is around. */
+  id: string;
+  /** The signal strength. iOS reports 127 when it has no reading. */
+  rssi: number;
+  /** The name the device advertises, when it advertises one. */
+  name: string | null;
+  /** The 16-bit service UUIDs it advertises, lower case, without dashes. */
+  serviceUuids: string[];
+  /** The service data, keyed by the UUID in lower case. */
+  serviceData: Record<string, number[]>;
+  /** The manufacturer data, keyed by the company id as a decimal string. */
+  manufacturerData: Record<string, number[]>;
+}
+
+export interface NativeBleStatus {
+  state: BleState;
+  authorization: BleAuthorization;
+}
+
 export interface KeystoneNetModule {
   /** Open `url` (wss://) trusting only the certificate whose SHA-256 is `fingerprint`. */
   connect(id: string, url: string, fingerprint: string): void;
@@ -39,7 +71,15 @@ export interface KeystoneNetModule {
   close(id: string): void;
   startDiscovery(): void;
   stopDiscovery(): void;
+  /** Start looking for Bluetooth devices around the phone. */
+  startBleScan(): void;
+  /** Stop looking. */
+  stopBleScan(): void;
+  /** What the Bluetooth stack says about itself, without starting a scan. */
+  bleStatus(): NativeBleStatus;
   addListener(event: 'onSocketEvent', listener: (e: NativeSocketEvent) => void): NativeSubscription;
   addListener(event: 'onHubFound', listener: (h: NativeHub) => void): NativeSubscription;
   addListener(event: 'onHubLost', listener: (h: { instance: string }) => void): NativeSubscription;
+  addListener(event: 'onBleAdvertisement', listener: (a: NativeBleAdvertisement) => void): NativeSubscription;
+  addListener(event: 'onBleState', listener: (s: NativeBleStatus) => void): NativeSubscription;
 }

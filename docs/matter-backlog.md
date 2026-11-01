@@ -109,6 +109,122 @@ If BLE gets crowded, alternate: **the brain S3 hosts SoftAP-based
 commissioning** and hands the fabric off to the C6. More code, but leaves
 the C6 free.
 
+**What esp-matter can actually do on the C6** (read in the sources of
+`release/v1.6` on 01.11.2026 — no hardware needed). The controller component
+builds for the C6 (no SoC restriction in its `CMakeLists.txt`), and the C6
+does have a Bluetooth LE radio (`SOC_BLE_SUPPORTED` in
+`components/soc/esp32c6/include/soc/soc_caps.h`). But the *commissioning
+transports* are not the same on every chip:
+
+| command | what it needs | where esp-matter offers it |
+|---|---|---|
+| `pairing_ble_wifi`, `pairing_ble_thread` | the BLE transport, behind `CONFIG_ENABLE_ESP32_BLE_CONTROLLER` | **ESP32-S3 only** — the vendor docs say exactly that for both BLE pairing methods |
+| `pairing_on_network` | the device is already on the same IP network, plus the setup PIN | any chip |
+| `pairing_code` | a Matter pairing payload (the onboarding payload, or the manual code) | any chip |
+
+So the Matter chip cannot run the BLE handshake the phone imagines. Two ways
+out, and the app protocol already carries both:
+
+- **payload pairing** (`pairing_code`): the phone hands over the payload it
+  read from the air (our `kind 1`) or from the QR (`kind 2`), and the chip
+  pairs with it. The device has to be reachable — on the home Wi-Fi, or over
+  SoftAP.
+- **on-network pairing**: the device is already on the home Wi-Fi, the phone
+  sends the PIN and the discriminator (both of which it can read: the
+  discriminator from the BLE advertisement, the PIN from the label or the QR),
+  and the chip finds the device by mDNS.
+
+The phone's Bluetooth read therefore stays useful — it *identifies* the
+device and carries the payload — but it is not the transport of the
+commissioning itself. The app must not tell the person that the phone does
+the pairing.
+
+**What the chip side will have to do with each kind** (the wire form is
+already in place — `hubproto::MsgType::MatterPair`, `kind(u8) len(u8) bytes`):
+
+| kind | what the app sends | what the chip has to make of it |
+|---|---|---|
+| 0 | the commissioning service data, 7 bytes | only a discriminator and a setup hash — enough to recognise the device, not to commission it |
+| 1 | the bytes of the enhanced commissioning advertisement | the advertising form of the onboarding payload; the CHIP ESP32 code that parses it lives in the **S3-only** BLE commissioning path, so on the C6 it has to be written by hand |
+| 2 | the payload of a QR code (the 11 packed bytes) | the CHIP setup payload is parsed from the **`MT:…` text** (`SetupPayload::FromStringRepresentation`, the QR parser), so the chip either re-encodes these bytes to base38 or the wire form carries the text itself — a decision for the implementation |
+
+For the on-network path the chip needs the **setup PIN** and the **discriminator**
+instead of a payload. The app has both already (`decodeMatterQr` reads the PIN
+and the discriminator out of the QR payload; the BLE service data carries the
+discriminator), so if that path is the one that survives the RAM gate, the
+protocol grows one more kind — a small change, better made when the chip side
+exists.
+
+**The RAM gate — the budget is measured, the controller's own footprint is
+not.** What can be measured without hardware was measured on this machine, from
+the linker map of the thread-c6 build (`firmware/thread-c6/build/keystone_thread_c6.map`,
+build of 03.10.2026):
+
+| what | bytes | note |
+|---|---|---|
+| SRAM the app may use (`sram_seg`) | 452 112 (441.5 KB) | the C6's internal SRAM window, minus what the ROM and the bootloader keep |
+| static D/IRAM of the bridge as it is | 194 184 (189.6 KB) | `.dram0.data` 12 552 + `.dram0.bss` 87 824 + `.iram0.text` 93 804 + `.iram0.data` 4 |
+| what is left for the runtime heap | 257 928 (251.9 KB) | before the FreeRTOS stacks, the heap bookkeeping and the driver's buffers |
+| flash (text + rodata) | 1 564 576 (1 528 KB) | of the two 1.92 MB slots |
+
+So a CHIP controller on this chip inherits a budget of **~250 KB of heap** — and
+that budget has to hold the Matter stack, a live CASE session, and the ≥32 KB
+margin of the stop criterion at the same time.
+
+The vendor's own configuration points the same way. In esp-matter `release/v1.6`,
+`examples/controller` ships `sdkconfig.defaults.esp32s3` and
+`sdkconfig.defaults.esp32s31` — **there is no C6 configuration** — and its
+RAM-optimised build turns on `CONFIG_SPIRAM` together with
+`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`, i.e. it moves the Matter
+library's BSS into external RAM, which the C6 cannot do (no PSRAM). The docs'
+"RAM and Flash Optimizations" page says the same for controller and
+Thread-Border-Router applications with PSRAM.
+
+**Not measured, and not measurable on this machine:** the static DRAM of a
+controller build, and the free heap during a live CASE session. The first needs
+the esp-matter image — 5.76 GB compressed, ~13 GB unpacked — while this Mac has
+3.1 GB free on a full disk; the second needs a board and a real Matter device
+(nothing is connected here). Until both are measured the verdict is **no-go for
+the commissioner on the C6 as it is**: the vendor ships the controller for
+S3 + PSRAM, and ~250 KB would have to hold the whole CHIP controller stack next
+to a bridge that already takes 190 KB. Two ways to change that verdict:
+
+- **F1 — slim the bridge**: every bridged endpoint costs RAM and flash;
+  `CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT` is 22 today.
+- **F2 — a second C6 as a controller-only node**: the ~250 KB is then not
+  shared with the bridge, but that node needs its own Thread path.
+
+**F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
+hardware**, and F4 (the app shows the device and its QR payload; the person
+adds it to Apple Home with the Home app) needs no chip work at all.
+
+**Where a Matter device ends up: a fabric, not a bridged endpoint.** A Matter
+bridge aggregates *non-Matter* devices as its own endpoints — that is exactly
+what our C6 does today with the Zigbee devices. A native Matter device cannot
+be aggregated that way: it joins a fabric as a node in its own right, and a
+device belongs to a fabric through its administrator. So the plan's step "make
+a bridged endpoint for a Matter device in the Apple Home fabric" is not
+something a bridge can do. What is possible:
+
+- **Apple Home's fabric** is administered by the phone — the Home app reads the
+  QR, runs the BLE handshake and issues the credentials. Our hub's operator
+  credentials cannot add a node to it; commissioning into a fabric is the
+  administrator's act, and the administrator here is the phone. (An operator may
+  control the nodes its ACL allows, but that is not a right to add new ones,
+  and relying on Apple granting one is not a plan.)
+- **A fabric of our own** — if the hub runs a Matter commissioner with its own
+  fabric admin, it can commission the device into *that* fabric. Then the
+  device is controllable from the Keystone app (it becomes an entity in the
+  registry, like a Zigbee device), but it is a different fabric from Apple's,
+  so Home does not see it.
+
+A device can sit in both fabrics (Matter allows multi-admin), but each fabric
+needs its own commissioning pass: the Home app for Apple's, the hub for ours.
+That is why the app's "Add to the hub" must not promise that the device will
+appear in Apple Home — and why the phone's Bluetooth read stays useful even in
+the F4 variant: it identifies the device and carries the payload, and the
+person adds it to Home with the Home app exactly as they would without us.
+
 ### 4. Data model — Matter endpoints on the C6
 
 Matter controllers talk to endpoints, not to us. Two shapes:

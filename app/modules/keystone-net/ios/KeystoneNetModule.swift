@@ -1,3 +1,4 @@
+import CoreBluetooth
 import CryptoKit
 import ExpoModulesCore
 import Foundation
@@ -222,6 +223,7 @@ private final class HubBrowser: NSObject, NetServiceBrowserDelegate, NetServiceD
 public final class KeystoneNetModule: Module {
   private var sockets: [String: PinnedSocket] = [:]
   private var browser: HubBrowser?
+  private var ble: BleScanner?
   private let lock = NSLock()
 
   private func emit(_ id: String, _ kind: String, _ extra: [String: Any?]) {
@@ -235,7 +237,7 @@ public final class KeystoneNetModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("KeystoneNet")
-    Events("onSocketEvent", "onHubFound", "onHubLost")
+    Events("onSocketEvent", "onHubFound", "onHubLost", "onBleAdvertisement", "onBleState")
 
     Function("connect") { (id: String, url: String, fingerprint: String) in
       guard let pin = parsePin(fingerprint), let u = URL(string: url) else {
@@ -288,10 +290,38 @@ public final class KeystoneNetModule: Module {
       }
     }
 
+    // The radio is only switched on when the person opened the search: iOS asks for the
+    // Bluetooth permission the first time a central manager appears.
+    Function("startBleScan") {
+      DispatchQueue.main.async {
+        if self.ble == nil {
+          self.ble = BleScanner(
+            onAdvertisement: { [weak self] a in self?.sendEvent("onBleAdvertisement", a) },
+            onState: { [weak self] s in self?.sendEvent("onBleState", s) })
+        }
+        self.ble?.start()
+      }
+    }
+
+    Function("stopBleScan") {
+      DispatchQueue.main.async {
+        self.ble?.stop()
+      }
+    }
+
+    Function("bleStatus") { () -> [String: Any?] in
+      return [
+        "state": self.ble?.state ?? "unknown",
+        "authorization": self.ble?.authorization ?? BleScanner.authorizationName(CBManager.authorization),
+      ]
+    }
+
     OnDestroy {
       DispatchQueue.main.async {
         self.browser?.stop()
         self.browser = nil
+        self.ble?.stop()
+        self.ble = nil
       }
       self.lock.lock()
       let all = Array(self.sockets.values)
