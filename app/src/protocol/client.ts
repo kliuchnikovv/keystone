@@ -259,6 +259,20 @@ export class HubClient {
     return this.request<Record<string, unknown>>('req', (id) => ({ type: 'req', id, op, ...(args ? { args } : {}) }));
   }
 
+  /**
+   * Push a vendor firmware file (.ota) to a Zigbee device. The hub downloads the file,
+   * checks it against the SHA-256 and hands it to the coordinator, which serves it to the
+   * device. Resolves when the hub accepted the job; the progress comes as `device_ota` events.
+   */
+  deviceOta(entity: number, url: string, sha256: string): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>('req', (id) => ({
+      type: 'req',
+      id,
+      op: 'device.ota',
+      args: { entity, url, sha256 },
+    }));
+  }
+
   private request<T>(kind: Pending['kind'], build: (id: number) => ClientMessage): Promise<T> {
     if (this.state.status !== 'ready' || !this.socket) {
       return Promise.reject(new HubError('disconnected', 'not connected'));

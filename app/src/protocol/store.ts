@@ -3,6 +3,7 @@
 // sharing), so it plugs straight into React's useSyncExternalStore.
 import type {
   Chip,
+  DeviceOtaSession,
   Entity,
   HubInfo,
   Rule,
@@ -34,6 +35,8 @@ export interface HomeState {
   schedules: Schedule[];
   timers: Timer[];
   scenes: Scene[];
+  /** The last firmware session per device (a Zigbee device can be given new firmware). */
+  deviceOta: Record<number, DeviceOtaSession>;
 }
 
 export const initialState: HomeState = {
@@ -46,6 +49,7 @@ export const initialState: HomeState = {
   schedules: [],
   timers: [],
   scenes: [],
+  deviceOta: {},
 };
 
 export function withStatus(s: HomeState, status: ConnectionStatus, error: string | null = null): HomeState {
@@ -55,6 +59,7 @@ export function withStatus(s: HomeState, status: ConnectionStatus, error: string
 
 /** Forget what a previous connection knew (a new snapshot replaces it anyway). */
 export function cleared(s: HomeState): HomeState {
+  // initialState has no firmware sessions either: a reconnect starts with a clean picture.
   return { ...initialState, status: s.status, error: s.error };
 }
 
@@ -116,6 +121,13 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       return { ...s, schedules: m.schedules };
     case 'timers':
       return { ...s, timers: m.timers };
+    case 'device_ota': {
+      // The firmware session of one device: the last thing the hub said about it.
+      const next: DeviceOtaSession = { phase: m.phase, status: m.status, percent: m.percent };
+      const prev = s.deviceOta[m.entity];
+      if (prev && prev.phase === next.phase && prev.status === next.status && prev.percent === next.percent) return s;
+      return { ...s, deviceOta: { ...s.deviceOta, [m.entity]: next } };
+    }
     case 'hub':
       return { ...s, hub: m.hub };
     case 'time':
@@ -136,4 +148,8 @@ export function findEntity(s: HomeState, id: number): Entity | undefined {
 }
 export function attrValue(s: HomeState, entity: number, attr: number): Entity['attrs'][number]['value'] | undefined {
   return findEntity(s, entity)?.attrs.find((a) => a.id === attr)?.value;
+}
+/** The last firmware session the hub reported for a device, if any. */
+export function deviceOtaState(s: HomeState, entity: number): DeviceOtaSession | undefined {
+  return s.deviceOta[entity];
 }

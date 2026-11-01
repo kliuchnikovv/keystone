@@ -29,7 +29,10 @@ function arg(name: string): string | undefined {
 
 const port = Number(arg('port') ?? process.env.PORT ?? '9090');
 const secret = arg('secret') ?? process.env.RELAY_SECRET ?? '';
-const maxClientsPerHub = Number(arg('max-clients') ?? '3');
+// A backstop against a flood, not the real limit: the hub itself refuses the 4th
+// authenticated client with "busy", and only it knows who has authenticated. Capping
+// connections here would answer "closed with no reason" where the hub can explain.
+const maxClientsPerHub = Number(arg('max-clients') ?? '16');
 
 if (!secret) {
   console.error(
@@ -149,17 +152,22 @@ function handleTunnel(ws: WebSocket, hubId: string): void {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
     clearInterval(pingInterval);
     const hub = hubs.get(hubId);
+    const why = reason && reason.length ? ` (${code}: ${reason.toString()})` : code ? ` (${code})` : '';
     if (hub && hub.tunnel === ws) {
-      log('tunnel', `${hubId} disconnected (${hub.clients.size} client(s) dropped)`);
+      log('tunnel', `${hubId} disconnected (${hub.clients.size} client(s) dropped)${why}`);
       for (const [, cws] of hub.clients) cws.close(1001, 'tunnel lost');
       hubs.delete(hubId);
+    } else {
+      log('tunnel', `${hubId} connection closed${why}`);
     }
   });
 
-  ws.on('error', () => {});
+  ws.on('error', (err) => {
+    log('tunnel', `${hubId} error: ${(err as Error).message}`);
+  });
 }
 
 // ---- client -------------------------------------------------------------------------
@@ -192,14 +200,16 @@ function handleClient(ws: WebSocket, hubId: string): void {
     }
   });
 
-  ws.on('close', () => {
-    log('client', `${hubId}#${cid} disconnected`);
+  ws.on('close', (code, reason) => {
+    log('client', `${hubId}#${cid} disconnected${code ? ` (${code}${reason?.length ? ': ' + reason.toString() : ''})` : ''}`);
     hub.clients.delete(cid);
     hub.buffered.delete(cid);
     send(hub.tunnel, `!close:${cid}`);
   });
 
-  ws.on('error', () => {});
+  ws.on('error', (err) => {
+    log('client', `${hubId}#${cid} error: ${(err as Error).message}`);
+  });
 }
 
 // ---- start --------------------------------------------------------------------------

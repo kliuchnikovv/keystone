@@ -28,3 +28,8 @@ CONFIG_ESP_HTTPS_SERVER_ENABLE=y
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=6144
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4608
+
+# Relay client (docs/app-protocol.md §13): the main loop sends frames while the client's own
+# task sits in a blocking read. Without a separate TX lock both want client->lock, and a send
+# either loses the race or waits for the read to return — frames were silently dropped.
+CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y

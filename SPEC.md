@@ -159,6 +159,10 @@ offset size field       meaning
 0x50..0x58 OTA_*  both         firmware update of a co-processor over the link
                                (BEGIN/CHUNK/END + acks, ABORT, INFO_REQ/INFO);
                                see docs/ota.md and libhubproto payload.hpp
+0x59..0x5C DEV_OTA_* both      firmware update of a Zigbee *device*: the brain
+                               pushes the vendor .ota file to the coordinator,
+                               which serves it over the OTA Upgrade cluster
+                               (BEGIN/CHUNK/END + STATUS); see docs/ota.md
 ```
 
 ### 4.4 Lifecycle
@@ -247,6 +251,15 @@ exposed as a Matter accessory with no second modeling pass.
 | contact     | 0x08  | Contact Sensor     | contact(0x51) |
 | button      | 0x09  | Generic Switch     | event(0x60) |
 | chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16) |
+
+**How a Zigbee endpoint becomes one of these** (`core/zcl_profile.hpp`): the clusters decide,
+and so does the metering. An endpoint that reports its **own** power draw (Electrical
+Measurement / Metering) is a socket — `switch`, with on_off, power_w and energy_wh and no
+brightness — whatever else it exposes. IKEA's INSPELNING control outlet also reports a Level
+cluster (it shares its firmware with the bulbs), so "On/Off + Level ⇒ a dimmable light" used
+to turn a plug into a lamp. A lamp never measures its own consumption: the socket does.
+The rule is applied from the stored capabilities too, so a device paired with an older
+firmware is corrected on the next coordinator boot instead of needing a re-pair.
 
 **Attribute units** (`libhubproto/include/hubproto/attrs.hpp`; Zigbee and Matter agree on most of
 them, the rest are converted by `hubproto/units.hpp`):
@@ -419,10 +432,12 @@ sink on the CAM is not started.
   an Expo app (devices, automations, scenes, hub health) and a mock hub. Design and
   status: [docs/app-protocol.md](docs/app-protocol.md). Not verified on a phone yet.
 - **Phase 10 — Remote access (relay).** The brain connects out to a relay server for
-  access from outside the LAN. A cloud relay exposes HTTP+SSE for the app; a tunnel agent
-  is the alternative for LAN-only deployments. The hub's token-based auth works end-to-end.
-  An interactive console tool speaks the app protocol. Design:
-  [docs/app-protocol.md §13](docs/app-protocol.md). Not verified on hardware.
+  access from outside the LAN — no extra hardware in the house. A cloud relay exposes
+  HTTP+SSE for the app; a tunnel agent is the alternative for LAN-only deployments. The hub's
+  token-based auth works end-to-end. An interactive console tool speaks the app protocol.
+  Design: [docs/app-protocol.md §13](docs/app-protocol.md); deployment:
+  [docs/relay-deploy.md](docs/relay-deploy.md). The ESP relay client is verified on hardware
+  (against a LAN relay, `ws://`); a public relay over `wss://` is not deployed yet.
 
 ---
 

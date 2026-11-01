@@ -13,7 +13,9 @@ TEST_CASE("OTA message types are known and sit at the documented codes") {
   CHECK(static_cast<std::uint8_t>(MsgType::OtaBegin) == 0x50);
   CHECK(static_cast<std::uint8_t>(MsgType::OtaAbort) == 0x56);
   for (std::uint8_t t = 0x50; t <= 0x58; ++t) CHECK(is_known_type(t));
-  CHECK_FALSE(is_known_type(0x59));
+  // 0x59..0x5C are the device OTA messages (a Zigbee device's own firmware).
+  for (std::uint8_t t = 0x59; t <= 0x5C; ++t) CHECK(is_known_type(t));
+  CHECK_FALSE(is_known_type(0x5D));
 }
 
 TEST_CASE("OTA_INFO has the documented layout and round-trips") {
@@ -147,4 +149,93 @@ TEST_CASE("OTA_END_ACK round-trips") {
   REQUIRE(decode_ota_end_ack(buf.data(), r.len, s));
   CHECK(s == OtaStatus::VerifyFail);
   CHECK_FALSE(decode_ota_end_ack(buf.data(), 0, s));
+}
+
+// ---- device OTA ---------------------------------------------------------------
+
+TEST_CASE("DEV_OTA_BEGIN round-trips") {
+  DevOtaBegin in{};
+  in.total_size = 0x00123456;
+  for (std::size_t i = 0; i < kDevOtaSha256Size; ++i) in.sha256[i] = static_cast<std::uint8_t>(i);
+
+  std::array<std::uint8_t, 64> buf{};
+  auto r = encode_dev_ota_begin(in, buf.data(), buf.size());
+  REQUIRE(r.ok);
+  CHECK(r.len == 4 + kDevOtaSha256Size);
+  CHECK(buf[0] == 0x56);
+  CHECK(buf[1] == 0x34);
+  CHECK(buf[2] == 0x12);
+  CHECK(buf[3] == 0x00);
+
+  DevOtaBegin out{};
+  REQUIRE(decode_dev_ota_begin(buf.data(), r.len, out));
+  CHECK(out.total_size == 0x00123456);
+  CHECK(out.sha256[31] == 31);
+  CHECK_FALSE(decode_dev_ota_begin(buf.data(), r.len - 1, out));
+}
+
+TEST_CASE("DEV_OTA_CHUNK round-trips and keeps the offset") {
+  const std::array<std::uint8_t, 3> data{0xAA, 0xBB, 0xCC};
+  std::array<std::uint8_t, 64> buf{};
+  auto r = encode_dev_ota_chunk(0x01020304, data.data(), data.size(), buf.data(), buf.size());
+  REQUIRE(r.ok);
+  CHECK(r.len == kDevOtaChunkHeader + data.size());
+
+  DevOtaChunkView v{};
+  REQUIRE(decode_dev_ota_chunk(buf.data(), r.len, v));
+  CHECK(v.offset == 0x01020304);
+  CHECK(v.len == 3);
+  CHECK(v.data[2] == 0xCC);
+}
+
+TEST_CASE("DEV_OTA_CHUNK enforces the size limits both ways") {
+  std::array<std::uint8_t, 300> data{};
+  std::array<std::uint8_t, 300> buf{};
+  CHECK(encode_dev_ota_chunk(0, data.data(), kDevOtaMaxChunk, buf.data(), buf.size()).ok);
+  CHECK_FALSE(encode_dev_ota_chunk(0, data.data(), kDevOtaMaxChunk + 1, buf.data(), buf.size()).ok);
+  CHECK_FALSE(encode_dev_ota_chunk(0, data.data(), 0, buf.data(), buf.size()).ok);
+
+  DevOtaChunkView v{};
+  CHECK_FALSE(decode_dev_ota_chunk(buf.data(), kDevOtaChunkHeader, v));  // no data
+  CHECK_FALSE(decode_dev_ota_chunk(buf.data(), kDevOtaChunkHeader + kDevOtaMaxChunk + 1, v));
+  CHECK(decode_dev_ota_chunk(buf.data(), kDevOtaChunkHeader + kDevOtaMaxChunk, v));
+}
+
+TEST_CASE("a full DEV_OTA_CHUNK still fits one frame payload") {
+  CHECK(kDevOtaChunkHeader + kDevOtaMaxChunk <= hubproto::kMaxPayloadSize);
+}
+
+TEST_CASE("DEV_OTA_STATUS round-trips") {
+  DevOtaStatusMsg in{};
+  in.phase = DevOtaPhase::Transferring;
+  in.status = DevOtaStatus::Mismatch;
+  in.percent = 42;
+  in.next_offset = 0xDEADBEEF;
+
+  std::array<std::uint8_t, 16> buf{};
+  auto r = encode_dev_ota_status(in, buf.data(), buf.size());
+  REQUIRE(r.ok);
+  CHECK(r.len == 8);
+
+  DevOtaStatusMsg out{};
+  REQUIRE(decode_dev_ota_status(buf.data(), r.len, out));
+  CHECK(out.phase == DevOtaPhase::Transferring);
+  CHECK(out.status == DevOtaStatus::Mismatch);
+  CHECK(out.percent == 42);
+  CHECK(out.next_offset == 0xDEADBEEF);
+}
+
+TEST_CASE("DEV_OTA_STATUS rejects unknown phases and statuses") {
+  std::array<std::uint8_t, 8> buf{};
+  DevOtaStatusMsg out{};
+  buf[0] = static_cast<std::uint8_t>(DevOtaPhase::Failed);
+  buf[1] = static_cast<std::uint8_t>(DevOtaStatus::Ok);
+  CHECK(decode_dev_ota_status(buf.data(), buf.size(), out));
+
+  buf[0] = 0x7F;
+  CHECK_FALSE(decode_dev_ota_status(buf.data(), buf.size(), out));
+  buf[0] = static_cast<std::uint8_t>(DevOtaPhase::Idle);
+  buf[1] = 0x7F;
+  CHECK_FALSE(decode_dev_ota_status(buf.data(), buf.size(), out));
+  CHECK_FALSE(decode_dev_ota_status(buf.data(), 7, out));
 }

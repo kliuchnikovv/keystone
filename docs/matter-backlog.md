@@ -172,6 +172,15 @@ at once. Costs ~30 KB RAM per fabric on the C6. esp-matter supports up to
 Separate from Zigbee OTA. Matter has its own OTA Provider / Requestor. Not
 critical for MVP, worth planning before shipping.
 
+### 9. Firmware updates of *bridged* devices
+
+Matter has no standard way to update the firmware of a **bridged** device (a
+Zigbee bulb behind the bridge): the Software Update clusters belong to the
+node itself, not to the endpoints it bridges. So the Zigbee OTA the hub now
+does (docs/ota.md) has no Matter-side representation — the progress is visible
+in the app and the console only. Nothing to implement, but worth remembering
+before someone looks for the missing Matter cluster.
+
 ## Grand order-of-work (rough)
 
 1. ✅ OpenThread up (Thread network formed on C6#2, FTD).

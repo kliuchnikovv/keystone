@@ -1,0 +1,28 @@
+# Keystone relay — TLS termination for Caddy 2 (https://caddyserver.com)
+#
+#   sudo install -m 644 scripts/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Caddy fetches and renews the certificate on its own; the port must be reachable from the
+# internet (80/tcp for the ACME challenge, 443/tcp for the tunnel).
+#
+# The relay itself speaks plain ws:// on 127.0.0.1 and never sees a token: the hub's own
+# token auth runs end to end, so what arrives here is ciphertext. It routes by path itself
+# (/tunnel/<hub-id>, /client/<hub-id>, plus a status page), so everything is proxied.
+
+relay.example.com {
+	encode zstd gzip
+
+	reverse_proxy localhost:9090 {
+		transport http {
+			# A WebSocket that is idle between app events must stay open.
+			read_timeout 24h
+			write_timeout 24h
+		}
+	}
+
+	log {
+		output file /var/log/caddy/keystone-relay.log
+		format json
+	}
+}

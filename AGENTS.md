@@ -51,7 +51,14 @@ Matter-over-WiFi.
 - `app/` — the phone/web client (Expo, TypeScript): protocol library, screens, a mock
   hub, conformance tools, and the native pinning/mDNS module (`modules/keystone-net`,
   not yet built on a device). See `app/README.md`.
-- `scripts/` — `matter-build.sh` (esp-matter Docker build), `gen-hub-cert.sh` (TLS identity).
+- `relay/` — the relay server in **Go**, standard library only (`relay/internal/ws` is a small
+  RFC 6455 server): one static binary to deploy on a VPS for remote access, see
+  [relay/README.md](relay/README.md) and [docs/relay-deploy.md](docs/relay-deploy.md). Build
+  and test with `go build ./...` / `go test ./...` in that directory (Go ≥ 1.24).
+- `scripts/` — `matter-build.sh` (esp-matter Docker build), `gen-hub-cert.sh` (TLS identity),
+  `kcon.py` (a board's console over USB: batch or interactive, `--watch`), and the relay
+  deployment files for a VPS (`keystone-relay.service`, `keystone-relay.env.example`,
+  `Caddyfile` — see [docs/relay-deploy.md](docs/relay-deploy.md)).
 - `docs/` — per-phase notes (wiring, expected output), `ota.md`, `app-protocol.md`
   (the app protocol and its status), and the backlogs (`backlog.md`, `brain-backlog.md`, `zigbee-backlog.md`,
   `matter-backlog.md`).
@@ -86,6 +93,11 @@ without it the brain builds and serves plain `ws://` only. See docs/app-protocol
 generated file carries the hub's *setup code* (the password of the first-time setup Wi-Fi
 `Keystone-XXXX`, §11): `scripts/gen-hub-cert.sh --setup-code` adds one to an existing identity without
 changing the key or certificate; console `setup` shows it and `setup on|off` opens/closes the access point.
+
+**Relay (Go).** From `relay/`: `go test ./...` (no network needed — no module graph) and
+`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o keystone-relay .`. The Node
+implementation in `app/` (`npm run relay-server`) speaks the same protocol and stays the
+readable reference.
 
 **Firmware.** Each app is its own ESP-IDF project. Two toolchains are in use:
 
@@ -144,6 +156,10 @@ Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
   re-commissioning in Apple Home after a wipe.
 - **UART link wiring:** C6.TX GPIO5 → S3.RX GPIO6, C6.RX GPIO4 ← S3.TX GPIO7,
   common GND (crossed).
+- **Opening the S3's USB port resets it.** The USB-Serial/JTAG reports `rst:0x15
+  (USB_UART_CHIP_RESET)` when DTR/RTS change, so attaching a console (e.g. `scripts/kcon.py`)
+  reboots the brain. Drive functional tests over the WebSocket/app protocol, not the console;
+  the hub reconnects its relay tunnel by itself after such a reset.
 
 ## Where to look
 

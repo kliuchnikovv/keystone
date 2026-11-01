@@ -58,6 +58,7 @@
 
 #include "esp_uart_link.hpp"
 #include "core/uart_transport.hpp"
+#include "device_ota_job.hpp"
 #include "core/entity_registry.hpp"
 #include "core/radio_coordinator.hpp"
 #include "core/state_machine.hpp"
@@ -681,7 +682,7 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
-               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT };
+               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA };
 
 struct Req {
   ReqKind kind;
@@ -696,6 +697,8 @@ struct Req {
   const char* pass;     // for REQ_WIFI_JOIN
   const char* tz;       // for REQ_TZ
   const char* name;     // for REQ_NAME_SET
+  const char* url;      // for REQ_DEV_OTA
+  const char* sha;      // for REQ_DEV_OTA
   int argc;             // for REQ_RULE: the console words, alive until `done`
   char** argv;
   SemaphoreHandle_t done;
@@ -2225,6 +2228,54 @@ int cmd_name(int argc, char** argv) {
 // request queue: OtaJob is self-contained and thread-safe.
 fw::OtaJob* g_ota = nullptr;
 
+// The firmware of a Zigbee *device*: the brain pushes the vendor .ota file to
+// the coordinator, which serves it over the OTA Upgrade cluster (docs/ota.md).
+fw::DeviceOtaJob* g_dev_ota = nullptr;
+
+// The device session (waiting / transferring / done) is reported by the chip in
+// the UART RX task; the main loop drains this queue and tells the app.
+struct DevOtaEvent {
+  std::uint16_t entity;
+  hubproto::DevOtaPhase phase;
+  hubproto::DevOtaStatus status;
+  std::uint8_t percent;
+};
+QueueHandle_t g_dev_ota_q = nullptr;
+
+void on_dev_ota_phase(void* /*ctx*/, std::uint16_t entity, hubproto::DevOtaPhase phase,
+                      hubproto::DevOtaStatus status, std::uint8_t percent) {
+  if (g_dev_ota_q == nullptr) return;
+  const DevOtaEvent e{entity, phase, status, percent};
+  xQueueSend(g_dev_ota_q, &e, 0);
+}
+
+const char* dev_ota_phase_name(hubproto::DevOtaPhase p) {
+  switch (p) {
+    case hubproto::DevOtaPhase::Receiving:    return "receiving";
+    case hubproto::DevOtaPhase::Verifying:    return "verifying";
+    case hubproto::DevOtaPhase::Notifying:    return "notifying";
+    case hubproto::DevOtaPhase::Transferring: return "transferring";
+    case hubproto::DevOtaPhase::Done:         return "done";
+    case hubproto::DevOtaPhase::Failed:       return "failed";
+    default:                                  return "idle";
+  }
+}
+
+const char* dev_ota_status_name(hubproto::DevOtaStatus s) {
+  switch (s) {
+    case hubproto::DevOtaStatus::Ok:          return "ok";
+    case hubproto::DevOtaStatus::Busy:        return "busy";
+    case hubproto::DevOtaStatus::TooLarge:    return "too_large";
+    case hubproto::DevOtaStatus::BadChecksum: return "bad_checksum";
+    case hubproto::DevOtaStatus::BadFormat:   return "bad_format";
+    case hubproto::DevOtaStatus::Unsupported: return "unsupported";
+    case hubproto::DevOtaStatus::Timeout:     return "timeout";
+    case hubproto::DevOtaStatus::Mismatch:    return "mismatch";
+    case hubproto::DevOtaStatus::Aborted:     return "aborted";
+    default:                                  return "ok";
+  }
+}
+
 // After the chip accepts an image, the verifier asks it (once it has rebooted)
 // whether the NEW image is the one running, or the bootloader rolled it back.
 core::OtaVerifier* g_verifier = nullptr;
@@ -2336,6 +2387,38 @@ bool parse_chip(const char* s, std::uint8_t& out) {
 
 int cmd_ota(int argc, char** argv) {
   if (g_ota == nullptr) { printf("ota not ready\n"); return 1; }
+  if (argc >= 2 && std::strcmp(argv[1], "dev") == 0) {
+    // The firmware of a Zigbee device (the coordinator serves it to the device).
+    if (g_dev_ota == nullptr) { printf("ota dev not ready\n"); return 1; }
+    if (argc == 3 && std::strcmp(argv[2], "status") == 0) {
+      char dbuf[192];
+      g_dev_ota->describe(dbuf, sizeof(dbuf));
+      printf("%s", dbuf);
+      return 0;
+    }
+    if (argc == 3 && std::strcmp(argv[2], "abort") == 0) {
+      g_dev_ota->abort();
+      printf("abort requested\n");
+      return 0;
+    }
+    if (argc != 5) {
+      printf("usage:\n"
+             "  ota dev <id_or_name> <http(s)://url.ota> <sha256-hex>  - update a device's firmware\n"
+             "  ota dev status                                          - progress / last result\n"
+             "  ota dev abort                                           - stop the running update\n");
+      return 1;
+    }
+    char dbuf[192];
+    Req r{};
+    r.kind = REQ_DEV_OTA;
+    r.target = argv[2];
+    r.url = argv[3];
+    r.sha = argv[4];
+    r.out = dbuf;
+    r.out_cap = sizeof(dbuf);
+    printf(submit(r) ? "%s" : "timeout\n", dbuf);
+    return 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "status") == 0) {
     char buf[160];
     g_ota->describe(buf, sizeof(buf));
@@ -2452,7 +2535,7 @@ void start_console() {
   reg_cmd("setup", "setup [on|off] - the first-time setup access point: status, or open/close it", &cmd_setup);
   reg_cmd("time", "show current wall-clock time and sync status", &cmd_time);
   reg_cmd("tz", "tz <posix_tz> - get or set timezone", &cmd_tz);
-  reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | status | abort - update a C6 over the link", &cmd_ota);
+  reg_cmd("ota", "ota <zigbee|thread> <url> <sha256> | dev <id> <url> <sha256> | status | abort - update a C6 or a device", &cmd_ota);
   reg_cmd("desired", "desired [clear <id_or_name>|all] - what the hub last asked each attribute to be", &cmd_desired);
   reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
@@ -2538,7 +2621,11 @@ void app_on_cmd_result(std::uint16_t seq, hubproto::CmdAckStatus status) {
     return;
   }
   if (g_app_pending_mu == nullptr) return;
-  int fd = -1;
+  // A pending entry carries any client fd: a local WebSocket client (>= 0) or a remote one
+  // through the relay (<= relay::kFdBase). "Found" is therefore a flag, not fd >= 0 —
+  // testing the sign silently threw away every ack for a remote client.
+  bool found = false;
+  int fd = 0;
   std::int32_t id = 0;
   xSemaphoreTake(g_app_pending_mu, portMAX_DELAY);
   for (auto& p : g_app_pending) {
@@ -2546,11 +2633,12 @@ void app_on_cmd_result(std::uint16_t seq, hubproto::CmdAckStatus status) {
       fd = p.fd;
       id = p.id;
       p.used = false;
+      found = true;
       break;
     }
   }
   xSemaphoreGive(g_app_pending_mu);
-  if (fd >= 0) app_send_ack(fd, id, status);
+  if (found) app_send_ack(fd, id, status);
 }
 
 bool app_add_pending(std::uint16_t seq, int fd, std::int32_t id, std::uint32_t now) {
@@ -3194,6 +3282,19 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     // The reply goes out first; the hub drops the network right after it.
     hub_action_request(HubAction::ForgetWifi, now, kHubActionDelayMs);
     o = Outcome::done();
+  } else if (!std::strcmp(op, "device.ota")) {
+    // The firmware of a Zigbee device: the hub fetches the .ota file and pushes it
+    // to the coordinator, which serves it to the device (docs/ota.md).
+    const core::app::DeviceOta d = core::app::device_ota_meta(reg, reader, m.args, kZigbeeChipId);
+    o = d.out;
+    if (o.ok) {
+      char err[96];
+      if (g_dev_ota == nullptr) {
+        o = core::app::Outcome::fail(core::app::Err::Internal, "not ready");
+      } else if (!g_dev_ota->start(kZigbeeChipId, d.entity, d.url, d.sha256, err, sizeof(err))) {
+        o = core::app::Outcome::fail(core::app::Err::Busy, "an update is already running");
+      }
+    }
   }
 
   if (o.ok) {
@@ -3617,6 +3718,24 @@ int cmd_setup(int argc, char** argv) {
   return 0;
 }
 
+// Human-readable reset reason for the boot banner: tells a planned reset, a crash and
+// a watchdog apart when all we have is the log after the reboot.
+const char* reset_reason_text(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_EXT: return "external pin";
+    case ESP_RST_SW: return "software reset (esp_restart)";
+    case ESP_RST_PANIC: return "panic (crash)";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "SDIO";
+    default: return "unknown";
+  }
+}
+
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -3682,6 +3801,9 @@ extern "C" void app_main(void) {
 
   static fw::OtaJob ota_job(bus);
   g_ota = &ota_job;
+  static fw::DeviceOtaJob dev_ota_job(bus);
+  g_dev_ota = &dev_ota_job;
+  dev_ota_job.on_phase(&on_dev_ota_phase, nullptr);
   static core::OtaVerifier verifier(bus);
   g_verifier = &verifier;
   verifier.on_done(&on_verify_done, nullptr);
@@ -3748,6 +3870,7 @@ extern "C" void app_main(void) {
   // App protocol: live events from the UART RX task, CMD_ACK bookkeeping, and the
   // server itself (only when a token has been set with `webtoken`).
   g_app_ev_q = xQueueCreate(32, sizeof(AppEvent));
+  g_dev_ota_q = xQueueCreate(16, sizeof(DevOtaEvent));
   g_app_pending_mu = xSemaphoreCreateMutex();
   {
     char tok[core::app::kMaxToken + 1] = {};
@@ -3772,6 +3895,9 @@ extern "C" void app_main(void) {
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
+  // Why did we come up? A watchdog or a panic shows up here even when the log around it
+  // is lost (the USB console is the only place we can read).
+  ESP_LOGI(kTag, "reset reason: %s", reset_reason_text(esp_reset_reason()));
 
   bool announced_zb = false;
   bool announced_th = false;
@@ -3961,6 +4087,19 @@ extern "C" void app_main(void) {
         char b[160];
         core::JsonWriter w(b, sizeof(b));
         core::app::encode_state(w, ev.entity, ev.attr, ev.value);
+        if (w.ok()) hub_broadcast(b, w.size());
+      }
+      // The firmware session of a Zigbee device (the chip reports the phase).
+      DevOtaEvent de;
+      while (xQueueReceive(g_dev_ota_q, &de, 0) == pdTRUE) {
+        ESP_LOGI(kTag, "device 0x%04x firmware: %s (%s, %u%%)",
+                 static_cast<unsigned>(de.entity), dev_ota_phase_name(de.phase),
+                 dev_ota_status_name(de.status), static_cast<unsigned>(de.percent));
+        if (hub_client_count() == 0) continue;
+        char b[160];
+        core::JsonWriter w(b, sizeof(b));
+        core::app::encode_device_ota(w, de.entity, dev_ota_phase_name(de.phase),
+                                     dev_ota_status_name(de.status), de.percent);
         if (w.ok()) hub_broadcast(b, w.size());
       }
       history_push(scene_store, t);
@@ -4382,6 +4521,44 @@ extern "C" void app_main(void) {
             std::snprintf(r->out, r->out_cap, "%s 0x%04x -> chip 0x%02x (sent)\n",
                           r->kind == REQ_UNPAIR ? "unpair" : "identify",
                           static_cast<unsigned>(id), e->chip_id);
+          }
+          break;
+        }
+        case REQ_DEV_OTA: {
+          // The firmware of a Zigbee device: the hub fetches the .ota file and
+          // pushes it to the coordinator, which serves it to the device.
+          std::uint16_t id = 0;
+          if (!reg.resolve(r->target, id)) {
+            std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
+            break;
+          }
+          const auto* e = reg.find(id);
+          if (e == nullptr) {
+            std::snprintf(r->out, r->out_cap, "0x%04x: not found\n", static_cast<unsigned>(id));
+            break;
+          }
+          if (e->chip_id != kZigbeeChipId) {
+            std::snprintf(r->out, r->out_cap,
+                          "0x%04x is not a Zigbee device (only Zigbee devices can be updated)\n",
+                          static_cast<unsigned>(id));
+            break;
+          }
+          char err[96];
+          if (g_dev_ota == nullptr ||
+              !g_dev_ota->start(e->chip_id, id, r->url, r->sha, err, sizeof(err))) {
+            std::snprintf(r->out, r->out_cap, "ota dev: %s\n",
+                          g_dev_ota == nullptr ? "not ready" : err);
+            break;
+          }
+          const char* name = reg.name_of(id);
+          if (name != nullptr) {
+            std::snprintf(r->out, r->out_cap,
+                          "ota dev: %s 0x%04x started; watch `ota dev status`\n", name,
+                          static_cast<unsigned>(id));
+          } else {
+            std::snprintf(r->out, r->out_cap,
+                          "ota dev: 0x%04x started; watch `ota dev status`\n",
+                          static_cast<unsigned>(id));
           }
           break;
         }

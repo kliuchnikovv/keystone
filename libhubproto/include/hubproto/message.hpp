@@ -31,6 +31,14 @@ enum class MsgType : std::uint8_t {
   OtaAbort    = 0x56,  // either       drop the transfer
   OtaInfoReq  = 0x57,  // brain→chip   which image are you running? (empty)
   OtaInfo     = 0x58,  // chip→brain   running slot, confirmed?, last OTA'd slot + sha256
+  // Firmware update of a Zigbee *device*, driven through the coordinator (see
+  // payload.hpp, "device OTA" section). The brain pushes a vendor .ota file to the
+  // Zigbee chip; the chip serves it to the device with the ZBOSS OTA server
+  // (cluster 0x0019). The header's entity_id is the device being updated.
+  DevOtaBegin  = 0x59,  // brain→chip   size + sha256 of the .ota file
+  DevOtaChunk  = 0x5A,  // brain→chip   offset + data
+  DevOtaEnd    = 0x5B,  // brain→chip   all bytes sent: verify + register + notify the device
+  DevOtaStatus = 0x5C,  // chip→brain   acks the transfer, then reports the device session
 };
 
 // Reserved identities (SPEC §4.2).

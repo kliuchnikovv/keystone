@@ -22,7 +22,16 @@ namespace {
 const char* kTag = "relay";
 constexpr int kMaxVClients = 3;
 constexpr std::uint32_t kHelloTimeoutMs = 5000;
+// Same token-guessing brake the local server has (app_server.cpp): after kAuthFailLimit
+// wrong tokens inside kLockoutMs, every remote client is refused until the window passes.
+// One lockout for the whole tunnel — the relay is a single trust boundary, we cannot see
+// the client's address.
+constexpr int kAuthFailLimit = 5;
+constexpr std::uint32_t kLockoutMs = 60000;
 constexpr const char* kNvs = "keystone";
+constexpr std::size_t kOutQueue = 16;   // frames waiting to go out
+constexpr int kMaxFlushPerTick = 8;
+constexpr std::uint8_t kMaxSendTries = 3;  // retries per frame before it is given up on
 
 struct VClient {
   int cid = 0;
@@ -33,6 +42,7 @@ struct VClient {
 esp_websocket_client_handle_t g_ws = nullptr;
 SemaphoreHandle_t g_mu = nullptr;
 QueueHandle_t g_in_q = nullptr;
+QueueHandle_t g_out_q = nullptr;   // heap-allocated, NUL-terminated frames
 HubInfoFn g_info = nullptr;
 char g_token[core::app::kMaxToken + 1] = {};
 char g_secret[64] = {};
@@ -40,11 +50,15 @@ char g_url[256] = {};
 VClient g_vclients[kMaxVClients];
 std::atomic<bool> g_tunnel_authed{false};
 bool g_started = false;
+int g_fails = 0;
+std::uint32_t g_fail_until_ms = 0;
+std::atomic<std::uint32_t> g_dropped{0};  // outbound frames lost (full queue or a dead socket)
 
 // Frame accumulation (esp_websocket_client may fragment large frames).
 char g_rx_buf[5120];
 std::size_t g_rx_len = 0;
 std::size_t g_rx_total = 0;
+bool g_rx_over = false;   // the frame is bigger than g_rx_buf: drop its sender
 
 std::uint32_t now_ms() { return static_cast<std::uint32_t>(esp_timer_get_time() / 1000); }
 
@@ -77,10 +91,98 @@ void clear_all() {
   for (auto& c : g_vclients) c = VClient{};
 }
 
+// Hand a frame to the outbound queue. Never sends from the WebSocket event handler:
+// the main loop drains the queue in tick(), outside the component's internal lock.
 void tunnel_send(const char* msg, std::size_t len) {
-  if (g_ws != nullptr && esp_websocket_client_is_connected(g_ws)) {
-    esp_websocket_client_send_text(g_ws, msg, static_cast<int>(len), pdMS_TO_TICKS(1000));
+  if (g_out_q == nullptr) return;
+  char* copy = static_cast<char*>(std::malloc(len + 1));
+  if (copy == nullptr) return;
+  std::memcpy(copy, msg, len);
+  copy[len] = '\0';
+  if (xQueueSend(g_out_q, &copy, 0) != pdTRUE) {
+    std::free(copy);
+    ++g_dropped;
+    ESP_LOGW(kTag, "outbound queue full, dropped a %u B frame", static_cast<unsigned>(len));
   }
+}
+
+// A frame that could not go out (socket down, or the component refused it) is put back for
+// the next pass instead of vanishing: a dropped frame is a command or a snapshot part the
+// remote client never sees. Retries are bounded, the counter is one slot in the queue item.
+struct OutFrame {
+  char* text;
+  std::uint8_t tries;
+};
+
+void flush_out() {
+  if (g_out_q == nullptr) return;
+  for (int i = 0; i < kMaxFlushPerTick; ++i) {
+    OutFrame f{nullptr, 0};
+    if (xQueueReceive(g_out_q, &f, 0) != pdTRUE) return;
+    const bool conn = g_ws != nullptr && esp_websocket_client_is_connected(g_ws);
+    const int sent = conn ? esp_websocket_client_send_text(g_ws, f.text,
+                                                           static_cast<int>(std::strlen(f.text)),
+                                                           pdMS_TO_TICKS(1000))
+                          : -1;
+    if (sent < 0 && f.tries < kMaxSendTries) {
+      f.tries++;
+      if (xQueueSend(g_out_q, &f, 0) == pdTRUE) continue;
+      ++g_dropped;
+    } else if (sent < 0) {
+      ++g_dropped;
+    }
+    std::free(f.text);
+  }
+}
+
+void drop_out() {
+  if (g_out_q == nullptr) return;
+  OutFrame f{nullptr, 0};
+  while (xQueueReceive(g_out_q, &f, 0) == pdTRUE) std::free(f.text);
+}
+
+// Close a virtual client for good: tell the relay (or its socket leaks and keeps counting
+// against the client budget), then free the slot. Without this the relay hangs on to
+// sockets the hub has already rejected.
+void drop_cid(int cid, const char* why) {
+  char msg[40];
+  const int n = std::snprintf(msg, sizeof(msg), "!close:%d", cid);
+  if (n > 0) tunnel_send(msg, static_cast<std::size_t>(n));
+  Guard g;
+  VClient* vc = find_cid(cid);
+  if (vc != nullptr) {
+    ESP_LOGW(kTag, "cid=%d dropped (%s)", cid, why);
+    vc->cid = 0;
+  }
+}
+
+bool locked_out() {
+  Guard g;
+  return g_fails >= kAuthFailLimit && static_cast<std::int32_t>(now_ms() - g_fail_until_ms) < 0;
+}
+
+void note_failure() {
+  Guard g;
+  ++g_fails;
+  g_fail_until_ms = now_ms() + kLockoutMs;
+}
+
+void clear_failures() {
+  Guard g;
+  g_fails = 0;
+  g_fail_until_ms = 0;
+}
+
+// "<cid>:<payload>" — parse the cid without atoi(): the frame in g_rx_buf is not
+// NUL-terminated, and a stale digit after the frame would silently change the id.
+int parse_cid(const char* p, const char* end) {
+  int cid = 0;
+  for (const char* q = p; q < end; ++q) {
+    if (*q < '0' || *q > '9') return 0;
+    cid = cid * 10 + (*q - '0');
+    if (cid > 9999) return 0;
+  }
+  return cid;
 }
 
 // Send a reply to a remote client through the tunnel: "<cid>:<json>".
@@ -116,7 +218,7 @@ void on_client_data(int cid, const char* text, std::size_t len) {
   {
     Guard g;
     VClient* vc = find_cid(cid);
-    if (vc == nullptr) return;
+    if (vc == nullptr) return;   // already dropped: the relay is behind, nothing to answer
     is_authed = vc->authed;
   }
 
@@ -128,7 +230,7 @@ void on_client_data(int cid, const char* text, std::size_t len) {
     core::JsonWriter w(out, sizeof(out));
     encode_error(w, -1, Err::BadJson);
     client_reply(cid, w.c_str(), w.size());
-    if (!is_authed) { Guard g; if (VClient* v = find_cid(cid)) v->cid = 0; }
+    if (!is_authed) drop_cid(cid, "bad json before hello");
     return;
   }
 
@@ -139,15 +241,19 @@ void on_client_data(int cid, const char* text, std::size_t len) {
     if (m.kind != ClientMsg::Kind::Hello) {
       encode_error(w, -1, Err::Unauthorized);
       client_reply(cid, w.c_str(), w.size());
-      Guard g;
-      if (VClient* v = find_cid(cid)) v->cid = 0;
+      drop_cid(cid, "command before hello");
       return;
     }
     if (m.v != kProtocolVersion) {
       encode_error(w, -1, Err::Version);
       client_reply(cid, w.c_str(), w.size());
-      Guard g;
-      if (VClient* v = find_cid(cid)) v->cid = 0;
+      drop_cid(cid, "wrong protocol version");
+      return;
+    }
+    if (locked_out()) {
+      encode_error(w, -1, Err::Unauthorized, "locked out");
+      client_reply(cid, w.c_str(), w.size());
+      drop_cid(cid, "locked out");
       return;
     }
     bool good = false;
@@ -156,13 +262,14 @@ void on_client_data(int cid, const char* text, std::size_t len) {
       if (m.token_ok && g_token[0] != '\0') good = ct_equal(m.token, g_token);
     }
     if (!good) {
-      ESP_LOGW(kTag, "cid=%d bad token", cid);
+      note_failure();
+      ESP_LOGW(kTag, "cid=%d bad token (%d failure(s) in the window)", cid, g_fails);
       encode_error(w, -1, Err::Unauthorized);
       client_reply(cid, w.c_str(), w.size());
-      Guard g;
-      if (VClient* v = find_cid(cid)) v->cid = 0;
+      drop_cid(cid, "bad token");
       return;
     }
+    clear_failures();
     {
       Guard g;
       VClient* v = find_cid(cid);
@@ -265,14 +372,20 @@ void on_tunnel_message(const char* data, std::size_t len) {
     return;
   }
   if (len > 6 && std::strncmp(data, "!open:", 6) == 0) {
-    const int cid = std::atoi(data + 6);
+    const int cid = parse_cid(data + 6, data + len);
     if (cid <= 0) return;
     {
       Guard g;
       if (find_cid(cid) != nullptr) return;
       VClient* vc = find_free();
       if (vc == nullptr) {
-        ESP_LOGW(kTag, "no slot for cid=%d", cid);
+        // No room. Say why (the local server answers "busy" at this point) and hang up, or
+        // the client sits there with a half-open socket and no explanation.
+        ESP_LOGW(kTag, "no slot for cid=%d, refusing", cid);
+        char err[96];
+        core::JsonWriter w(err, sizeof(err));
+        core::app::encode_error(w, -1, core::app::Err::Busy);
+        client_reply(cid, w.c_str(), w.size());
         char msg[32];
         const int n = std::snprintf(msg, sizeof(msg), "!close:%d", cid);
         tunnel_send(msg, static_cast<std::size_t>(n));
@@ -287,7 +400,8 @@ void on_tunnel_message(const char* data, std::size_t len) {
     return;
   }
   if (len > 7 && std::strncmp(data, "!close:", 7) == 0) {
-    const int cid = std::atoi(data + 7);
+    const int cid = parse_cid(data + 7, data + len);
+    if (cid <= 0) return;
     Guard g;
     if (VClient* vc = find_cid(cid)) {
       ESP_LOGI(kTag, "remote client cid=%d disconnected", cid);
@@ -299,14 +413,15 @@ void on_tunnel_message(const char* data, std::size_t len) {
   // Data: <cid>:<payload>
   const char* colon = static_cast<const char*>(std::memchr(data, ':', len));
   if (colon == nullptr || colon == data) return;
-  int cid = 0;
-  for (const char* p = data; p < colon; ++p) {
-    if (*p < '0' || *p > '9') return;
-    cid = cid * 10 + (*p - '0');
-  }
+  const int cid = parse_cid(data, colon);
   if (cid <= 0) return;
   const char* payload = colon + 1;
   const std::size_t plen = len - static_cast<std::size_t>(payload - data);
+  if (plen > 0 && plen <= 64) {
+    ESP_LOGI(kTag, "<- cid=%d %zu B: %.*s", cid, plen, static_cast<int>(plen), payload);
+  } else {
+    ESP_LOGI(kTag, "<- cid=%d %zu B", cid, plen);
+  }
   on_client_data(cid, payload, plen);
 }
 
@@ -326,8 +441,26 @@ void ws_event_handler(void*, esp_event_base_t, std::int32_t event_id, void* even
         if (ev->payload_offset == 0) {
           g_rx_len = 0;
           g_rx_total = static_cast<std::size_t>(ev->payload_len);
+          // The protocol allows 4 KB per frame (core::app::kMaxFrame); the "<cid>:" prefix
+          // is the relay's, not the client's. Over that, the local server would close the
+          // connection — do the same instead of parsing whatever arrived.
+          g_rx_over = g_rx_total > core::app::kMaxFrame + 16;
         }
-        if (g_rx_total > sizeof(g_rx_buf)) break;
+        if (g_rx_over) {
+          // Too big to hold (the hub's frames are at most 4 KB). Read just enough to learn
+          // who sent it and close that client, the same way the local server does.
+          if (g_rx_len == 0) {
+            const std::size_t n = ev->data_len < 12 ? static_cast<std::size_t>(ev->data_len) : 12;
+            std::memcpy(g_rx_buf, ev->data_ptr, n);
+            g_rx_len = n;
+            const char* colon = static_cast<const char*>(std::memchr(g_rx_buf, ':', n));
+            const int cid = colon != nullptr ? parse_cid(g_rx_buf, colon) : 0;
+            ESP_LOGW(kTag, "cid=%d sent a frame over %u B, dropping", cid,
+                     static_cast<unsigned>(core::app::kMaxFrame));
+            if (cid > 0) drop_cid(cid, "frame over the limit");
+          }
+          break;
+        }
         const std::size_t space = sizeof(g_rx_buf) - g_rx_len;
         const std::size_t copy = static_cast<std::size_t>(ev->data_len) < space
                                      ? static_cast<std::size_t>(ev->data_len)
@@ -391,12 +524,20 @@ void describe(char* buf, std::size_t cap) {
   }
   const bool conn = g_ws != nullptr && esp_websocket_client_is_connected(g_ws);
   std::size_t n_authed = 0;
-  if (g_mu != nullptr) { Guard g; n_authed = authed_count_locked(); }
+  int fails = 0;
+  if (g_mu != nullptr) {
+    Guard g;
+    n_authed = authed_count_locked();
+    fails = g_fails;
+  }
   std::snprintf(buf, cap, "relay: %s, tunnel %s%s, %u remote client(s)\n  url: %s\n",
                 g_started ? "running" : "stopped",
                 conn ? "connected" : "disconnected",
                 (conn && g_tunnel_authed) ? " (authenticated)" : "",
                 static_cast<unsigned>(n_authed), g_url);
+  std::snprintf(buf + std::strlen(buf), cap - std::strlen(buf),
+                "  auth failures in the window: %d (lockout at %d, 60 s), dropped frames: %u\n",
+                fails, kAuthFailLimit, static_cast<unsigned>(g_dropped));
 }
 
 bool configured_url(char* out, std::size_t cap) {
@@ -421,7 +562,9 @@ bool start(const char* token, HubInfoFn info) {
 
   if (g_mu == nullptr) g_mu = xSemaphoreCreateMutex();
   if (g_in_q == nullptr) g_in_q = xQueueCreate(8, sizeof(Inbound));
-  if (g_mu == nullptr || g_in_q == nullptr) return false;
+  if (g_out_q == nullptr) g_out_q = xQueueCreate(kOutQueue, sizeof(OutFrame));
+  if (g_mu == nullptr || g_in_q == nullptr || g_out_q == nullptr) return false;
+  drop_out();
 
   {
     Guard g;
@@ -461,6 +604,7 @@ bool start(const char* token, HubInfoFn info) {
 }
 
 void stop() {
+  drop_out();
   if (g_ws != nullptr) {
     esp_websocket_client_close(g_ws, pdMS_TO_TICKS(2000));
     esp_websocket_client_destroy(g_ws);
@@ -469,6 +613,7 @@ void stop() {
   g_tunnel_authed = false;
   g_started = false;
   clear_all();
+  clear_failures();
   ESP_LOGI(kTag, "stopped");
 }
 
@@ -486,17 +631,23 @@ bool connected() {
 }
 
 void tick(std::uint32_t now) {
+  // Everything the WebSocket task wanted to say goes out here, outside the component's lock.
+  flush_out();
   if (g_mu == nullptr || !g_started) return;
-  Guard g;
-  for (auto& c : g_vclients) {
-    if (c.cid != 0 && !c.authed && static_cast<std::int32_t>(now - c.deadline_ms) > 0) {
-      ESP_LOGW(kTag, "cid=%d no hello in %u ms, dropping", c.cid,
-               static_cast<unsigned>(kHelloTimeoutMs));
-      char msg[32];
-      const int n = std::snprintf(msg, sizeof(msg), "!close:%d", c.cid);
-      tunnel_send(msg, static_cast<std::size_t>(n));
-      c.cid = 0;
+  int expired[kMaxVClients];
+  std::size_t n = 0;
+  {
+    Guard g;
+    for (auto& c : g_vclients) {
+      if (c.cid != 0 && !c.authed && static_cast<std::int32_t>(now - c.deadline_ms) > 0) {
+        expired[n++] = c.cid;
+      }
     }
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    ESP_LOGW(kTag, "cid=%d no hello in %u ms, dropping", expired[i],
+             static_cast<unsigned>(kHelloTimeoutMs));
+    drop_cid(expired[i], "no hello");
   }
 }
 

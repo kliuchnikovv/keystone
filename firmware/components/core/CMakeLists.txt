@@ -11,6 +11,8 @@ idf_component_register(
     "${CORE}/src/sha256.cpp"
     "${CORE}/src/ota_receiver.cpp"
     "${CORE}/src/ota_sender.cpp"
+    "${CORE}/src/device_ota_receiver.cpp"
+    "${CORE}/src/device_ota_sender.cpp"
   INCLUDE_DIRS
     "${CORE}/include"
   REQUIRES

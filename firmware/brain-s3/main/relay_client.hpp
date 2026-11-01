@@ -6,6 +6,11 @@
 // like local WebSocket clients: Connected → Cmd/Req via next(), replies via send()/broadcast().
 // Their fds are negative (kFdBase - cid) so the dispatch layer routes them here, not to appsrv.
 //
+// Threading: the WebSocket event handler only parses and queues. Everything the hub sends
+// leaves through the outbound queue drained by tick() in the main loop — esp_websocket_client
+// holds its internal lock while calling the event handler, so sending from inside the callback
+// deadlocks against a concurrent send from the main loop.
+//
 // Console:
 //   relay                              show status
 //   relay <url> <secret>               save credentials to NVS, connect

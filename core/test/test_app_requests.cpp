@@ -436,8 +436,46 @@ TEST_CASE("unpair and identify target a Zigbee device only") {
   CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
 }
 
-// ---- scenes ----------------------------------------------------------------------------
+TEST_CASE("device.ota takes a Zigbee device, an http url and a sha256") {
+  Home h;
+  declare(h.reg, 2, 0x0200, hubproto::DeviceType::Switch, {{0x01, ValueType::Bool, 0x07}});  // a Matter mirror
+  const std::string sha(64, 'a');
+  auto ota = [&](const std::string& a) {
+    const std::string frame = R"({"type":"req","id":1,"op":"device.ota","args":)" + a + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return device_ota_meta(h.reg, r, m.args, 1);
+  };
+  auto args = [&](std::uint16_t entity, const std::string& url, const std::string& digest) {
+    return R"({"entity":)" + std::to_string(entity) + R"(,"url":")" + url + R"(","sha256":")" +
+           digest + R"("})";
+  };
 
+  const auto d = ota(args(0x0100, "https://example.org/fw.ota", sha));
+  CHECK(d.out.ok);
+  CHECK(d.entity == 0x0100);
+  CHECK(std::string(d.url) == "https://example.org/fw.ota");
+  CHECK(std::string(d.sha256) == sha);
+
+  CHECK(ota(args(0x0100, "http://example.org/fw.ota", sha)).out.ok);   // http is fine
+  CHECK(ota(args(0x0200, "https://example.org/fw.ota", sha)).out.err == Err::BadArgs);  // Matter side
+  CHECK(ota(args(0x0999, "https://example.org/fw.ota", sha)).out.err == Err::NotFound);  // unknown
+  CHECK(ota(args(0x0001, "https://example.org/fw.ota", sha)).out.err == Err::NotFound);  // a chip
+  CHECK(ota(args(0x0100, "ftp://example.org/fw.ota", sha)).out.err == Err::BadArgs);      // not http(s)
+  CHECK(ota(args(0x0100, "example.org/fw.ota", sha)).out.err == Err::BadArgs);           // no scheme
+  CHECK(ota(args(0x0100, "https://example.org/fw.ota", "abc")).out.err == Err::BadArgs); // short digest
+  CHECK(ota(args(0x0100, "https://example.org/fw.ota", std::string(64, 'z'))).out.err == Err::BadArgs);
+  CHECK(ota(args(0x0100, "https://example.org/fw.ota", std::string(63, 'a') + "!")).out.err == Err::BadArgs);
+  // No args at all.
+  Reader r;
+  const std::string frame = R"({"type":"req","id":1,"op":"device.ota"})";
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  CHECK(device_ota_meta(h.reg, r, m.args, 1).out.err == Err::BadArgs);
+}
+
+// ---- scenes ----------------------------------------------------------------------------
 namespace {
 const char* kEvening = R"({"name":"evening","actions":[)"
                        R"({"entity":257,"attr":1,"value":true},{"entity":257,"attr":2,"value":100},)"

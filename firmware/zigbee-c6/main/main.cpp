@@ -50,6 +50,7 @@ extern "C" {
 #include "esp_ota_sink.hpp"
 #include "esp_uart_link.hpp"
 #include "nvs_boot_id.hpp"
+#include "core/device_ota_receiver.hpp"
 #include "core/ota_receiver.hpp"
 #include "core/uart_transport.hpp"
 #include "core/zcl_profile.hpp"
@@ -58,6 +59,7 @@ extern "C" {
 #include "hubproto/payload.hpp"
 #include "hubproto/units.hpp"
 #include "hubproto/version.hpp"
+#include "device_ota.hpp"
 #include "status_led.hpp"
 
 namespace zcl = core::zcl;
@@ -271,6 +273,20 @@ void persist_entities() {
   nvs_close(h);
 }
 
+// The device type in words, for the log (the app has its own copy of these names).
+const char* type_name(hubproto::DeviceType t) {
+  switch (t) {
+    case hubproto::DeviceType::Light: return "light";
+    case hubproto::DeviceType::Sensor: return "sensor";
+    case hubproto::DeviceType::Switch: return "switch";
+    case hubproto::DeviceType::Climate: return "climate";
+    case hubproto::DeviceType::Occupancy: return "occupancy";
+    case hubproto::DeviceType::Contact: return "contact";
+    case hubproto::DeviceType::Button: return "button";
+    default: return "other";
+  }
+}
+
 void sanitize_entity(ZbEntity& e) {
   if (e.ac_power_div == 0) e.ac_power_div = 1;
   if (e.ac_power_mul == 0) e.ac_power_mul = 1;
@@ -286,6 +302,7 @@ void restore_entities() {
   static Rec recs[kMaxEntities];
   std::size_t sz = sizeof(recs);
   bool migrated = false;
+  bool retyped = false;
   if (nvs_get_blob(h, kNvsEntities, recs, &sz) == ESP_OK && sz == sizeof(recs)) {
     for (std::size_t i = 0; i < kMaxEntities; ++i) {
       const Rec& r = recs[i];
@@ -302,6 +319,19 @@ void restore_entities() {
       e.ac_power_div = r.ac_power_div;
       e.metering_mul = r.metering_mul;
       e.metering_div = r.metering_div;
+      if (!e.in_use) continue;
+      // The stored shape is re-checked against today's rules: a device paired with an older
+      // firmware keeps its entity id, but not a stale type (the INSPELNING was stored as a
+      // dimmable light because it also reports a Level cluster; it is a socket).
+      const zcl::Shape sh = zcl::shape_from_caps(e.caps);
+      if (sh.type != e.type || sh.caps != e.caps) {
+        ESP_LOGI(kTag, "entity 0x%04x: %s -> %s (caps 0x%04lx -> 0x%04lx)", e.entity_id,
+                 type_name(e.type), type_name(sh.type),
+                 static_cast<unsigned long>(e.caps), static_cast<unsigned long>(sh.caps));
+        e.type = sh.type;
+        e.caps = sh.caps;
+        retyped = true;
+      }
     }
   } else {
     // First boot of this firmware on a hub paired by an older one: every old entity was an
@@ -339,7 +369,7 @@ void restore_entities() {
     sanitize_entity(e);
     ++n;
   }
-  if (migrated) persist_entities();
+  if (migrated || retyped) persist_entities();
   if (n > 0) {
     ESP_LOGI(kTag, "restored %u entity(ies) from NVS%s", static_cast<unsigned>(n),
              migrated ? " (migrated from the switch-only layout)" : "");
@@ -351,6 +381,24 @@ ZbEntity* find_by_entity(std::uint16_t entity_id) {
     if (e.in_use && e.entity_id == entity_id) return &e;
   }
   return nullptr;
+}
+
+// ---- Zigbee OTA server (the firmware of a device, cluster 0x0019) -------------
+// The brain pushes a vendor .ota file; we store it in the zb_ota partition and
+// serve it to the device with the ZBOSS OTA server (main/device_ota.cpp).
+fw::ZigbeeOtaServer g_zb_ota_server;
+core::DeviceOtaReceiver* g_dev_ota_rx = nullptr;
+
+// The entity the brain wants to update -> the short address of that device.
+std::uint16_t resolve_device_addr(void* /*ctx*/, std::uint16_t entity_id) {
+  ZbEntity* e = find_by_entity(entity_id);
+  return (e != nullptr) ? e->short_addr : 0;
+}
+
+// The device session (waiting / transferring / done) goes back to the brain.
+void report_device_ota(void* /*ctx*/, hubproto::DevOtaPhase phase,
+                        hubproto::DevOtaStatus status, std::uint8_t percent) {
+  if (g_dev_ota_rx != nullptr) g_dev_ota_rx->report_phase(phase, status, percent);
 }
 
 ZbEntity* find_by_addr(std::uint16_t short_addr, std::uint8_t endpoint) {
@@ -1737,6 +1785,26 @@ esp_err_t zcl_action_handler(esp_zb_core_action_callback_id_t cb_id,
       if (e != nullptr) apply_ias_status(*e, m->zone_status);
       break;
     }
+    case ESP_ZB_CORE_OTA_UPGRADE_SRV_QUERY_IMAGE_CB_ID: {
+      // A device asks whether we have an image for it. We only serve the file we
+      // were asked to update that one device with; anything else gets "no image".
+      const auto* m =
+          static_cast<const esp_zb_zcl_ota_upgrade_server_query_image_message_t*>(message);
+      const std::uint16_t src = m->zcl_addr.u.short_addr;
+      const bool ours = (src == g_zb_ota_server.target_short_addr());
+      const bool match = (m->manufacturer_code == g_zb_ota_server.manufacturer_code() &&
+                          m->image_type == g_zb_ota_server.image_type());
+      const bool accepted = ours && match;
+      g_zb_ota_server.on_query_image(src, m->manufacturer_code, m->image_type, accepted);
+      return accepted ? ESP_OK : ESP_ERR_NOT_FOUND;
+    }
+    case ESP_ZB_CORE_OTA_UPGRADE_SRV_STATUS_CB_ID: {
+      // The device finished (or gave up) pulling the image.
+      const auto* m = static_cast<const esp_zb_zcl_ota_upgrade_server_status_message_t*>(message);
+      const bool success = (m->server_status == ESP_ZB_ZCL_OTA_UPGRADE_SERVER_END);
+      g_zb_ota_server.on_upgrade_end(m->zcl_addr.u.short_addr, success);
+      break;
+    }
     default:
       ESP_LOGD(kTag, "unhandled ZCL action 0x%x", static_cast<unsigned>(cb_id));
       break;
@@ -1861,6 +1929,20 @@ void esp_zb_task(void* /*pv*/) {
   esp_zb_ias_zone_cluster_cfg_t ias_cfg{};
   esp_zb_cluster_list_add_ias_zone_cluster(clusters, esp_zb_ias_zone_cluster_create(&ias_cfg),
                                            ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
+  // OTA Upgrade *server* (cluster 0x0019): this is how a joined device pulls its
+  // own firmware from us (docs/ota.md). The variable must outlive the call.
+  static esp_zb_zcl_ota_upgrade_server_variable_t ota_server_var = {
+      .query_jitter = 0x64,  // 100 ms
+      .current_time = 0,
+      .file_count = 1,
+  };
+  esp_zb_attribute_list_t* ota_cluster =
+      esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_OTA_UPGRADE);
+  ESP_ERROR_CHECK(esp_zb_ota_cluster_add_attr(ota_cluster,
+                                             ESP_ZB_ZCL_ATTR_OTA_UPGRADE_SERVER_DATA_ID,
+                                             (void*)&ota_server_var));
+  ESP_ERROR_CHECK(esp_zb_cluster_list_add_ota_cluster(clusters, ota_cluster,
+                                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
   esp_zb_ep_list_t* ep_list = esp_zb_ep_list_create();
   esp_zb_endpoint_config_t ep_cfg{};
   ep_cfg.endpoint = kCoordEndpoint;
@@ -1909,11 +1991,24 @@ extern "C" void app_main(void) {
     c.boot_id = g_boot_id;
     return c;
   }());
+
+  // The firmware of a Zigbee *device*: the brain pushes a vendor .ota file, we
+  // store it in the zb_ota partition and serve it over the OTA Upgrade cluster.
+  g_zb_ota_server.set_resolver(&resolve_device_addr, nullptr);
+  g_zb_ota_server.set_phase_sink(&report_device_ota, nullptr);
+  static core::DeviceOtaReceiver dev_ota_rx(bus, g_zb_ota_server, [] {
+    core::DeviceOtaReceiver::Config c;
+    c.own_chip_id = kOwnChipId;
+    c.boot_id = g_boot_id;
+    return c;
+  }());
+  g_dev_ota_rx = &dev_ota_rx;
   static auto ota_tick = [](void* ctx) {
     auto* rx = static_cast<core::OtaReceiver*>(ctx);
     const auto uptime_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
     g_ota_confirm.tick(uptime_ms);
     rx->poll(uptime_ms);
+    if (g_dev_ota_rx != nullptr) g_dev_ota_rx->poll(uptime_ms);
     if (rx->reboot_pending()) fw::ota_reboot_into_new_image(UART_NUM_1);
   };
   link.set_tick(ota_tick, &ota_rx);

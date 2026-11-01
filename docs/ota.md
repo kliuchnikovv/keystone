@@ -111,3 +111,92 @@ slot + sha256 of the last image the chip accepted over OTA (kept in NVS namespac
 
 It shows in the log and in `ota status`. Hardware-verified on zigbee-c6 with a test
 image (`-DKS_TEST_CRASH`, aborts 8 s after boot): `FLAPPING` + `ROLLED BACK`.
+
+# OTA: updating a Zigbee device (lamp, dimmer) with its own firmware
+
+This is a different thing from the section above: here the **device** (a bulb, a
+dimmer, a sensor) gets new firmware, not the C6. The coordinator plays the Zigbee
+**OTA Upgrade server** (cluster `0x0019`) and the device pulls the image itself.
+
+## The flow
+
+```
+brain                      zigbee-c6                       device
+  |  GET https://…/fw.ota    |                              |
+  |  (streams, no full copy) |                              |
+  |  DEV_OTA_BEGIN ─────────>|                              |
+  |  DEV_OTA_CHUNK ×N ──────>| writes into the zb_ota      |
+  |  DEV_OTA_END ───────────>| partition (512 KB)          |
+  |                          | checks sha256 + CRC32 +      |
+  |                          | the Zigbee OTA header        |
+  |                          | registers the image,         |
+  |  DEV_OTA_STATUS ────────>| Image Notify ───────────────>|
+  |  (notifying)            | <──── Query Next Image ──────|
+  |  DEV_OTA_STATUS ────────| <──── Image Block Requests ──|
+  |  (transferring, %)       | ──── image blocks ──────────>|
+  |  DEV_OTA_STATUS ────────| <──── Upgrade End Request ───|
+  |  (done / failed)         |                              |
+```
+
+* The hub downloads the file and streams it to the coordinator over the UART link
+  (hubproto `0x59..0x5C`, stop-and-wait). The brain never holds the whole file.
+* The coordinator stores it in the `zb_ota` partition (512 KB) and checks it:
+  SHA-256 (from the brain), the file's own CRC32 and the Zigbee OTA header. A file
+  that is not a valid Zigbee OTA file is never offered to any device.
+* The blocks are served **straight from flash**, so a 200 KB image costs no RAM.
+* Only the device the update was started for is served; another device asking for
+  an image gets "none available" (the ZBOSS server checks manufacturer code and
+  image type itself).
+
+## The file
+
+A vendor `.ota` file (Zigbee OTA upgrade image): a 56-byte header (magic
+`0x0BEEF11E`, manufacturer code, image type, file version, …), one or more
+sub-elements (tag `0x0000` = the firmware) and a CRC32 over everything before the
+last four bytes. All fields are little-endian — the same layout `zigpy` writes and
+reads. `core/zigbee_ota.hpp` parses and validates it (and can build one, which is
+what the host tests use).
+
+IKEA ships its files inside an "NGIS" container; `core::zota::unwrap_vendor_container()`
+finds the inner file inside it.
+
+**Where do I get such a file?** From the manufacturer. For IKEA bulbs the image is
+signed by IKEA and is only distributed through the IKEA gateway — the hub cannot
+produce or bypass that signature. A lamp will ask the coordinator for an image and
+be refused unless the file matches its manufacturer code *and* its signature
+check. That is why the honest verification of this feature is "the device asks, we
+answer, the file matches" and not "we pushed new firmware into a real bulb".
+
+## Usage
+
+```
+ota dev <id_or_name> <http(s)://url.ota> <sha256-hex>   start an update
+ota dev status                                           progress / last result
+ota dev abort                                            stop the running update
+```
+
+The same thing from the app: **Devices → the device's menu → Update firmware**
+(url + sha256, then a live progress bar). The hub pushes the phase
+(`receiving → verifying → notifying → transferring → done/failed`) to the app as a
+`device_ota` frame.
+
+## Limits
+
+* Only Zigbee devices can be updated this way. Matter has no standard way to
+  update a *bridged* device's firmware, so a Matter mirror shows nothing; the
+  update is visible in the app and in the console.
+* One update at a time per hub; the file must fit in 512 KB.
+* The server must send `Content-Length` (no chunked transfer).
+* The coordinator answers a retransmitted block from its own counter, not from the
+  requested offset (the ESP-IDF OTA server API has no offset in the data
+  callback). A lost block therefore restarts the device's pull rather than
+  corrupting the image; the CRC32 catches it if it does.
+
+## Status
+
+Implemented and host-tested (the file format, the brain↔chip transfer, the
+session state machine: `core/test/test_zigbee_ota.cpp`, `core/test/test_device_ota.cpp`).
+Both firmwares build. **Not yet verified on a real device** — the coordinator's
+OTA server path (`Query Next Image` → blocks → `Upgrade End`) has not been
+exercised against a lamp; that needs a signed vendor image for the device at hand.
+

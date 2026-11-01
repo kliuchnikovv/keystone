@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Platform } from 'react-native';
-import { canManageDevice, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, climateTiles, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
+import { canManageDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, climateTiles, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
 import { deviceShape, gridLayout } from '../model/grid';
 import { groupByRoom, roomCount } from '../model/rooms';
 import { useEntityActivity } from '../hooks/useEntityActivity';
@@ -125,6 +125,14 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
           notify={commands.notify}
           updatedText={agoText(activity.updatedAt.get(open.id), now)}
           pressedText={agoText(activity.pressedAt.get(open.id), now)}
+          {...(canUpdateFirmware(open)
+            ? {
+                // Only a Zigbee device can be given new firmware.
+                onStartUpdate: async (url: string, sha256: string) =>
+                  (await commands.request('device.ota', { entity: open.id, url, sha256 })) !== null,
+              }
+            : {})}
+          ota={home.deviceOta[open.id]}
         />
       )}
 
