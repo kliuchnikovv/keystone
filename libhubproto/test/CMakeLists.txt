@@ -8,6 +8,7 @@ add_executable(hubproto_tests
   test_payload_declare.cpp
   test_payload_state.cpp
   test_payload_ota.cpp
+  test_payload_matter.cpp
   test_payload_chip_self.cpp
   test_units.cpp
   test_frame.cpp)

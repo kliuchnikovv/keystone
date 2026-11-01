@@ -316,4 +316,72 @@ struct OtaInfo {
 EncodeResult encode_ota_info(const OtaInfo& in, std::uint8_t* out, std::size_t cap) noexcept;
 bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noexcept;
 
+// ---- Matter commissioning (the hub adds a Matter device to the home) ----------
+// The phone finds a Matter device over Bluetooth and hands the bytes it read to the
+// brain. The brain passes them on to the Matter chip — the only one with a stack that
+// can commission anything. The bytes are not ours to interpret: the `kind` says what
+// they are, and the chip parses each kind its own way.
+//
+//   MATTER_PAIR   (brain→chip) : kind(u8) len(u8) bytes[1..kMatterMaxPayload]
+//   MATTER_RESULT (chip→brain)  : state(u8) code(u8) entity_id(u16 LE)
+//
+// The kinds are the three ways a Matter device can be introduced:
+//   0 — the commissioning service data (UUID 0xFFF6): the discriminator and the setup
+//       hash. Enough to recognize the device, not enough to commission it.
+//   1 — the enhanced commissioning advertisement (company 0xFFF1): the whole onboarding
+//       payload, with the vendor, the product and the attestation.
+//   2 — the payload of a QR code: eleven bytes, packed the way CHIP packs them.
+//
+// The result says how far the attempt got and, when the device joined the home, the
+// entity id the chip gave it.
+
+inline constexpr std::uint8_t kMatterKindService      = 0;  // the service data 0xFFF6
+inline constexpr std::uint8_t kMatterKindManufacturer = 1;  // the enhanced advertisement 0xFFF1
+inline constexpr std::uint8_t kMatterKindQr           = 2;  // the payload of a QR code
+inline constexpr std::size_t  kMatterMaxPayload       = 64; // the bytes of one onboarding payload
+inline constexpr std::size_t  kMatterPairHeader       = 2;  // kind(u8) + len(u8)
+static_assert(kMatterPairHeader + kMatterMaxPayload <= 255, "must fit one frame (kMaxPayloadSize)");
+
+enum class MatterState : std::uint8_t {
+  Idle          = 0,
+  Scanning      = 1,  // looking for the device
+  Commissioning = 2,  // the device is being commissioned
+  Adding        = 3,  // the device joined; the entity is being set up
+  Done          = 4,  // the device is in the home
+  Failed        = 5,
+};
+
+enum class MatterCode : std::uint8_t {
+  Ok          = 0,
+  NoDevice    = 1,  // nothing answered
+  BadPayload  = 2,  // the bytes are not what they claim to be
+  NoSetupHash = 3,  // the device was not the one the bytes describe
+  Busy        = 4,  // another commissioning is running
+  Unsupported = 5,  // this chip cannot commission
+  Timeout     = 6,  // the device did not finish in time
+  Failed      = 7,
+};
+
+// Zero-copy view of a decoded MATTER_PAIR; `bytes` points into the input buffer.
+struct MatterPairView {
+  std::uint8_t       kind;
+  const std::uint8_t* bytes;
+  std::size_t         len;
+};
+EncodeResult encode_matter_pair(std::uint8_t kind, const std::uint8_t* bytes,
+                                std::size_t len, std::uint8_t* out,
+                                std::size_t cap) noexcept;
+bool decode_matter_pair(const std::uint8_t* in, std::size_t len,
+                        MatterPairView& out) noexcept;
+
+struct MatterResult {
+  MatterState   state;
+  MatterCode    code;
+  std::uint16_t entity_id;  // the device in the home, 0 when there is none yet
+};
+EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept;
+bool decode_matter_result(const std::uint8_t* in, std::size_t len,
+                           MatterResult& out) noexcept;
+
 }  // namespace hubproto

@@ -442,4 +442,65 @@ bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noex
   return true;
 }
 
+// ---- Matter ---------------------------------------------------------------
+
+namespace {
+
+bool is_known_matter_state(std::uint8_t s) noexcept {
+  return s <= static_cast<std::uint8_t>(MatterState::Failed);
+}
+
+bool is_known_matter_code(std::uint8_t c) noexcept {
+  return c <= static_cast<std::uint8_t>(MatterCode::Failed);
+}
+
+}  // namespace
+
+EncodeResult encode_matter_pair(std::uint8_t kind, const std::uint8_t* bytes,
+                                std::size_t len, std::uint8_t* out,
+                                std::size_t cap) noexcept {
+  if (bytes == nullptr || len == 0 || len > kMatterMaxPayload) return {false, 0};
+  const std::size_t need = kMatterPairHeader + len;
+  if (cap < need) return {false, 0};
+  out[0] = kind;
+  out[1] = static_cast<std::uint8_t>(len);
+  for (std::size_t i = 0; i < len; ++i) out[kMatterPairHeader + i] = bytes[i];
+  return {true, need};
+}
+
+bool decode_matter_pair(const std::uint8_t* in, std::size_t len,
+                        MatterPairView& out) noexcept {
+  if (len < kMatterPairHeader + 1) return false;
+  const std::uint8_t n = in[1];
+  if (n == 0 || n > kMatterMaxPayload) return false;
+  if (len != kMatterPairHeader + n) return false;
+  if (in[0] > kMatterKindQr) return false;  // a kind we do not know how to parse
+  out.kind = in[0];
+  out.bytes = in + kMatterPairHeader;
+  out.len = n;
+  return true;
+}
+
+EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept {
+  constexpr std::size_t need = 4;  // state(u8) code(u8) entity_id(u16)
+  if (cap < need) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(in.state);
+  out[1] = static_cast<std::uint8_t>(in.code);
+  out[2] = static_cast<std::uint8_t>(in.entity_id & 0xFF);
+  out[3] = static_cast<std::uint8_t>((in.entity_id >> 8) & 0xFF);
+  return {true, need};
+}
+
+bool decode_matter_result(const std::uint8_t* in, std::size_t len,
+                           MatterResult& out) noexcept {
+  if (len != 4) return false;
+  // A state or a code we do not know is not ours to interpret: the caller keeps what it has.
+  if (!is_known_matter_state(in[0]) || !is_known_matter_code(in[1])) return false;
+  out.state = static_cast<MatterState>(in[0]);
+  out.code = static_cast<MatterCode>(in[1]);
+  out.entity_id = static_cast<std::uint16_t>(in[2] | (in[3] << 8));
+  return true;
+}
+
 }  // namespace hubproto

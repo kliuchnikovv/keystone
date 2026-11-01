@@ -412,6 +412,83 @@ inline void encode_res_ok_ota(JsonWriter& w, std::int64_t id, OtaState state, st
       .end_object().end_object();
 }
 
+// ---- Matter commissioning -------------------------------------------------------------------
+//
+// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read. The
+// hub passes them to the Matter chip, which is the only one with a stack that can commission
+// anything; the chip reports how far it got, and the hub tells the app.
+
+inline const char* matter_state_name(hubproto::MatterState s) noexcept {
+  switch (s) {
+    case hubproto::MatterState::Idle: return "idle";
+    case hubproto::MatterState::Scanning: return "scanning";
+    case hubproto::MatterState::Commissioning: return "commissioning";
+    case hubproto::MatterState::Adding: return "adding";
+    case hubproto::MatterState::Done: return "done";
+    case hubproto::MatterState::Failed: return "failed";
+  }
+  return "idle";
+}
+
+inline const char* matter_code_name(hubproto::MatterCode c) noexcept {
+  switch (c) {
+    case hubproto::MatterCode::Ok: return "ok";
+    case hubproto::MatterCode::NoDevice: return "no_device";
+    case hubproto::MatterCode::BadPayload: return "bad_payload";
+    case hubproto::MatterCode::NoSetupHash: return "no_setup_hash";
+    case hubproto::MatterCode::Busy: return "busy";
+    case hubproto::MatterCode::Unsupported: return "unsupported";
+    case hubproto::MatterCode::Timeout: return "timeout";
+    case hubproto::MatterCode::Failed: return "failed";
+  }
+  return "failed";
+}
+
+/** One line about where the attempt stands — for the log and for the app. */
+inline const char* matter_message(hubproto::MatterState s, hubproto::MatterCode c) noexcept {
+  switch (c) {
+    case hubproto::MatterCode::Ok:
+      switch (s) {
+        case hubproto::MatterState::Done: return "the device is in the hub now";
+        case hubproto::MatterState::Failed: return "adding the device failed";
+        default: return "the hub is working on it";
+      }
+    case hubproto::MatterCode::NoDevice: return "the device did not answer";
+    case hubproto::MatterCode::BadPayload: return "the hub did not understand the payload";
+    case hubproto::MatterCode::NoSetupHash: return "the device did not share its setup code";
+    case hubproto::MatterCode::Busy: return "the hub is busy with another device";
+    case hubproto::MatterCode::Unsupported: return "this hub cannot add Matter devices yet";
+    case hubproto::MatterCode::Timeout: return "the device did not answer in time";
+    case hubproto::MatterCode::Failed: return "adding the device failed";
+  }
+  return "";
+}
+
+// `matter.status`: where the attempt stands. `entity` is the device it produced (0 when there is
+// none yet), `code` says why it stopped, `message` is a short human-readable line.
+inline void encode_res_ok_matter(JsonWriter& w, std::int64_t id, hubproto::MatterState state,
+                                 std::int64_t entity, hubproto::MatterCode code,
+                                 const char* message) noexcept {
+  w.begin_object().kv("type", "res").kv("id", id).kv("ok", true)
+      .key("result").begin_object()
+      .kv("state", matter_state_name(state))
+      .kv("entity", entity)
+      .kv("code", matter_code_name(code))
+      .kv("message", message != nullptr ? message : "")
+      .end_object().end_object();
+}
+
+// The push every client gets when the attempt moves on: {"type":"matter", …}.
+inline void encode_matter_event(JsonWriter& w, hubproto::MatterState state, std::int64_t entity,
+                                hubproto::MatterCode code, const char* message) noexcept {
+  w.begin_object().kv("type", "matter")
+      .kv("state", matter_state_name(state))
+      .kv("entity", entity)
+      .kv("code", matter_code_name(code))
+      .kv("message", message != nullptr ? message : "")
+      .end_object();
+}
+
 // ---- access: token, certificate, relay ------------------------------------------------------
 
 // `access.get`: what the app needs to reach the hub and to show the access card. The token is

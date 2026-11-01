@@ -886,3 +886,78 @@ TEST_CASE("access.relay.set may leave the secret out") {
   REQUIRE(relay_parse(R"({"url":"wss://relay.example.com/tunnel/my-hub","secret":""})", req).ok);
   CHECK(std::string(req.secret).empty());
 }
+
+// ---- Matter commissioning --------------------------------------------------------------
+
+namespace {
+auto matter_parse(const std::string& args) {
+  const std::string frame = R"({"type":"req","id":1,"op":"matter.commission","args":)" + args + "}";
+  Reader r;
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  return matter_commission_parse(r, m.args);
+}
+}  // namespace
+
+TEST_CASE("matter.commission takes the bytes the phone read, with the kind that says what they are") {
+  // The enhanced advertisement of a device: opcode, version, vendor, product, discriminator, hash.
+  auto m = matter_parse(R"({"kind":1,"payload":"0001f1ff0080000fa1b2c3d4"})");
+  REQUIRE(m.out.ok);
+  CHECK(m.kind == hubproto::kMatterKindManufacturer);
+  CHECK(m.len == 12);
+  CHECK(m.bytes[0] == 0x00);
+  CHECK(m.bytes[1] == 0x01);
+  CHECK(m.bytes[11] == 0xd4);
+
+  // The commissioning service data: seven bytes.
+  auto s = matter_parse(R"({"kind":0,"payload":"01000fa1b2c3d4"})");
+  REQUIRE(s.out.ok);
+  CHECK(s.kind == hubproto::kMatterKindService);
+  CHECK(s.len == 7);
+  CHECK(s.bytes[0] == 0x01);   // the version
+  CHECK(s.bytes[1] == 0x00);   // the discriminator, little-endian
+  CHECK(s.bytes[2] == 0x0f);
+  CHECK(s.bytes[6] == 0xd4);   // the last byte of the setup hash
+
+  // The payload of a QR code: eleven bytes.
+  auto q = matter_parse(R"({"kind":2,"payload":"88ff07004400e04b846802"})");
+  REQUIRE(q.out.ok);
+  CHECK(q.kind == hubproto::kMatterKindQr);
+  CHECK(q.len == 11);
+
+  // Upper case hex is the same bytes.
+  auto u = matter_parse(R"({"kind":1,"payload":"0001F1FF0080000FA1B2C3D4"})");
+  REQUIRE(u.out.ok);
+  CHECK(u.bytes[2] == 0xf1);
+}
+
+TEST_CASE("matter.commission refuses bytes that are not what they claim to be") {
+  const std::vector<std::string> bad = {
+      R"({"kind":3,"payload":"0001f1ff0080000fa1b2c3d4"})",  // no such kind
+      R"({"kind":-1,"payload":"0001f1ff0080000fa1b2c3d4"})",
+      R"({"kind":"1","payload":"0001f1ff0080000fa1b2c3d4"})",
+      R"({"payload":"0001f1ff0080000fa1b2c3d4"})",           // no kind at all
+      R"({"kind":1})",                                       // no payload
+      R"({"kind":1,"payload":""})",
+      R"({"kind":1,"payload":"abc"})",                       // an odd number of digits
+      R"({"kind":1,"payload":"0001f1ff0080000fa1b2c3zz"})",  // not hex
+      R"({"kind":1,"payload":123})",
+      R"({"kind":0,"payload":"0001f1ff0080000fa1b2c3d4"})",  // the service data is 7 bytes
+      R"({"kind":0,"payload":"0100"})",
+      R"({"kind":1,"payload":"01000fa1b2c3d4"})",            // too short for an onboarding payload
+      R"({"kind":2,"payload":"01000fa1b2c3d4"})",
+  };
+  for (const auto& args : bad) {
+    CAPTURE(args);
+    const auto o = matter_parse(args);
+    CHECK_FALSE(o.out.ok);
+    CHECK(o.out.err == Err::BadArgs);
+  }
+
+  // No args object at all.
+  Reader r;
+  const std::string frame = R"({"type":"req","id":1,"op":"matter.commission"})";
+  const ClientMsg msg = decode_client(r, frame.data(), frame.size());
+  REQUIRE(msg.kind == ClientMsg::Kind::Req);
+  CHECK(matter_commission_parse(r, msg.args).out.err == Err::BadArgs);
+}
