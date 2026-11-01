@@ -325,7 +325,7 @@ if (process.argv.includes('--mutate')) {
     });
     await check('name.set rejects bad names, unknown entities and duplicates', async () => {
       const got = [
-        await code(c.req('name.set', { entity: ent, name: 'Bad Name' })),
+        await code(c.req('name.set', { entity: ent, name: 'bad!name' })),
         await code(c.req('name.set', { entity: ent, name: '0x10' })),
         await code(c.req('name.set', { entity: ent, name: '' })),
         await code(c.req('name.set', { entity: 65000, name: 'ghost' })),
