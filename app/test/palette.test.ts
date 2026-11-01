@@ -21,9 +21,10 @@ function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { da
 }
 
 describe('palette', () => {
-  it('knows its two names', () => {
+  it('knows its names', () => {
     expect(isPaletteId('sandstone')).toBe(true);
     expect(isPaletteId('ember')).toBe(true);
+    expect(isPaletteId('paper')).toBe(true);
     expect(isPaletteId('midnight')).toBe(false);
   });
 
@@ -34,6 +35,8 @@ describe('palette', () => {
     await store.save('ember');
     expect(await store.load()).toBe('ember');
     expect(kv.data.get('keystone.palette')).toBe('ember');
+    await store.save('paper');
+    expect(await store.load()).toBe('paper');
   });
 
   it('an unknown or unreadable value falls back to the default', async () => {

@@ -117,7 +117,7 @@ export function ConfirmDialog({ visible, title, body, confirmLabel, danger, onCo
               accessibilityRole="button"
               accessibilityLabel="Cancel"
               onPress={onCancel}
-              style={[styles.dialogButton, { backgroundColor: t.fill, borderColor: t.fill }]}
+              style={[styles.dialogButton, { backgroundColor: t.secondaryBg, borderColor: t.secondaryBorder }]}
             >
               <Text style={{ color: t.text, fontWeight: '600', fontSize: 15 }}>Cancel</Text>
             </Pressable>

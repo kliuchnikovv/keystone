@@ -86,10 +86,10 @@ export function Button({ label, onPress, kind = 'primary', size = 'default', dis
 }) {
   const t = useTheme();
   const g = BUTTON_GEOM[kind][size];
-  const bg = kind === 'primary' ? t.accent : kind === 'secondary' ? t.fill : 'transparent';
+  // A quiet button is a filled surface in the dark palettes and an outline on paper.
+  const bg = kind === 'primary' ? t.accent : kind === 'secondary' ? t.secondaryBg : 'transparent';
   const fg = kind === 'primary' ? t.onAccent : kind === 'danger' ? t.bad : kind === 'secondary' ? t.text : t.accent;
-  // A quiet button is text on the card, not an outlined pill.
-  const border = kind === 'danger' ? t.bad : kind === 'plain' ? bg : bg;
+  const border = kind === 'danger' ? t.bad : kind === 'secondary' ? t.secondaryBorder : bg;
   return (
     <Pressable
       accessibilityRole="button"
@@ -197,6 +197,25 @@ export function ErrorText({ text }: { text: string | null }) {
   return text ? <Text accessibilityRole="alert" style={{ color: t.bad, fontSize: 12.5, marginTop: 5 }}>{text}</Text> : null;
 }
 
+/** A note under a form: good news in a green box, or a quiet explanation. */
+export function Note({ text, title, tone = 'good' }: { text: string; title?: string; tone?: 'good' | 'quiet' }) {
+  const t = useTheme();
+  const good = tone === 'good';
+  return (
+    <View
+      style={[
+        styles.note,
+        { backgroundColor: good ? t.goodSoft : t.fill, borderColor: good ? t.goodBorder : t.border },
+      ]}
+    >
+      <Text style={{ color: good ? t.goodInk : t.muted, fontSize: 12.5, lineHeight: 18 }}>
+        {title ? <Text style={{ fontWeight: '700' }}>{title} </Text> : null}
+        {text}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   chip: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 11, paddingVertical: 6 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
@@ -208,6 +227,7 @@ const styles = StyleSheet.create({
   list: { borderWidth: 1, borderRadius: radius.field, marginTop: space.xs, overflow: 'hidden' },
   option: { paddingHorizontal: 14, paddingVertical: 11 },
   button: { borderWidth: 1, alignItems: 'center' },
+  note: { borderWidth: 1, borderRadius: 12, paddingVertical: 11, paddingHorizontal: 13, marginTop: space.md },
   armed: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   armedLabel: { fontSize: 13, fontWeight: '600' },
   cross: { padding: space.xs },
