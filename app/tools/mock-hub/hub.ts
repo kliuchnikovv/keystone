@@ -12,6 +12,7 @@ import {
   type Attr,
   type Chip,
   type Days,
+  type DeviceOtaPhase,
   type Entity,
   type ErrorCode,
   type HistoryEvent,
@@ -244,12 +245,11 @@ export class MockHub {
   readonly scenesApplied: string[] = [];
   readonly identifyCalls: number[] = [];
   readonly unpairCalls: number[] = [];
-  /** What the app asked for with matter.commission (for tests). */
+  readonly deviceOtaCalls: number[] = [];
+  private deviceOtaRunning = false;
   readonly matterCalls: { kind: number; payload: string }[] = [];
-  /** How the attempt to add a Matter device stands (the hub's Matter chip does the work). */
   matter: { state: MatterState; code: MatterCode; entity: number; message: string } | null = null;
 
-  /** What the Matter chip says about the attempt (for tests). */
   simulateMatter(state: MatterState, code: MatterCode = 'ok', entity = 0, message = ''): void {
     this.matter = { state, code, entity, message };
     this.broadcast({ type: 'matter', state, code, entity, message });
@@ -815,6 +815,35 @@ export class MockHub {
       }
       case 'wifi.forget': {
         this.wifiForgetCalls += 1;
+        return ok();
+      }
+      case 'device.ota': {
+        const { entity, url, sha256 } = args;
+        if (typeof entity !== 'number' || !Number.isInteger(entity)) return no('bad_args', 'entity');
+        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return no('bad_args', 'url');
+        if (typeof sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(sha256)) return no('bad_args', 'sha256');
+        const e = this.entities.find((x) => x.id === entity);
+        if (!e) return no('not_found', 'no such entity');
+        if (e.chip !== 1) return no('bad_args', 'not a Zigbee device');
+        if (this.deviceOtaRunning) return no('busy', 'an update is already running');
+        this.deviceOtaRunning = true;
+        this.deviceOtaCalls.push(entity);
+        // Walk the phases the real hub reports, so the app's progress bar can be
+        // exercised without a device.
+        const steps: Array<[DeviceOtaPhase, number]> = [
+          ['receiving', 0],
+          ['verifying', 0],
+          ['notifying', 0],
+          ['transferring', 50],
+          ['transferring', 100],
+          ['done', 100],
+        ];
+        steps.forEach(([phase, percent], i) => {
+          setTimeout(() => {
+            this.broadcast({ type: 'device_ota', entity, phase, status: 'ok', percent });
+            if (i === steps.length - 1) this.deviceOtaRunning = false;
+          }, 40 * (i + 1));
+        });
         return ok();
       }
       default:

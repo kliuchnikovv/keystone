@@ -77,6 +77,19 @@ firmware images (from SD or from the brain over UART) and pushes them to
 target devices. Slow-burn feature but real Zigbee networks need it — IKEA
 regularly ships bulb firmware updates.
 
+**Done (not yet verified on a device).** The coordinator is the OTA server: the
+brain streams a vendor `.ota` file to it over UART (hubproto `0x59..0x5C`), the
+chip stores it in the `zb_ota` partition (512 KB), checks the SHA-256, the
+file's CRC32 and the Zigbee OTA header, and serves it to the device block by
+block straight from flash. Console `ota dev <id> <url> <sha256>`, app op
+`device.ota`. See docs/ota.md.
+
+**Open:** the transfer has not been exercised against a real lamp — it needs a
+signed vendor image for the device at hand (IKEA signs its bulb firmware, so the
+hub can only serve what the manufacturer published). The ESP-IDF OTA server API
+hands the data callback no offset, so a lost block restarts the device's pull
+instead of being resent.
+
 ## 6. Network / lifecycle management
 
 Console commands on the brain, forwarded to the C6, to run the network

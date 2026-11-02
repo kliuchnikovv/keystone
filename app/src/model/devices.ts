@@ -1,7 +1,7 @@
 // Presenting entities as devices: titles, glyphs, which attribute is the main switch.
 import type { GlyphName } from '../ui/Glyph';
 import { brightnessPercent, formatValue } from './format';
-import type { Attr, Entity } from '../protocol/messages';
+import type { Attr, DeviceOtaPhase, DeviceOtaStatus, Entity } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
 
 const DEVICE_LABELS: Record<string, string> = {
@@ -159,6 +159,57 @@ export function deviceStatus(s: HomeState, e: Entity): DeviceStatus {
 /** Devices that live on the Zigbee chip are the ones the hub can identify and remove. */
 export function canManageDevice(s: HomeState, e: Entity): boolean {
   return s.chips.some((c) => c.id === e.chip && c.label === 'zigbee');
+}
+
+/** The Zigbee co-processor. Its devices are the ones that can be given new firmware. */
+export const ZIGBEE_CHIP_ID = 1;
+
+/** Only a device on the Zigbee chip can be given new firmware. */
+export function canUpdateFirmware(e: Entity): boolean {
+  return e.chip === ZIGBEE_CHIP_ID;
+}
+
+const OTA_PHASE_LABELS: Record<DeviceOtaPhase, string> = {
+  idle: 'Waiting',
+  receiving: 'Sending the file to the hub',
+  verifying: 'Verifying the file',
+  notifying: 'Telling the device to update',
+  transferring: 'Installing on the device',
+  done: 'Done',
+  failed: 'Failed',
+};
+
+/** What the hub is doing with the firmware, in words. */
+export function otaPhaseLabel(phase: DeviceOtaPhase): string {
+  return OTA_PHASE_LABELS[phase];
+}
+
+const OTA_STATUS_LABELS: Record<DeviceOtaStatus, string> = {
+  ok: 'All good',
+  busy: 'The hub is busy with another update',
+  too_large: 'The file is too big for the device',
+  bad_checksum: 'The file does not match the SHA-256',
+  bad_format: 'The hub does not know this .ota file',
+  unsupported: 'This device cannot be updated this way',
+  timeout: 'The update ran out of time',
+  mismatch: 'The device did not take the file',
+  aborted: 'The update was called off',
+};
+
+/** Why a firmware session stopped (or that it did not). */
+export function otaStatusLabel(status: DeviceOtaStatus): string {
+  return OTA_STATUS_LABELS[status];
+}
+
+/** What is wrong with what the user typed for a firmware update, or null when it is fine. */
+export function otaInputProblem(url: string, sha256: string): string | null {
+  const u = url.trim();
+  if (!u) return 'Enter the address of the .ota file';
+  if (!/^https?:\/\/\S+$/i.test(u)) return 'The address must start with http:// or https://';
+  const s = sha256.trim();
+  if (!s) return 'Enter the SHA-256 of the file';
+  if (!/^[0-9a-f]{64}$/i.test(s)) return 'The SHA-256 must be 64 hex digits';
+  return null;
 }
 
 /** How long the Zigbee network stays open when the app asks to add a device. */

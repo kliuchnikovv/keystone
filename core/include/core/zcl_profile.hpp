@@ -67,6 +67,49 @@ struct Profile {
   bool color_caps_pending = false;
 };
 
+// The dimming capabilities: only a lamp can be dimmed and tuned.
+inline constexpr std::uint32_t kCapDimming = kCapLevel | kCapColorTemp | kCapColorXy;
+
+// A socket that measures its own power draw is a plug, not a lamp.
+//
+// IKEA's INSPELNING control outlet exposes On/Off *and* a Level cluster (it shares its
+// firmware with the bulbs), so "On/Off + Level => a dimmable light" turned a plug into a
+// lamp: the app drew a bulb for it and the Matter bridge built a Dimmable Light. The
+// giveaway is the metering — a lamp never reports its own consumption, the socket does.
+// SPEC §6.1: `switch` is the plug-in unit, with on_off, power_w and energy_wh.
+inline bool is_metered_socket(std::uint32_t caps) noexcept {
+  return (caps & kCapOnOff) != 0 && (caps & (kCapPower | kCapEnergy)) != 0;
+}
+
+// What an entity is, from the caps it carries: the same rule as classify(), but from the
+// caps alone. An entity restored from NVS stores its caps (not the cluster list), so this
+// is how a rule change reaches devices that are already paired.
+struct Shape {
+  hubproto::DeviceType type = hubproto::DeviceType::Switch;
+  std::uint32_t caps = 0;
+};
+
+inline Shape shape_from_caps(std::uint32_t caps) noexcept {
+  Shape s;
+  s.caps = caps;
+  const bool on_off = (caps & kCapOnOff) != 0;
+  const bool socket = is_metered_socket(caps);
+  if (socket) s.caps &= ~kCapDimming;  // we do not model dimming a socket
+  const bool level = (s.caps & kCapLevel) != 0;
+  const bool color = (s.caps & (kCapColorXy | kCapColorTemp)) != 0;
+  const bool sensor = (caps & (kCapTemperature | kCapHumidity | kCapIlluminance)) != 0;
+
+  if (caps & kCapThermostat) s.type = hubproto::DeviceType::Climate;
+  else if (socket) s.type = hubproto::DeviceType::Switch;
+  else if (on_off && (level || color)) s.type = hubproto::DeviceType::Light;
+  else if (caps & kCapContact) s.type = hubproto::DeviceType::Contact;
+  else if (caps & kCapOccupancy) s.type = hubproto::DeviceType::Occupancy;
+  else if (sensor && !on_off) s.type = hubproto::DeviceType::Sensor;
+  else if (caps & kCapButton) s.type = hubproto::DeviceType::Button;
+  else s.type = hubproto::DeviceType::Switch;
+  return s;
+}
+
 namespace detail {
 inline bool has(const std::uint16_t* list, std::size_t n, std::uint16_t id) noexcept {
   for (std::size_t i = 0; i < n; ++i) {
@@ -114,8 +157,19 @@ inline Profile classify(const std::uint16_t* in, std::size_t n_in, const std::ui
   const bool sensor_attrs =
       (c & (kCapTemperature | kCapHumidity | kCapIlluminance)) != 0;
 
+  // A socket that measures its own power is a plug: drop the dimming caps, so we neither read
+  // nor declare a brightness we do not model.
+  const bool socket = is_metered_socket(c);
+  if (socket) {
+    c &= ~kCapDimming;
+    p.color_caps_pending = false;
+  }
+
   if (thermostat) {
     p.type = hubproto::DeviceType::Climate;
+    p.valid = true;
+  } else if (socket) {
+    p.type = hubproto::DeviceType::Switch;
     p.valid = true;
   } else if (controllable && (level || color)) {
     p.type = hubproto::DeviceType::Light;

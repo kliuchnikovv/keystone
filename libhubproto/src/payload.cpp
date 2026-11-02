@@ -442,6 +442,76 @@ bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noex
   return true;
 }
 
+// ---- device OTA ---------------------------------------------------------------
+
+bool is_known_dev_ota_phase(std::uint8_t p) noexcept {
+  return p <= static_cast<std::uint8_t>(DevOtaPhase::Failed);
+}
+
+bool is_known_dev_ota_status(std::uint8_t s) noexcept {
+  return s <= static_cast<std::uint8_t>(DevOtaStatus::Aborted);
+}
+
+EncodeResult encode_dev_ota_begin(const DevOtaBegin& in, std::uint8_t* out,
+                                   std::size_t cap) noexcept {
+  constexpr std::size_t need = 4 + kDevOtaSha256Size;
+  if (cap < need) return {false, 0};
+  put32(out, in.total_size);
+  for (std::size_t i = 0; i < kDevOtaSha256Size; ++i) out[4 + i] = in.sha256[i];
+  return {true, need};
+}
+
+bool decode_dev_ota_begin(const std::uint8_t* in, std::size_t len, DevOtaBegin& out) noexcept {
+  if (len != 4 + kDevOtaSha256Size) return false;
+  out.total_size = get32(in);
+  for (std::size_t i = 0; i < kDevOtaSha256Size; ++i) out.sha256[i] = in[4 + i];
+  return true;
+}
+
+EncodeResult encode_dev_ota_chunk(std::uint32_t offset, const std::uint8_t* data,
+                                   std::size_t data_len, std::uint8_t* out,
+                                   std::size_t cap) noexcept {
+  if (data_len == 0 || data_len > kDevOtaMaxChunk) return {false, 0};
+  const std::size_t need = kDevOtaChunkHeader + data_len;
+  if (cap < need) return {false, 0};
+  put32(out, offset);
+  for (std::size_t i = 0; i < data_len; ++i) out[kDevOtaChunkHeader + i] = data[i];
+  return {true, need};
+}
+
+bool decode_dev_ota_chunk(const std::uint8_t* in, std::size_t len,
+                           DevOtaChunkView& out) noexcept {
+  if (len <= kDevOtaChunkHeader || len - kDevOtaChunkHeader > kDevOtaMaxChunk) return false;
+  out.offset = get32(in);
+  out.data = in + kDevOtaChunkHeader;
+  out.len = len - kDevOtaChunkHeader;
+  return true;
+}
+
+EncodeResult encode_dev_ota_status(const DevOtaStatusMsg& in, std::uint8_t* out,
+                                    std::size_t cap) noexcept {
+  constexpr std::size_t need = 8;
+  if (cap < need) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(in.phase);
+  out[1] = static_cast<std::uint8_t>(in.status);
+  out[2] = in.percent;
+  out[3] = 0;
+  put32(out + 4, in.next_offset);
+  return {true, need};
+}
+
+bool decode_dev_ota_status(const std::uint8_t* in, std::size_t len,
+                            DevOtaStatusMsg& out) noexcept {
+  if (len != 8 || !is_known_dev_ota_phase(in[0]) || !is_known_dev_ota_status(in[1])) {
+    return false;
+  }
+  out.phase = static_cast<DevOtaPhase>(in[0]);
+  out.status = static_cast<DevOtaStatus>(in[1]);
+  out.percent = in[2];
+  out.next_offset = get32(in + 4);
+  return true;
+}
+
 // ---- Matter ---------------------------------------------------------------
 
 namespace {
@@ -474,7 +544,7 @@ bool decode_matter_pair(const std::uint8_t* in, std::size_t len,
   const std::uint8_t n = in[1];
   if (n == 0 || n > kMatterMaxPayload) return false;
   if (len != kMatterPairHeader + n) return false;
-  if (in[0] > kMatterKindQr) return false;  // a kind we do not know how to parse
+  if (in[0] > kMatterKindQr) return false;
   out.kind = in[0];
   out.bytes = in + kMatterPairHeader;
   out.len = n;
@@ -483,7 +553,7 @@ bool decode_matter_pair(const std::uint8_t* in, std::size_t len,
 
 EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
                                   std::size_t cap) noexcept {
-  constexpr std::size_t need = 4;  // state(u8) code(u8) entity_id(u16)
+  constexpr std::size_t need = 4;
   if (cap < need) return {false, 0};
   out[0] = static_cast<std::uint8_t>(in.state);
   out[1] = static_cast<std::uint8_t>(in.code);
@@ -495,7 +565,6 @@ EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
 bool decode_matter_result(const std::uint8_t* in, std::size_t len,
                            MatterResult& out) noexcept {
   if (len != 4) return false;
-  // A state or a code we do not know is not ours to interpret: the caller keeps what it has.
   if (!is_known_matter_state(in[0]) || !is_known_matter_code(in[1])) return false;
   out.state = static_cast<MatterState>(in[0]);
   out.code = static_cast<MatterCode>(in[1]);

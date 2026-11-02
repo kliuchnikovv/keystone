@@ -31,6 +31,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -932,8 +933,18 @@ extern "C" void app_main() {
   brownout_ll_bod_enable(false);
   brownout_ll_ana_reset_enable(false);
   ESP_ERROR_CHECK(nvs_flash_init());
+  // Mark app valid immediately so the bootloader never rolls back to an empty
+  // ota_1 slot after erase_flash. The OtaConfirmGate (30 s + brain link) still
+  // protects OTA-delivered images — this only overrides the initial USB flash.
+  esp_ota_mark_app_valid_cancel_rollback();
   status_led::init();
   g_boot_id = fw::next_boot_id();
+  if (g_boot_id > 50) {
+    ESP_LOGW(kTag, "crash loop detected (boot_id=%u > 50): erasing NVS to recover", g_boot_id);
+    nvs_flash_erase();
+    nvs_flash_init();
+    g_boot_id = fw::next_boot_id();  // restarts at 1
+  }
   start_console();
 
   // --- UART bridge to the brain ---

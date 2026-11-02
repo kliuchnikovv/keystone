@@ -678,6 +678,15 @@ inline void encode_time(JsonWriter& w, std::int64_t time, const char* tz, bool s
   w.begin_object().kv("type", "time").kv("time", time).kv("tz", tz).kv("synced", synced).end_object();
 }
 
+// The firmware session of a Zigbee device: the hub pushes a vendor .ota file to
+// the coordinator, which serves it to the device over the OTA Upgrade cluster.
+inline void encode_device_ota(JsonWriter& w, std::uint16_t entity, const char* phase,
+                               const char* status, std::uint8_t percent) noexcept {
+  w.begin_object().kv("type", "device_ota").kv("entity", static_cast<std::int64_t>(entity))
+      .kv("phase", phase).kv("status", status)
+      .kv("percent", static_cast<std::int64_t>(percent)).end_object();
+}
+
 // ---- hub -> client: objects shared by snapshots and events -------------------------
 
 // Attribute and entity objects. `Entity` is core::EntityT<N>.

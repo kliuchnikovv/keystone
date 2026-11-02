@@ -114,6 +114,7 @@ Incremental events (no `id`, pushed as they happen):
 | `rules` / `schedules` / `timers` | the new full list, after any change (also by another client or the console) |
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
 | `hub` | `hub`: the whole hub object as in `welcome` — when the location changes or the clock becomes known (today's `sun`) |
+| `device_ota` | `entity`, `phase` (`idle`/`receiving`/`verifying`/`notifying`/`transferring`/`done`/`failed`), `status` (`ok`/`busy`/`too_large`/`bad_checksum`/`bad_format`/`unsupported`/`timeout`/`mismatch`/`aborted`), `percent` — the firmware session of a Zigbee device (see docs/ota.md) |
 | `matter` | `state`, `entity`, `code`, `message` — how the attempt to add a Matter device stands (§5.3) |
 
 **What the real hub does today.** Live attribute changes are pushed as `state`
@@ -178,6 +179,7 @@ so they also update the desired state (reconciler).
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
+| `device.ota` | `entity`, `url` (`http(s)`), `sha256` (64 hex digits) | pushes a vendor `.ota` file to a **Zigbee device** (lamp, dimmer): the hub downloads it and hands it to the coordinator, which serves it over the OTA Upgrade cluster (docs/ota.md). `res ok` means the update started; the progress arrives as `device_ota` events. Only Zigbee devices: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args`, a second running update `busy` |
 | `matter.commission` | `kind` (0 = service data, 1 = advertisement, 2 = QR code), `payload` (hex bytes) | asks the hub to add a Matter device the phone found. Fire-and-forget like `pair`: `ok {state:"started"}` means the bytes were handed to the Matter chip; how it goes is reported by the `matter` event (§5.3). `bad_args` when the payload is not the shape the kind promises, `unsupported` when the hub has no Matter chip — or when its Matter chip is alive and has no commissioner (the hub asks once, learns this, and refuses straight away after that) |
 | `matter.status` | — | where the attempt stands: `result: {state, entity, code, message}` (§5.3) |
 | `history` | all optional: `before` (a `seq`: only events strictly older), `limit` (1..24, default 24), `entity` (only events about this device, also one that has since been removed) | a newest-first page of the event history (§5.1): `result: {now, latest, oldest, more, events}` |
@@ -231,6 +233,10 @@ The ops that change the hub itself answer `ok` **first** and do the work a momen
 later (300 ms, 500 ms for the factory reset), so the reply reaches the client before
 the connection drops or the hub reboots. A client must expect the connection to drop
 after `hub.reboot`, `hub.factory_reset` and `access.token.set`, and reconnect.
+
+`device.ota` — a **device's** own vendor firmware — follows the same rules as the ops
+above: it needs the token, the hub downloads the `.ota` file and the progress arrives
+as `device_ota` events (§4).
 
 ### 5.3 Adding a Matter device
 
@@ -659,6 +665,12 @@ limits).
 | **Tunnel agent** (`npm run relay-tunnel`) | A Node.js process on the hub's LAN (e.g. the Pi) connects to the relay and opens a local WebSocket to the hub for each remote client. Transparent. | Yes |
 | **Cloud relay** (`npm run cloud-relay`) | A relay that exposes an HTTP API + SSE to the app instead of a WebSocket per client.  `POST /hub/:id/auth` authenticates, `POST /hub/:id/cmd` and `/req` forward commands, `GET /hub/:id/events` is a live SSE stream. | No (hub connects via ESP or tunnel) |
 
+The tunnel-and-clients relay exists twice, speaking one protocol: **`relay/` in Go**
+(standard library only, one static binary — this is what you deploy; see
+[relay/README.md](../relay/README.md)) and **`app/tools/relay-server.ts`** in Node (the
+readable reference and the dev tool).  A hub configured against one works against the other;
+both pass `hub-check --mutate` (36/36) against the brain.
+
 ### 13.2 Wire protocol (relay ↔ hub/tunnel)
 
 Text WebSocket frames, same for all three options:
@@ -688,21 +700,40 @@ until the hub is ready. The firmware drops a frame it cannot read (one without
 
 `firmware/brain-s3/main/relay_client.{hpp,cpp}`.  Console:
 
-- `relay` — show status (url, connected/disconnected, authenticated, remote client count)
+- `relay` — show status (tunnel state, remote client count, auth failures in the window,
+  dropped frames)
 - `relay <url> <secret>` — save credentials to NVS (`relay_url`, `relay_sec`), connect
 - `relay clear` — disconnect, erase NVS credentials
 
 Credentials persist across reboots.  The relay client starts automatically on boot if
-credentials are saved.  Virtual client fds are `relay::kFdBase - cid` (≤ −100) so dispatch
-routes them to `relay::send` instead of the local WebSocket server.
+credentials are saved (it retries every 10 s, so starting before Wi-Fi is up is fine).
+Virtual client fds are `relay::kFdBase - cid` (≤ −100) so dispatch routes them to
+`relay::send` instead of the local WebSocket server.
 
 The hub's `webtoken` is shared: when it changes, both the local server and the relay client
 get the update; clearing the token stops the local server but the relay stays connected
 (it just won't authenticate anyone).
 
 Uses `esp_websocket_client` (managed component `espressif/esp_websocket_client ≥ 1.0.0`)
-with the Mozilla CA root bundle for TLS to public relays.  Reconnects automatically
-(10 s timeout).  Up to 3 virtual clients; a 4th gets `!close`.  Hello timeout 5 s.
+with the Mozilla CA root bundle for TLS to public relays.  Up to 3 remote clients, a 4th is
+answered `busy`; hello timeout 5 s.  Beyond the handshake the hub behaves like the local
+server: same token compare, same 5-failures-in-60 s lockout, same 4 KB frame limit (a bigger
+frame drops the client), and every way out of a client's life ends with an explicit
+`!close:<cid>` so the relay never keeps a socket the hub has already refused.
+
+**Threading.**  The WebSocket task only parses frames and queues them; everything the hub
+sends leaves through an outbound queue drained in `relay::tick()` (the main loop).  Two
+things force this:
+
+- `esp_websocket_client` runs the event handler while holding its internal lock, so a send
+  from inside the callback fights the main loop for `tx_lock` and the hub hangs until the
+  task watchdog resets it.
+- Without `CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK` (now on, see `sdkconfig.defaults`) a send
+  takes the *same* lock the client's task holds across its blocking read, so frames were
+  silently lost — the handshake took 14 s instead of 90 ms before the flag.
+
+A frame that could not go out (socket down, lock busy) is retried on the next tick instead of
+being dropped: a lost frame is a command or a snapshot part the remote client never sees.
 
 ### 13.4 Cloud relay API
 
@@ -736,7 +767,16 @@ Run: `npm run console -- --url ws://hub:8080/ws --token <token>`.
 Supports all device, automation, hub and management commands (type `help`).
 Live state updates are printed as they happen (`--quiet` to suppress).
 
-### 13.7 Not verified / not done
+### 13.7 Verified / not done
+
+Verified on hardware (brain-s3 + a relay on the LAN, `ws://`): the hub dials out on its own,
+authenticates with the shared secret, and comes back by itself after a reboot, after the relay
+is restarted and after the link drops.  `hub-check --mutate` through the relay: **36/36**, the
+same checks the local server passes, plus three simultaneous remote clients, a real command to
+the IKEA plug (`ack ok` in 171–264 ms) and the state change coming back.  Heap: 146 KB free
+idle, 146 KB with three remote clients, 0 dropped frames.
+
+Not done / not verified:
 
 - The cloud relay has no persistent state (sessions are in memory).
 - No auth rate limiting on the **cloud** relay (the hub has its own lockout, and the

@@ -31,7 +31,10 @@ enum class MsgType : std::uint8_t {
   OtaAbort    = 0x56,  // either       drop the transfer
   OtaInfoReq  = 0x57,  // brain→chip   which image are you running? (empty)
   OtaInfo     = 0x58,  // chip→brain   running slot, confirmed?, last OTA'd slot + sha256
-  // Adding a Matter device to the home (see payload.hpp, Matter section).
+  DevOtaBegin  = 0x59,  // brain→chip   size + sha256 of the .ota file
+  DevOtaChunk  = 0x5A,  // brain→chip   offset + data
+  DevOtaEnd    = 0x5B,  // brain→chip   all bytes sent: verify + register + notify the device
+  DevOtaStatus = 0x5C,  // chip→brain   acks the transfer, then reports the device session
   MatterPair   = 0x60,  // brain→chip   the bytes the phone read over Bluetooth
   MatterResult = 0x61,  // chip→brain   how far the commissioning got
 };

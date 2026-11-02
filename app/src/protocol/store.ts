@@ -3,6 +3,7 @@
 // sharing), so it plugs straight into React's useSyncExternalStore.
 import type {
   Chip,
+  DeviceOtaSession,
   Entity,
   HubInfo,
   MatterEvent,
@@ -39,7 +40,7 @@ export interface HomeState {
   schedules: Schedule[];
   timers: Timer[];
   scenes: Scene[];
-  /** How the last attempt to add a Matter device stands; null while none was made. */
+  deviceOta: Record<number, DeviceOtaSession>;
   matter: MatterEvent | null;
 }
 
@@ -55,6 +56,7 @@ export const initialState: HomeState = {
   schedules: [],
   timers: [],
   scenes: [],
+  deviceOta: {},
   matter: null,
 };
 
@@ -63,10 +65,14 @@ export function withStatus(s: HomeState, status: ConnectionStatus, error: string
   return { ...s, status, error };
 }
 
+/** Forget what a previous connection knew (a new snapshot replaces it anyway). */
+export function cleared(s: HomeState): HomeState {
+  return { ...initialState, status: s.status, error: s.error };
+}
+
 /**
  * The link is gone: keep what we know — the devices, their names, the last values —
- * and say that it is not live any more. `at` is when the data was last known to be
- * true; an already stale state keeps its older moment.
+ * and say that it is not live any more.
  */
 export function markedStale(s: HomeState, at: number): HomeState {
   if (s.stale && s.savedAt !== null) return s;
@@ -134,6 +140,12 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       return { ...s, schedules: m.schedules };
     case 'timers':
       return { ...s, timers: m.timers };
+    case 'device_ota': {
+      const next: DeviceOtaSession = { phase: m.phase, status: m.status, percent: m.percent };
+      const prev = s.deviceOta[m.entity];
+      if (prev && prev.phase === next.phase && prev.status === next.status && prev.percent === next.percent) return s;
+      return { ...s, deviceOta: { ...s.deviceOta, [m.entity]: next } };
+    }
     case 'matter':
       return { ...s, matter: m };
     case 'hub':
@@ -156,4 +168,8 @@ export function findEntity(s: HomeState, id: number): Entity | undefined {
 }
 export function attrValue(s: HomeState, entity: number, attr: number): Entity['attrs'][number]['value'] | undefined {
   return findEntity(s, entity)?.attrs.find((a) => a.id === attr)?.value;
+}
+/** The last firmware session the hub reported for a device, if any. */
+export function deviceOtaState(s: HomeState, entity: number): DeviceOtaSession | undefined {
+  return s.deviceOta[entity];
 }

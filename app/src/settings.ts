@@ -17,6 +17,16 @@ export interface KeyValueStore {
 
 const KEY = 'keystone.hub';
 
+export const DEFAULT_RELAY_HOST = 'keystone-esp-production.up.railway.app';
+
+export function relayClientUrlFromParts(host: string, id: string): string {
+  return `wss://${host}/client/${id}`;
+}
+
+export function relayTunnelUrlFromParts(host: string, id: string): string {
+  return `wss://${host}/tunnel/${id}`;
+}
+
 export type SettingsProblem = 'url' | 'token' | 'fingerprint' | null;
 
 /** What is wrong with a connection form, if anything. */

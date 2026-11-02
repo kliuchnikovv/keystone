@@ -36,6 +36,63 @@ TEST_CASE("a bare on/off endpoint is a switch with one attribute") {
   CHECK(ids(p) == std::vector<std::uint8_t>{A::kOnOff});
 }
 
+TEST_CASE("an IKEA plug that also reports a Level cluster is still a plug") {
+  // The real INSPELNING control outlet exposes On/Off *and* Level (it shares its firmware
+  // with the bulbs) plus the metering clusters. It is a socket: no brightness, no bulb.
+  const auto p = classify_in({0x0000, 0x0006, 0x0008, 0x0B04, 0x0702});
+  REQUIRE(p.valid);
+  CHECK(p.type == DeviceType::Switch);
+  CHECK(ids(p) == std::vector<std::uint8_t>{A::kOnOff, A::kPowerW, A::kEnergyWh});
+  CHECK((p.caps & kCapLevel) == 0);
+}
+
+TEST_CASE("a lamp without metering stays a dimmable light") {
+  const auto p = classify_in({0x0000, 0x0006, 0x0008});
+  REQUIRE(p.valid);
+  CHECK(p.type == DeviceType::Light);
+  CHECK(ids(p) == std::vector<std::uint8_t>{A::kOnOff, A::kBrightness});
+}
+
+TEST_CASE("shape_from_caps re-types a stored plug and drops its dimming") {
+  // What the coordinator had stored for the INSPELNING: on_off + level + power + energy.
+  constexpr std::uint32_t stored = kCapOnOff | kCapLevel | kCapPower | kCapEnergy;
+  const Shape s = shape_from_caps(stored);
+  CHECK(s.type == DeviceType::Switch);
+  CHECK((s.caps & kCapLevel) == 0);
+  CHECK((s.caps & kCapOnOff) != 0);
+  CHECK((s.caps & kCapPower) != 0);
+  CHECK((s.caps & kCapEnergy) != 0);
+  hubproto::AttrDecl a[16];
+  const std::size_t n = attrs_for(s.caps, a, 16);
+  std::vector<std::uint8_t> v;
+  for (std::size_t i = 0; i < n; ++i) v.push_back(a[i].attr_id);
+  CHECK(v == std::vector<std::uint8_t>{A::kOnOff, A::kPowerW, A::kEnergyWh});
+}
+
+TEST_CASE("shape_from_caps leaves a lamp, a thermostat and the sensors alone") {
+  const Shape lamp = shape_from_caps(kCapOnOff | kCapLevel);
+  CHECK(lamp.type == DeviceType::Light);
+  CHECK(lamp.caps == (kCapOnOff | kCapLevel));
+
+  const Shape climate = shape_from_caps(kCapOnOff | kCapThermostat | kCapTemperature);
+  CHECK(climate.type == DeviceType::Climate);
+
+  const Shape motion = shape_from_caps(kCapIas | kCapOccupancy | kCapBattery);
+  CHECK(motion.type == DeviceType::Occupancy);
+
+  const Shape contact = shape_from_caps(kCapIas | kCapContact | kCapBattery);
+  CHECK(contact.type == DeviceType::Contact);
+
+  const Shape button = shape_from_caps(kCapButton);
+  CHECK(button.type == DeviceType::Button);
+
+  const Shape sensor = shape_from_caps(kCapTemperature | kCapHumidity);
+  CHECK(sensor.type == DeviceType::Sensor);
+
+  const Shape plain = shape_from_caps(kCapOnOff);
+  CHECK(plain.type == DeviceType::Switch);
+}
+
 TEST_CASE("lights: dimmable and colour") {
   auto p = classify_in({0x0000, 0x0006, 0x0008});
   REQUIRE(p.valid);

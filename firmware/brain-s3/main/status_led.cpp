@@ -15,13 +15,13 @@ std::uint32_t g_last_ms = 0;
 
 struct Rgb { std::uint8_t r, g, b; };
 
-// The led_strip API passes (r,g,b) but the WS2812 wire order is GRB and
-// the PlatformIO-bundled driver does not reorder, so we swap R↔G here.
+// The PlatformIO-bundled led_strip driver sends bytes as-is (no GRB reorder),
+// so we pass (G, R, B) to get the right colour on a WS2812.
 Rgb base_colour(State s) {
   switch (s) {
     case State::Booting:  return {0, 0, kMaxBrightness};
     case State::Healthy:  return {kMaxBrightness, 0, 0};
-    case State::Degraded: return {static_cast<std::uint8_t>(kMaxBrightness / 2), kMaxBrightness, 0};
+    case State::Degraded: return {static_cast<std::uint8_t>(kMaxBrightness / 3), kMaxBrightness, 0};
     case State::Offline:  return {0, kMaxBrightness, 0};
     case State::Setup:    return {0, 0, kMaxBrightness};
     case State::Pairing:  return {kMaxBrightness, 0, 0};

@@ -10,7 +10,9 @@ add_library(core STATIC
   src/uart_transport.cpp
   src/sha256.cpp
   src/ota_receiver.cpp
-  src/ota_sender.cpp)
+  src/ota_sender.cpp
+  src/device_ota_receiver.cpp
+  src/device_ota_sender.cpp)
 
 target_include_directories(core PUBLIC include)
 target_link_libraries(core

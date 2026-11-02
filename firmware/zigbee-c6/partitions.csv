@@ -15,3 +15,7 @@ ota_0,        app,  ota_0,   0x20000,  0x120000,
 zb_storage,   data, fat,     0x140000, 16K,
 zb_fct,       data, fat,     0x144000, 1K,
 ota_1,        app,  ota_1,   0x150000, 0x120000,
+# A Zigbee device's own firmware (the .ota file the brain pushes for it). 512 KB
+# is enough for a bulb/dimmer image; the file is served to the device straight
+# from flash, it is never copied into RAM.
+zb_ota,       data, fat,     0x270000, 0x80000,

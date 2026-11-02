@@ -15,8 +15,7 @@
       "bundleIdentifier": "com.kliuchnikovv.keystone",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Keystone talks to your hub on your home network.",
-        "NSBluetoothAlwaysUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
-        "NSBluetoothPeripheralUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
+        "NSBluetoothWhileInUseUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
         "NSBonjourServices": [
           "_keystone._tcp"
         ],

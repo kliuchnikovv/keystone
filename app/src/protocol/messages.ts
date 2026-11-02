@@ -282,6 +282,43 @@ export interface TimeEvent {
   tz: string;
   synced: boolean;
 }
+
+/** Where a firmware session is: the hub pushes the vendor .ota file to the device in these steps. */
+export type DeviceOtaPhase =
+  | 'idle'
+  | 'receiving' // the coordinator is taking the .ota file from the hub
+  | 'verifying' // the coordinator checks the file (sha256, CRC32, header)
+  | 'notifying' // the coordinator tells the device that an update is there
+  | 'transferring' // the image travels to the device over Zigbee
+  | 'done'
+  | 'failed';
+
+/** How a firmware session is going (or why it stopped). */
+export type DeviceOtaStatus =
+  | 'ok'
+  | 'busy'
+  | 'too_large'
+  | 'bad_checksum'
+  | 'bad_format'
+  | 'unsupported'
+  | 'timeout'
+  | 'mismatch'
+  | 'aborted';
+
+/** What the hub knows about one device's firmware session. */
+export interface DeviceOtaSession {
+  phase: DeviceOtaPhase;
+  status: DeviceOtaStatus;
+  /** 0..100. */
+  percent: number;
+}
+
+/** The hub pushes this whenever the phase changes or the progress moves. */
+export interface DeviceOtaEvent extends DeviceOtaSession {
+  type: 'device_ota';
+  entity: number;
+}
+
 export interface Accepted {
   type: 'accepted';
   id: number;
@@ -315,6 +352,7 @@ export type ServerMessage =
   | TimeEvent
   | HubEvent
   | HistoryPush
+  | DeviceOtaEvent
   | Accepted
   | Ack
   | Res

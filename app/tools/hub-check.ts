@@ -349,7 +349,7 @@ if (process.argv.includes('--mutate')) {
     });
     await check('name.set rejects bad names, unknown entities and duplicates', async () => {
       const got = [
-        await code(c.req('name.set', { entity: ent, name: 'Bad Name' })),
+        await code(c.req('name.set', { entity: ent, name: 'bad!name' })),
         await code(c.req('name.set', { entity: ent, name: '0x10' })),
         await code(c.req('name.set', { entity: ent, name: '' })),
         await code(c.req('name.set', { entity: 65000, name: 'ghost' })),
@@ -616,8 +616,21 @@ if (process.argv.includes('--mutate')) {
       if (((await c.req('history', { before: all.oldest })) as typeof all).events.length !== 0) return 'something older than the oldest';
       if ((first as { more?: boolean }).more !== true) return 'limit 2 of a longer history did not say more';
       const mineOnly = (await c.req('history', { entity: ent })) as typeof all & { more?: boolean };
-      const past = (await c.req('history', { entity: ent, before: mineOnly.events[mineOnly.events.length - 1]!.seq })) as typeof all & { more?: boolean };
-      if (past.more !== false) return 'a device filter past its last event still said more';
+      // Page back through this device's history: it can be longer than one page (24 events by
+      // default), and only the page past its *oldest* event may say "no more".
+      let page = mineOnly;
+      let guard = 0;
+      while (page.more === true && guard++ < 50) {
+        const last = page.events[page.events.length - 1];
+        if (!last) break;
+        page = (await c.req('history', { entity: ent, before: last.seq })) as typeof all & { more?: boolean };
+      }
+      const oldest = page.events[page.events.length - 1];
+      if (!oldest) return 'the device has no history at all';
+      const past = (await c.req('history', { entity: ent, before: oldest.seq })) as typeof all & { more?: boolean };
+      if (past.events.length !== 0 || past.more !== false) {
+        return `a device filter past its last event still had more (${past.events.length} event(s))`;
+      }
       const mine = (await c.req('history', { entity: ent })) as typeof all;
       if (mine.events.length === 0 || mine.events.some((e) => e.entity !== ent)) return 'the device filter let something else through';
       const none = (await c.req('history', { entity: 0xfff0 })) as typeof all;

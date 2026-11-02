@@ -1,0 +1,32 @@
+[Unit]
+Description=Keystone relay server (remote access to the hub)
+Documentation=https://github.com/kliuchnikovv/keystone-esp/blob/main/docs/relay-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/keystone-relay --port ${PORT}
+# SECRET (openssl rand -hex 32) and PORT live in /etc/keystone-relay.env, mode 0600.
+EnvironmentFile=/etc/keystone-relay.env
+Restart=always
+RestartSec=5
+
+# The relay holds WebSocket connections and a few strings; it needs nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

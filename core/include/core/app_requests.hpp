@@ -862,4 +862,50 @@ Outcome access_relay_parse(const Reader& r, int args, RelayRequest& out) {
   return Outcome::done();
 }
 
+// `device.ota {entity, url, sha256}`: the firmware of a Zigbee device. The hub
+// fetches the .ota file over HTTP and pushes it to the coordinator, which serves
+// it to the device over the OTA Upgrade cluster.
+inline constexpr std::size_t kMaxDeviceOtaUrl = 256;
+
+struct DeviceOta {
+  Outcome out;
+  std::uint16_t entity = 0;
+  char url[kMaxDeviceOtaUrl] = {};
+  char sha256[65] = {};
+};
+
+template <typename Reg, typename Reader>
+DeviceOta device_ota_meta(const Reg& reg, const Reader& r, int args, std::uint8_t zigbee_chip) {
+  std::int64_t e = 0;
+  if (args < 0 || !detail::get_int(r, args, "entity", e) || e < 0 || e > 0xFFFF) {
+    return {Outcome::fail(Err::BadArgs, "entity"), 0, {}, {}};
+  }
+  const auto* ent = reg.find(static_cast<std::uint16_t>(e));
+  if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) {
+    return {Outcome::fail(Err::NotFound, "no such entity"), 0, {}, {}};
+  }
+  if (ent->chip_id != zigbee_chip) {
+    return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, {}, {}};
+  }
+  DeviceOta d{};
+  if (!r.get_string(r.find(args, "url"), d.url, sizeof(d.url)) || d.url[0] == '\0') {
+    return {Outcome::fail(Err::BadArgs, "url"), 0, {}, {}};
+  }
+  if (std::strncmp(d.url, "http://", 7) != 0 && std::strncmp(d.url, "https://", 8) != 0) {
+    return {Outcome::fail(Err::BadArgs, "url must be http(s)"), 0, {}, {}};
+  }
+  if (!r.get_string(r.find(args, "sha256"), d.sha256, sizeof(d.sha256)) ||
+      std::strlen(d.sha256) != 64) {
+    return {Outcome::fail(Err::BadArgs, "sha256"), 0, {}, {}};
+  }
+  for (std::size_t i = 0; i < 64; ++i) {
+    const char c = d.sha256[i];
+    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    if (!hex) return {Outcome::fail(Err::BadArgs, "sha256"), 0, {}, {}};
+  }
+  d.entity = static_cast<std::uint16_t>(e);
+  d.out = Outcome::done();
+  return d;
+}
+
 }  // namespace core::app

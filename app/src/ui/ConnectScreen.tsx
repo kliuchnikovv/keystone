@@ -17,11 +17,13 @@ import { hubUrl } from '../native/discovery';
 import { normalizeFingerprint } from '../protocol/fingerprint';
 import {
   cloudUrl,
+  DEFAULT_RELAY_HOST,
   isCloudUrl,
   isPlaintext,
   isRelayUrl,
   isSecure,
   normalizeUrl,
+  relayClientUrlFromParts,
   validateSettings,
   type Settings,
 } from '../settings';
@@ -87,22 +89,38 @@ export function ConnectScreen({
 
   // Cloud mode fields
   const [cloudServer, setCloudServer] = useState('');
-  const [hubId, setHubId] = useState('');
+  const [cloudHubId, setCloudHubId] = useState('');
+
+  // Relay mode fields: host pre-filled, hub ID typed by the user.
+  const [relayHost, setRelayHost] = useState<string>(() => {
+    const m = (initial?.url ?? '').match(/^wss:\/\/([^/]+)\/client\//i);
+    return m?.[1] ?? DEFAULT_RELAY_HOST;
+  });
+  const [relayId, setRelayId] = useState<string>(() => {
+    const m = (initial?.url ?? '').match(/\/client\/([^\s/]+)\s*$/i);
+    return m?.[1] ?? '';
+  });
 
   const secure = isSecure(url);
   const isCloud = mode === 'cloud';
   const isRelay = mode === 'relay';
 
+  const relayUrl = relayHost.trim() && relayId.trim() ? relayClientUrlFromParts(relayHost.trim(), relayId.trim()) : '';
+
   const candidate: Settings = isCloud
-    ? { url: hubId.trim() && cloudServer.trim() ? cloudUrl(cloudServer, hubId) : '', token }
-    : {
-        url: url.trim() === '' ? '' : normalizeUrl(url),
-        token,
-        ...(secure && !isRelay && fingerprint.trim() !== '' ? { fingerprint: normalizeFingerprint(fingerprint) ?? fingerprint } : {}),
-      };
+    ? { url: cloudHubId.trim() && cloudServer.trim() ? cloudUrl(cloudServer, cloudHubId) : '', token }
+    : isRelay
+      ? { url: relayUrl, token }
+      : {
+          url: url.trim() === '' ? '' : normalizeUrl(url),
+          token,
+          ...(secure && fingerprint.trim() !== '' ? { fingerprint: normalizeFingerprint(fingerprint) ?? fingerprint } : {}),
+        };
   const problem = isCloud
     ? (!isCloudUrl(candidate.url) ? ('url' as const) : candidate.token.length < 8 ? ('token' as const) : null)
-    : validateSettings(candidate);
+    : isRelay
+      ? (!isRelayUrl(candidate.url) ? ('url' as const) : candidate.token.length < 8 ? ('token' as const) : null)
+      : validateSettings(candidate);
   // The Connect button is alive only when there is something to connect to.
   const ready = problem === null;
   const submit = () => {
@@ -211,9 +229,9 @@ export function ConnectScreen({
                   <TextInput
                     accessibilityLabel="Hub ID"
                     style={input}
-                    value={hubId}
-                    onChangeText={setHubId}
-                    placeholder="e.g. home-5ef894"
+                    value={cloudHubId}
+                    onChangeText={setCloudHubId}
+                    placeholder="e.g. home"
                     placeholderTextColor={t.muted}
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -221,41 +239,70 @@ export function ConnectScreen({
                   />
                 </Field>
                 <Text style={[styles.hint, { color: t.muted }]}>
-                  The hub connects to this cloud server automatically. Set it on the hub console with{' '}
-                  <Text style={styles.mono}>relay {'<url> <secret>'}</Text>.{'\n'}
+                  The hub connects to this cloud server automatically. Set the secret on the hub console with{' '}
+                  <Text style={styles.mono}>relay {'<secret>'}</Text>.{'\n'}
+                  The Hub ID is shown by <Text style={styles.mono}>relay</Text> on the console.
+                </Text>
+              </>
+            ) : isRelay ? (
+              <>
+                <Field label="Relay server">
+                  <TextInput
+                    accessibilityLabel="Relay server"
+                    style={monoInput}
+                    value={relayHost}
+                    onChangeText={setRelayHost}
+                    placeholder={DEFAULT_RELAY_HOST}
+                    placeholderTextColor={t.muted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    editable={!connecting}
+                  />
+                </Field>
+                <Field
+                  label="Hub ID"
+                  error={problem === 'url' && (touched || relayHost !== '') ? 'Enter the relay server and Hub ID' : null}
+                >
+                  <TextInput
+                    accessibilityLabel="Hub ID"
+                    style={monoInput}
+                    value={relayId}
+                    onChangeText={setRelayId}
+                    placeholder="e.g. home"
+                    placeholderTextColor={t.muted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!connecting}
+                  />
+                </Field>
+                <Text style={[styles.hint, { color: t.muted }]}>
+                  Set the secret on the hub console with{' '}
+                  <Text style={styles.mono}>relay {'<secret>'}</Text>.{'\n'}
                   The Hub ID is shown by <Text style={styles.mono}>relay</Text> on the console.
                 </Text>
               </>
             ) : (
               <Field
-                label={isRelay ? 'Relay URL' : 'Hub address'}
+                label="Hub address"
                 error={
                   problem === 'url' && (touched || url !== '')
-                    ? isRelay
-                      ? 'Enter the relay URL like wss://relay.example.com/client/my-hub'
-                      : 'Enter an address like 192.168.0.202 or ws://hub:8080/ws'
+                    ? 'Enter an address like 192.168.0.202 or ws://hub:8080/ws'
                     : null
                 }
               >
                 <TextInput
-                  accessibilityLabel={isRelay ? 'Relay URL' : 'Hub address'}
+                  accessibilityLabel="Hub address"
                   style={monoInput}
                   value={url}
                   onChangeText={setUrl}
-                  placeholder={isRelay ? 'wss://relay.example.com/client/my-hub' : '192.168.0.202 or ws://hub:8080/ws'}
+                  placeholder="192.168.0.202 or ws://hub:8080/ws"
                   placeholderTextColor={t.muted}
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="url"
                   editable={!connecting}
                 />
-                {isRelay && (
-                  <Text style={[styles.hint, { color: t.muted }]}>
-                    Run a relay server on a VPS, then set it on the hub console with{' '}
-                    <Text style={styles.mono}>relay {'<url> <secret>'}</Text>.{'\n'}
-                    The relay forwards traffic; authentication still uses the hub's token.
-                  </Text>
-                )}
               </Field>
             )}
           </Card>

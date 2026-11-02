@@ -23,9 +23,10 @@ import {
   stepperFor,
   type DeviceStatus,
 } from '../model/devices';
-import type { Attr, Entity, Value } from '../protocol/messages';
+import type { Attr, DeviceOtaSession, Entity, Value } from '../protocol/messages';
 import { Button, ErrorText, Input } from './controls';
 import { ColorSheet } from './ColorSheet';
+import { FirmwareUpdatePanel, OtaProgress } from './FirmwareUpdatePanel';
 import { Glyph } from './Glyph';
 import { Sheet, SheetRow } from './Sheet';
 import { Slider } from './Slider';
@@ -43,6 +44,10 @@ export interface DeviceSheetProps {
   onRename(name: string | null): Promise<boolean>;
   /** Zigbee devices only: blink the device so it can be found / take it off the network. */
   onIdentify?(): Promise<boolean>;
+  /** Zigbee devices only: push a vendor firmware file to the device. Resolves true when the hub accepted it. */
+  onStartUpdate?(url: string, sha256: string): Promise<boolean>;
+  /** The last firmware session the hub reported for this device. */
+  ota?: DeviceOtaSession;
   /** Ask to take the device off the network — the caller confirms. */
   onRemove?(): void;
   notify?(text: string): void;
@@ -62,6 +67,8 @@ export function DeviceSheet({
   onClose,
   onRename,
   onIdentify,
+  onStartUpdate,
+  ota,
   onRemove,
   notify,
   updatedText,
@@ -69,6 +76,7 @@ export function DeviceSheet({
 }: DeviceSheetProps) {
   const t = useTheme();
   const [renaming, setRenaming] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const sw = primarySwitch(entity);
   const title = deviceTitle(entity);
   const powered = isPowered(entity);
@@ -189,6 +197,14 @@ export function DeviceSheet({
             }}
           />
         ) : null}
+        {onStartUpdate ? (
+          <SheetRow
+            label="Update firmware"
+            last={!onRemove}
+            a11y={`Update firmware ${title}`}
+            onPress={() => setUpdating(true)}
+          />
+        ) : null}
         {onRemove ? (
           <SheetRow
             label="Remove device"
@@ -202,6 +218,21 @@ export function DeviceSheet({
           />
         ) : null}
       </View>
+
+      {updating && onStartUpdate ? (
+        <FirmwareUpdatePanel
+          title={title}
+          session={ota}
+          onStart={onStartUpdate}
+          onClose={() => setUpdating(false)}
+        />
+      ) : null}
+
+      {ota && ota.phase !== 'idle' && !updating ? (
+        <View style={[styles.block, { borderTopColor: t.border }]}>
+          <OtaProgress session={ota} />
+        </View>
+      ) : null}
     </Sheet>
   );
 }
