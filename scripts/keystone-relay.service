@@ -6,8 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/keystone-relay --port ${PORT}
-# SECRET (openssl rand -hex 32) and PORT live in /etc/keystone-relay.env, mode 0600.
+ExecStart=/usr/local/bin/relay --port ${PORT}
+# RELAY_SECRET (openssl rand -hex 32) and PORT live in /etc/keystone-relay.env, mode 0600.
 EnvironmentFile=/etc/keystone-relay.env
 Restart=always
 RestartSec=5

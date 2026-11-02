@@ -3,7 +3,7 @@
 // Run:  npm run cloud-relay -- --port 9090 --secret <shared-secret>
 //
 // Hub (brain) connects to:       ws(s)://host:port/tunnel/<hub-id>
-//     Same multiplexing protocol as relay-server.ts.
+//     Same multiplexing protocol as the Go relay (relay/).
 //
 // App uses the HTTP API:
 //   POST /hub/:id/auth           {token}               → {session, messages: [...]}

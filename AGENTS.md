@@ -100,10 +100,11 @@ generated file carries the hub's *setup code* (the password of the first-time se
 `Keystone-XXXX`, §11): `scripts/gen-hub-cert.sh --setup-code` adds one to an existing identity without
 changing the key or certificate; console `setup` shows it and `setup on|off` opens/closes the access point.
 
-**Relay (Go).** From `relay/`: `go test ./...` (no network needed — no module graph) and
-`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o keystone-relay .`. The Node
-implementation in `app/` (`npm run relay-server`) speaks the same protocol and stays the
-readable reference.
+**Relay (Go).** From `relay/`: `go test ./...` (29 cases; `go mod download` once — the one
+dependency is `coder/websocket`) and `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o relay .`.
+It is the server that gets deployed on a VPS; the Node implementation it replaced was removed.
+The secrets are `RELAY_SECRET` / `RELAY_MASTER_SECRET` (the relay derives the secret of every
+hub from it) — see [relay/README.md](relay/README.md) and [docs/relay-security.md](docs/relay-security.md).
 
 **Firmware.** Each app is its own ESP-IDF project. Two toolchains are in use:
 
