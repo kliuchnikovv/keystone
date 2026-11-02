@@ -13,7 +13,8 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
 
-  s.source_files = "**/*.{h,m,swift}"
+  s.source_files = "*.{h,m,swift}"
+  s.frameworks = 'CoreBluetooth', 'Network'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'SWIFT_COMPILATION_MODE' => 'wholemodule'
