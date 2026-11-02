@@ -730,6 +730,87 @@ Outcome ota_start_parse(const Reader& r, int args, OtaRequest& out) {
   return Outcome::done();
 }
 
+// ---- Matter commissioning -------------------------------------------------------------------
+//
+// `matter.commission {kind, payload}`: the bytes the phone read from a Matter device over
+// Bluetooth. The phone does not interpret them any further — the hub's Matter stack does —
+// so the validator only checks that they are the shape the kind promises:
+//   kind 0 — the commissioning service data (7 bytes: version, discriminator, setup hash);
+//   kind 1 — the enhanced advertisement (the whole onboarding payload);
+//   kind 2 — the payload of a QR code (11 bytes, packed as CHIP packs them).
+//
+// The caller sends them to the Matter chip and answers "started"; how the attempt goes is
+// reported later as a `matter` event.
+
+inline constexpr std::size_t kMatterServiceBytes = 7;     // the service data 0xFFF6
+inline constexpr std::size_t kMatterOnboardingBytes = 11;  // the smallest onboarding payload
+
+struct MatterRequest {
+  Outcome out;
+  std::uint8_t kind = 0;
+  std::uint8_t len = 0;
+  std::uint8_t bytes[hubproto::kMatterMaxPayload] = {};
+};
+
+namespace detail {
+
+inline int hex_value(char c) noexcept {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+}  // namespace detail
+
+template <typename Reader>
+MatterRequest matter_commission_parse(const Reader& r, int args) {
+  MatterRequest req;
+  if (args < 0) {
+    req.out = Outcome::fail(Err::BadArgs, "args");
+    return req;
+  }
+  std::int64_t kind = 0;
+  if (!detail::get_int(r, args, "kind", kind) || kind < 0 ||
+      kind > static_cast<std::int64_t>(hubproto::kMatterKindQr)) {
+    req.out = Outcome::fail(Err::BadArgs, "kind: 0 (service data), 1 (advertisement) or 2 (QR)");
+    return req;
+  }
+  req.kind = static_cast<std::uint8_t>(kind);
+
+  char hex[2 * hubproto::kMatterMaxPayload + 1] = {};
+  if (!r.get_string(r.find(args, "payload"), hex, sizeof(hex))) {
+    req.out = Outcome::fail(Err::BadArgs, "payload");
+    return req;
+  }
+  const std::size_t n = std::strlen(hex);
+  if (n == 0 || n % 2 != 0) {
+    req.out = Outcome::fail(Err::BadArgs, "payload: hex bytes");
+    return req;
+  }
+  for (std::size_t i = 0; i < n; i += 2) {
+    const int hi = detail::hex_value(hex[i]);
+    const int lo = detail::hex_value(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      req.out = Outcome::fail(Err::BadArgs, "payload: hex bytes");
+      return req;
+    }
+    req.bytes[i / 2] = static_cast<std::uint8_t>((hi << 4) | lo);
+  }
+  req.len = static_cast<std::uint8_t>(n / 2);
+
+  if (req.kind == hubproto::kMatterKindService && req.len != kMatterServiceBytes) {
+    req.out = Outcome::fail(Err::BadArgs, "payload: 7 bytes of service data");
+    return req;
+  }
+  if (req.kind != hubproto::kMatterKindService && req.len < kMatterOnboardingBytes) {
+    req.out = Outcome::fail(Err::BadArgs, "payload: at least 11 bytes");
+    return req;
+  }
+  req.out = Outcome::done();
+  return req;
+}
+
 // ---- access: the app token and the relay ----------------------------------------------------
 
 inline constexpr std::size_t kMaxRelayUrlChars = 255;
@@ -760,15 +841,23 @@ Outcome access_token_parse(const Reader& r, int args, char* token, std::size_t c
   return Outcome::done();
 }
 
-/** `access.relay.set {url, secret}`: the remote-access relay, like the `relay` console command. */
+/** `access.relay.set {url, secret}`: the remote-access relay, like the `relay` console command.
+ *
+ * The secret may be left out: a hub that was flashed with a secret of its own (the
+ * receiver of the box never types one) uses the one in its firmware instead. */
 template <typename Reader>
 Outcome access_relay_parse(const Reader& r, int args, RelayRequest& out) {
   if (args < 0) return Outcome::fail(Err::BadArgs, "args");
   if (!r.get_string(r.find(args, "url"), out.url, sizeof(out.url)) || !relay_url_valid(out.url)) {
     return Outcome::fail(Err::BadArgs, "url: ws://, wss://, http:// or https://");
   }
-  if (!r.get_string(r.find(args, "secret"), out.secret, sizeof(out.secret)) || out.secret[0] == '\0') {
-    return Outcome::fail(Err::BadArgs, "secret");
+  const int s = r.find(args, "secret");
+  if (s >= 0) {
+    if (!r.get_string(s, out.secret, sizeof(out.secret))) {
+      return Outcome::fail(Err::BadArgs, "secret");
+    }
+  } else {
+    out.secret[0] = '\0';
   }
   return Outcome::done();
 }

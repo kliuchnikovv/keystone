@@ -306,6 +306,30 @@ if (process.argv.includes('--mutate')) {
   const target = c.getSnapshot().entities.find((e) => e.attrs.some((x) => x.id === 0x01 && x.flags.includes('w')) && e.attrs.some((x) => x.id === 0x13));
   const before = { rules: c.getSnapshot().rules.length, schedules: c.getSnapshot().schedules.length, timers: c.getSnapshot().timers.length, scenes: c.getSnapshot().scenes.length };
   const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string }) => String(e.code));
+  // Matter commissioning: the phone hands the hub the bytes it read from a device over Bluetooth.
+  // The hub starts the attempt ("started") and the Matter chip reports how far it got.
+  // Note: on a real hub this starts a commissioning session — harmless, it gives up after a minute.
+  await check('matter.commission takes the bytes the phone read and refuses what makes no sense', async () => {
+    const onboarding = '0001f1ff0080000fa1b2c3d4';  // opcode, version, vendor, product, discriminator, setup hash
+    const good = await code(c.req('matter.commission', { kind: 1, payload: onboarding }));
+    // "unsupported" means the hub has no Matter chip at all — the bytes were still accepted.
+    if (good !== 'ok' && good !== 'unsupported') return `a valid payload was refused: ${good}`;
+    const got = [
+      await code(c.req('matter.commission', { kind: 4, payload: onboarding })),
+      await code(c.req('matter.commission', { kind: 1, payload: 'zz' })),
+      await code(c.req('matter.commission', { kind: 1, payload: '001122' })),
+      await code(c.req('matter.commission', { kind: 0, payload: onboarding })),
+      await code(c.req('matter.commission', { kind: 1 })),
+      await code(c.req('matter.commission', { payload: onboarding })),
+    ];
+    return got.every((x) => x === 'bad_args') ? true : got.join(',');
+  });
+  await check('matter.status answers where the attempt stands', async () => {
+    const res = (await c.req('matter.status')) as { state?: string; code?: string } | null;
+    if (!res || typeof res.state !== 'string') return 'no state';
+    const states = ['idle', 'scanning', 'commissioning', 'adding', 'done', 'failed'];
+    return states.includes(res.state) ? true : `state ${res.state}`;
+  });
   if (!target) {
     console.log('  (--mutate needs a device with a writable on/off and power_w; skipped)');
   } else {

@@ -540,3 +540,56 @@ TEST_CASE("the access view carries the token, the fingerprint and the relay") {
   CHECK(std::string(e.c_str()) ==
         R"({"type":"res","id":4,"ok":true,"result":{"token":"","fingerprint":"","remote":false,"relay_url":""}})");
 }
+
+// ---- Matter commissioning -------------------------------------------------------------------
+
+TEST_CASE("the Matter state is encoded as a name, and the status carries the device it produced") {
+  char buf[256];
+  JsonWriter w(buf, sizeof(buf));
+  encode_res_ok_matter(w, 5, hubproto::MatterState::Scanning, 0, hubproto::MatterCode::Ok, "looking for the device");
+  CHECK(std::string(w.c_str()) ==
+        R"({"type":"res","id":5,"ok":true,"result":{"state":"scanning","entity":0,"code":"ok","message":"looking for the device"}})");
+
+  JsonWriter d(buf, sizeof(buf));
+  encode_res_ok_matter(d, 6, hubproto::MatterState::Done, 0x0301, hubproto::MatterCode::Ok, "the device is in the home");
+  CHECK(std::string(d.c_str()) ==
+        R"({"type":"res","id":6,"ok":true,"result":{"state":"done","entity":769,"code":"ok","message":"the device is in the home"}})");
+
+  // The push the clients get when the attempt moves on.
+  JsonWriter e(buf, sizeof(buf));
+  encode_matter_event(e, hubproto::MatterState::Failed, 0, hubproto::MatterCode::NoDevice, "nothing answered");
+  CHECK(std::string(e.c_str()) ==
+        R"({"type":"matter","state":"failed","entity":0,"code":"no_device","message":"nothing answered"})");
+
+  for (auto s : {hubproto::MatterState::Idle, hubproto::MatterState::Scanning, hubproto::MatterState::Commissioning,
+                 hubproto::MatterState::Adding, hubproto::MatterState::Done, hubproto::MatterState::Failed}) {
+    CHECK(std::string(matter_state_name(s)) != "unknown");
+  }
+  CHECK(std::string(matter_state_name(hubproto::MatterState::Commissioning)) == "commissioning");
+  for (auto c : {hubproto::MatterCode::Ok, hubproto::MatterCode::NoDevice, hubproto::MatterCode::BadPayload,
+                 hubproto::MatterCode::NoSetupHash, hubproto::MatterCode::Busy, hubproto::MatterCode::Unsupported,
+                 hubproto::MatterCode::Timeout, hubproto::MatterCode::Failed}) {
+    CHECK(std::string(matter_code_name(c)) != "unknown");
+  }
+  CHECK(std::string(matter_code_name(hubproto::MatterCode::Unsupported)) == "unsupported");
+}
+
+TEST_CASE("the Matter attempt has a line to show for every state and code") {
+  CHECK(std::string(matter_message(hubproto::MatterState::Done, hubproto::MatterCode::Ok)) ==
+        "the device is in the hub now");
+  CHECK(std::string(matter_message(hubproto::MatterState::Scanning, hubproto::MatterCode::Ok)) != "");
+  CHECK(std::string(matter_message(hubproto::MatterState::Failed, hubproto::MatterCode::NoDevice)) ==
+        "the device did not answer");
+  CHECK(std::string(matter_message(hubproto::MatterState::Failed, hubproto::MatterCode::BadPayload)) ==
+        "the hub did not understand the payload");
+  CHECK(std::string(matter_message(hubproto::MatterState::Failed, hubproto::MatterCode::Unsupported)) ==
+        "this hub cannot add Matter devices yet");
+  CHECK(std::string(matter_message(hubproto::MatterState::Failed, hubproto::MatterCode::Timeout)) ==
+        "the device did not answer in time");
+  // Every code says something: no empty line reaches the app.
+  for (auto c : {hubproto::MatterCode::Ok, hubproto::MatterCode::NoDevice, hubproto::MatterCode::BadPayload,
+                 hubproto::MatterCode::NoSetupHash, hubproto::MatterCode::Busy, hubproto::MatterCode::Unsupported,
+                 hubproto::MatterCode::Timeout, hubproto::MatterCode::Failed}) {
+    CHECK(std::string(matter_message(hubproto::MatterState::Failed, c)) != "");
+  }
+}

@@ -317,45 +317,32 @@ EncodeResult encode_ota_info(const OtaInfo& in, std::uint8_t* out, std::size_t c
 bool decode_ota_info(const std::uint8_t* in, std::size_t len, OtaInfo& out) noexcept;
 
 // ---- Device OTA (the firmware of a Zigbee device, via the coordinator) ---------
-// The brain pushes a vendor .ota file to the Zigbee chip; the chip stores it and
-// serves it to the device with the ZBOSS OTA server (cluster 0x0019). The header's
-// `entity_id` is the *device* the update is for; `chip_id` is the coordinator.
-//
-//   DEV_OTA_BEGIN : total_size(u32) sha256[32]
-//   DEV_OTA_CHUNK : offset(u32) data[1..kDevOtaMaxChunk]
-//   DEV_OTA_END   : (empty)
-//   DEV_OTA_STATUS: phase(u8) status(u8) percent(u8) reserved(u8) next_offset(u32)
-//
-// DEV_OTA_STATUS does double duty: while the file streams it acks the transfer
-// (phase Receiving, next_offset = the byte the chip wants next); after DEV_OTA_END
-// it reports the device session (verifying / notifying / transferring / done /
-// failed).
 
 inline constexpr std::size_t kDevOtaSha256Size = 32;
-inline constexpr std::size_t kDevOtaChunkHeader = 4;  // offset(u32)
-inline constexpr std::size_t kDevOtaMaxChunk = 240;   // data bytes
+inline constexpr std::size_t kDevOtaChunkHeader = 4;
+inline constexpr std::size_t kDevOtaMaxChunk = 240;
 static_assert(kDevOtaChunkHeader + kDevOtaMaxChunk <= 255,
               "must fit one frame (kMaxPayloadSize)");
 
 enum class DevOtaPhase : std::uint8_t {
   Idle         = 0,
-  Receiving    = 1,  // the brain is streaming the .ota file to the chip
-  Verifying    = 2,  // the chip checks the file (sha256, CRC32, header)
-  Notifying    = 3,  // the image is registered and the device was told about it
-  Transferring = 4,  // the device is pulling blocks
+  Receiving    = 1,
+  Verifying    = 2,
+  Notifying    = 3,
+  Transferring = 4,
   Done         = 5,
   Failed       = 6,
 };
 
 enum class DevOtaStatus : std::uint8_t {
   Ok          = 0,
-  Busy        = 1,  // another device update is in progress
-  TooLarge    = 2,  // the file does not fit the chip's image partition
-  BadChecksum = 3,  // sha256 or the file's CRC32 did not match
-  BadFormat   = 4,  // not a Zigbee OTA file
-  Unsupported = 5,  // the chip cannot serve OTA to devices
+  Busy        = 1,
+  TooLarge    = 2,
+  BadChecksum = 3,
+  BadFormat   = 4,
+  Unsupported = 5,
   Timeout     = 6,
-  Mismatch    = 7,  // the device asked for another manufacturer / image type
+  Mismatch    = 7,
   Aborted     = 8,
 };
 
@@ -367,7 +354,6 @@ EncodeResult encode_dev_ota_begin(const DevOtaBegin& in, std::uint8_t* out,
                                    std::size_t cap) noexcept;
 bool decode_dev_ota_begin(const std::uint8_t* in, std::size_t len, DevOtaBegin& out) noexcept;
 
-// Zero-copy view of a decoded DEV_OTA_CHUNK; `data` points into the input buffer.
 struct DevOtaChunkView {
   std::uint32_t       offset;
   const std::uint8_t* data;
@@ -382,12 +368,62 @@ bool decode_dev_ota_chunk(const std::uint8_t* in, std::size_t len,
 struct DevOtaStatusMsg {
   DevOtaPhase  phase = DevOtaPhase::Idle;
   DevOtaStatus status = DevOtaStatus::Ok;
-  std::uint8_t percent = 0;      // 0..100 progress of the current phase
-  std::uint32_t next_offset = 0;  // Receiving: the byte the chip wants next
+  std::uint8_t percent = 0;
+  std::uint32_t next_offset = 0;
 };
 EncodeResult encode_dev_ota_status(const DevOtaStatusMsg& in, std::uint8_t* out,
                                     std::size_t cap) noexcept;
 bool decode_dev_ota_status(const std::uint8_t* in, std::size_t len,
                             DevOtaStatusMsg& out) noexcept;
+
+// ---- Matter commissioning (the hub adds a Matter device to the home) ----------
+
+inline constexpr std::uint8_t kMatterKindService      = 0;
+inline constexpr std::uint8_t kMatterKindManufacturer = 1;
+inline constexpr std::uint8_t kMatterKindQr           = 2;
+inline constexpr std::size_t  kMatterMaxPayload       = 64;
+inline constexpr std::size_t  kMatterPairHeader       = 2;
+static_assert(kMatterPairHeader + kMatterMaxPayload <= 255, "must fit one frame (kMaxPayloadSize)");
+
+enum class MatterState : std::uint8_t {
+  Idle          = 0,
+  Scanning      = 1,
+  Commissioning = 2,
+  Adding        = 3,
+  Done          = 4,
+  Failed        = 5,
+};
+
+enum class MatterCode : std::uint8_t {
+  Ok          = 0,
+  NoDevice    = 1,
+  BadPayload  = 2,
+  NoSetupHash = 3,
+  Busy        = 4,
+  Unsupported = 5,
+  Timeout     = 6,
+  Failed      = 7,
+};
+
+struct MatterPairView {
+  std::uint8_t       kind;
+  const std::uint8_t* bytes;
+  std::size_t         len;
+};
+EncodeResult encode_matter_pair(std::uint8_t kind, const std::uint8_t* bytes,
+                                std::size_t len, std::uint8_t* out,
+                                std::size_t cap) noexcept;
+bool decode_matter_pair(const std::uint8_t* in, std::size_t len,
+                        MatterPairView& out) noexcept;
+
+struct MatterResult {
+  MatterState   state;
+  MatterCode    code;
+  std::uint16_t entity_id;
+};
+EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
+                                  std::size_t cap) noexcept;
+bool decode_matter_result(const std::uint8_t* in, std::size_t len,
+                           MatterResult& out) noexcept;
 
 }  // namespace hubproto

@@ -1,12 +1,14 @@
-import { useState } from 'react';
-import { Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { useCommands } from '../hooks/useCommands';
 import { useHome, useHubClient, type HubConnection } from '../hooks/useHub';
+import { useStateCache } from '../hooks/useStateCache';
 import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
 import { Banner, type BannerAction } from './Banner';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
+import { FindDevicesScreen } from './FindDevicesScreen';
 import { Glyph, type GlyphName } from './Glyph';
 import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
@@ -76,7 +78,21 @@ export function HomeBody({
   const ios = Platform.OS === 'ios';
   const home = useHome(client);
   const commands = useCommands(client);
+  // What the hub said last time, kept on the phone: shown while it is away.
+  useStateCache(client, settings.url);
   const [tab, setTab] = useState<Tab>('devices');
+  // "Find devices" is a screen of its own: it covers the tabs while it is open.
+  const [finding, setFinding] = useState(false);
+
+  // Android has no back button in the app: the hardware one must close the screen.
+  useEffect(() => {
+    if (!finding || Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setFinding(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [finding]);
 
   // What the banner offers: a retry when the socket is gone, a way back to Connect when
   // the token or the certificate is the problem.
@@ -91,8 +107,10 @@ export function HomeBody({
     <SafeAreaView style={[styles.screen, { backgroundColor: t.bg }]}>
       <Banner state={home} url={settings.url} action={action} />
       <View style={styles.body}>
-        {tab === 'devices' ? (
-          <DevicesScreen home={home} commands={commands} />
+        {finding ? (
+          <FindDevicesScreen home={home} commands={commands} onClose={() => setFinding(false)} />
+        ) : tab === 'devices' ? (
+          <DevicesScreen home={home} commands={commands} onFindDevices={() => setFinding(true)} />
         ) : tab === 'automations' ? (
           <AutomationsScreen home={home} commands={commands} />
         ) : tab === 'history' ? (
@@ -121,17 +139,19 @@ export function HomeBody({
           <Text style={{ color: t.bg, fontWeight: '600' }}>{commands.message}</Text>
         </Pressable>
       )}
-      <View
-        style={[
-          styles.tabs,
-          ios ? styles.tabsPill : styles.tabsPanel,
-          { backgroundColor: ios ? t.card : t.tabBar, borderColor: ios ? t.glassBorder : t.border },
-        ]}
-      >
-        {TABS.map((x) => (
-          <TabButton key={x.id} label={x.label} glyph={x.glyph} ios={ios} active={tab === x.id} onPress={() => setTab(x.id)} />
-        ))}
-      </View>
+      {!finding && (
+        <View
+          style={[
+            styles.tabs,
+            ios ? styles.tabsPill : styles.tabsPanel,
+            { backgroundColor: ios ? t.card : t.tabBar, borderColor: ios ? t.glassBorder : t.border },
+          ]}
+        >
+          {TABS.map((x) => (
+            <TabButton key={x.id} label={x.label} glyph={x.glyph} ios={ios} active={tab === x.id} onPress={() => setTab(x.id)} />
+          ))}
+        </View>
+      )}
     </SafeAreaView>
   );
 }

@@ -1,7 +1,7 @@
 // CloudClient: connects to the hub through a cloud relay via HTTP + SSE.
 // Same public interface as HubClient so hooks and components work with either.
 import type { AckStatus, HistoryPush, ServerMessage, Value } from './messages';
-import { type ConnectionStatus, type HomeState, cleared, initialState, reduce, withStatus } from './store';
+import { type ConnectionStatus, type HomeState, initialState, markedStale, reduce, withStatus } from './store';
 
 export class HubError extends Error {
   constructor(
@@ -39,6 +39,10 @@ export class CloudClient {
   private attempt = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private authAbort: AbortController | null = null;
+  /** The hub has sent a snapshot: its word is the last one, the cache is history. */
+  private live = false;
+  /** The connection lives on in someone else's hands: it must not be closed with us. */
+  private handedOver = false;
   private readonly opts: Required<CloudClientOptions>;
 
   constructor(options: CloudClientOptions) {
@@ -62,6 +66,22 @@ export class CloudClient {
     return () => this.historyListeners.delete(fn);
   };
 
+  /** Show what the app already knows until the hub says otherwise. */
+  hydrate(state: HomeState): void {
+    if (this.live) return;
+    this.set({ ...state, status: this.state.status, error: this.state.error });
+  }
+
+  /** The connection is not ours to close any more: it was handed to someone else. */
+  handOver(): void {
+    this.handedOver = true;
+  }
+
+  /** True after `handOver()`. */
+  get isHandedOver(): boolean {
+    return this.handedOver;
+  }
+
   connect(): void {
     this.stopped = false;
     if (this.session) return;
@@ -78,7 +98,8 @@ export class CloudClient {
     this.es?.close();
     this.es = null;
     this.session = null;
-    this.set(withStatus(cleared(this.state), 'closed'));
+    // What we know stays on screen: it is the last known state, not the live one.
+    this.set(withStatus(markedStale(this.state, Date.now()), 'closed'));
   }
 
   async cmd(entity: number, attr: number, value: Value): Promise<AckStatus> {
@@ -127,7 +148,9 @@ export class CloudClient {
 
       for (const raw of data.messages as unknown[]) {
         const msg = asMessage(raw);
-        if (msg) this.set(reduce(this.state, msg));
+        if (!msg) continue;
+        if (msg.type === 'snapshot') this.live = true;
+        this.set(reduce(this.state, msg));
       }
       if (this.state.status === 'ready') this.attempt = 0;
 
@@ -167,7 +190,7 @@ export class CloudClient {
       if (this.es === es) this.es = null;
       if (this.stopped) return;
       this.session = null;
-      this.set(withStatus(cleared(this.state), 'reconnecting'));
+      this.set(withStatus(markedStale(this.state, Date.now()), 'reconnecting'));
       this.scheduleRetry();
     };
   }
@@ -180,7 +203,7 @@ export class CloudClient {
 
   private fatal(status: ConnectionStatus, error: string): void {
     this.stopped = true;
-    this.set(withStatus(cleared(this.state), status, error));
+    this.set(withStatus(markedStale(this.state, Date.now()), status, error));
   }
 
   private scheduleRetry(): void {

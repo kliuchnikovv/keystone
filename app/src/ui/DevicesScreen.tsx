@@ -9,7 +9,6 @@ import { useNow } from '../hooks/useNow';
 import type { Commands } from '../hooks/useCommands';
 import type { Entity } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
-import { AddDeviceSheet } from './AddDeviceSheet';
 import { DeviceSheet } from './DeviceSheet';
 import { DeviceWidget } from './DeviceWidget';
 import { EmptyArt } from './EmptyArt';
@@ -18,14 +17,13 @@ import { ScenesBar } from './ScenesBar';
 import { ConfirmDialog } from './Sheet';
 import { radius, useTheme } from './theme';
 
-export function DevicesScreen({ home, commands }: { home: HomeState; commands: Commands }) {
+export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeState; commands: Commands; onFindDevices(): void }) {
   const t = useTheme();
   const rooms = groupByRoom(sortedDevices(home.entities));
-  const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [removingId, setRemovingId] = useState<number | null>(null);
   const now = useNow(1000);
-  const activity = useEntityActivity(home.entities);
+  const activity = useEntityActivity(home.entities, home.savedAt);
   const offline = home.status !== 'ready';
 
   const open = home.entities.find((e) => e.id === openId) ?? null;
@@ -90,7 +88,7 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add a device"
-            onPress={() => setAdding(true)}
+            onPress={onFindDevices}
             style={[styles.add, { borderColor: t.border }]}
           >
             <Glyph name="plus" size={18} color={t.accent} />
@@ -98,8 +96,6 @@ export function DevicesScreen({ home, commands }: { home: HomeState; commands: C
           </Pressable>
         )}
       </ScrollView>
-
-      <AddDeviceSheet visible={adding} onClose={() => setAdding(false)} home={home} commands={commands} />
 
       {open && (
         <DeviceSheet
@@ -290,7 +286,9 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 10, fontWeight: '500', marginTop: 4 },
   grid: { marginTop: 10, position: 'relative' },
   cell: { position: 'absolute' },
-  offline: { opacity: 0.6 },
+  // Without the hub the values on screen are the last known ones: dim them a little,
+  // but keep them readable — they are what the user came to see.
+  offline: { opacity: 0.75 },
   add: {
     flexDirection: 'row',
     alignItems: 'center',

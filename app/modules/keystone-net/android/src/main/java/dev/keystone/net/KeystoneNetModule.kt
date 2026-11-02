@@ -3,6 +3,7 @@ package dev.keystone.net
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.util.Log
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import okhttp3.OkHttpClient
@@ -25,6 +26,8 @@ import javax.net.ssl.X509TrustManager
 private const val EVENT_SOCKET = "onSocketEvent"
 private const val EVENT_HUB_FOUND = "onHubFound"
 private const val EVENT_HUB_LOST = "onHubLost"
+private const val EVENT_BLE_ADVERTISEMENT = "onBleAdvertisement"
+private const val EVENT_BLE_STATE = "onBleState"
 private const val SERVICE_TYPE = "_keystone._tcp."
 
 private fun hex(bytes: ByteArray): String =
@@ -53,6 +56,9 @@ private class PinTrust(private val pin: ByteArray?) : X509TrustManager {
     seen = hex(digest)
     if (pin != null && !MessageDigest.isEqual(digest, pin)) {
       mismatch = true
+      // The console log is the only place a person can see this: the app shows a
+      // banner, but the log says which certificate was expected and which one came.
+      Log.w("KeystoneNet", "certificate mismatch - expected ${hex(pin)}, the server presented ${hex(digest)}")
       throw CertificateException("certificate does not match the pinned fingerprint")
     }
   }
@@ -75,7 +81,7 @@ class KeystoneNetModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("KeystoneNet")
-    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST)
+    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST, EVENT_BLE_ADVERTISEMENT, EVENT_BLE_STATE)
 
     Function("connect") { id: String, url: String, fingerprint: String -> connect(id, url, fingerprint) }
     Function("connectLearning") { id: String, url: String -> openSocket(id, url, null) }
@@ -83,6 +89,12 @@ class KeystoneNetModule : Module() {
     Function("close") { id: String -> conns.remove(id)?.ws?.close(1000, null); Unit }
     Function("startDiscovery") { startDiscovery() }
     Function("stopDiscovery") { stopDiscovery() }
+
+    // The Bluetooth search is not implemented on Android yet: the app is told the radio
+    // is not available rather than being left with an empty list it cannot explain.
+    Function("startBleScan") { Unit }
+    Function("stopBleScan") { Unit }
+    Function("bleStatus") { mapOf<String, Any?>("state" to "unsupported", "authorization" to "notDetermined") }
 
     OnDestroy {
       stopDiscovery()
@@ -109,6 +121,13 @@ class KeystoneNetModule : Module() {
 
   /** `pin` null = learn: accept any certificate and report its fingerprint in `open`. */
   private fun openSocket(id: String, url: String, pin: ByteArray?) {
+    // Which peer this is, and how it is being trusted: the console log is where
+    // a person looks when a connection does not come up.
+    if (pin != null) {
+      Log.i("KeystoneNet", "connecting to $url, pinning the certificate ${hex(pin)}")
+    } else {
+      Log.i("KeystoneNet", "connecting to $url, accepting the certificate it presents")
+    }
     val trust = PinTrust(pin)
     val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
     val client = OkHttpClient.Builder()

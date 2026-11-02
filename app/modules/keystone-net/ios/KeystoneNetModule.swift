@@ -1,3 +1,4 @@
+import CoreBluetooth
 import CryptoKit
 import ExpoModulesCore
 import Foundation
@@ -48,6 +49,13 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
   }
 
   func start(url: URL) {
+    // Which peer this is, and how it is being trusted: the console log is where
+    // a person looks when a connection does not come up.
+    if let p = pin {
+      NSLog("KeystoneNet: connecting to %@, pinning the certificate %@", url.absoluteString, hexColon(p))
+    } else {
+      NSLog("KeystoneNet: connecting to %@, accepting the certificate it presents", url.absoluteString)
+    }
     let s = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
     session = s
     let t = s.webSocketTask(with: url)
@@ -101,12 +109,21 @@ private final class PinnedSocket: NSObject, URLSessionWebSocketDelegate {
     }
     let digest = Array(SHA256.hash(data: SecCertificateCopyData(leaf) as Data))
     seen = hexColon(digest)
-    if pin == nil || digest == pin! {
-      completionHandler(.useCredential, URLCredential(trust: trust))
-    } else {
+    if let p = pin {
+      if digest == p {
+        completionHandler(.useCredential, URLCredential(trust: trust))
+        return
+      }
       mismatch = true
+      // The console log is the only place a person can see this: the app shows a
+      // banner, but the log says which certificate was expected and which one came.
+      NSLog("KeystoneNet: certificate mismatch - expected %@, the server presented %@",
+            hexColon(p), hexColon(digest))
       completionHandler(.cancelAuthenticationChallenge, nil)
+      return
     }
+    // No pin: accept what the server presents and report it (first-time setup).
+    completionHandler(.useCredential, URLCredential(trust: trust))
   }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol proto: String?) {
@@ -206,6 +223,7 @@ private final class HubBrowser: NSObject, NetServiceBrowserDelegate, NetServiceD
 public final class KeystoneNetModule: Module {
   private var sockets: [String: PinnedSocket] = [:]
   private var browser: HubBrowser?
+  private var ble: BleScanner?
   private let lock = NSLock()
 
   private func emit(_ id: String, _ kind: String, _ extra: [String: Any?]) {
@@ -219,7 +237,7 @@ public final class KeystoneNetModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("KeystoneNet")
-    Events("onSocketEvent", "onHubFound", "onHubLost")
+    Events("onSocketEvent", "onHubFound", "onHubLost", "onBleAdvertisement", "onBleState")
 
     Function("connect") { (id: String, url: String, fingerprint: String) in
       guard let pin = parsePin(fingerprint), let u = URL(string: url) else {
@@ -272,10 +290,38 @@ public final class KeystoneNetModule: Module {
       }
     }
 
+    // The radio is only switched on when the person opened the search: iOS asks for the
+    // Bluetooth permission the first time a central manager appears.
+    Function("startBleScan") {
+      DispatchQueue.main.async {
+        if self.ble == nil {
+          self.ble = BleScanner(
+            onAdvertisement: { [weak self] a in self?.sendEvent("onBleAdvertisement", a) },
+            onState: { [weak self] s in self?.sendEvent("onBleState", s) })
+        }
+        self.ble?.start()
+      }
+    }
+
+    Function("stopBleScan") {
+      DispatchQueue.main.async {
+        self.ble?.stop()
+      }
+    }
+
+    Function("bleStatus") { () -> [String: Any?] in
+      return [
+        "state": self.ble?.state ?? "unknown",
+        "authorization": self.ble?.authorization ?? BleScanner.authorizationName(CBManager.authorization),
+      ]
+    }
+
     OnDestroy {
       DispatchQueue.main.async {
         self.browser?.stop()
         self.browser = nil
+        self.ble?.stop()
+        self.ble = nil
       }
       self.lock.lock()
       let all = Array(self.sockets.values)

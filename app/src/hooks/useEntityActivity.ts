@@ -25,7 +25,7 @@ function valuesOf(e: Entity): Map<number, Value> {
   return m;
 }
 
-export function useEntityActivity(entities: Entity[]): Activity {
+export function useEntityActivity(entities: Entity[], knownAt?: number | null): Activity {
   const prev = useRef(new Map<number, Map<number, Value>>());
   const updatedAt = useRef(new Map<number, number>());
   const pressedAt = useRef(new Map<number, number>());
@@ -39,9 +39,9 @@ export function useEntityActivity(entities: Entity[]): Activity {
       const current = valuesOf(e);
       if (before === undefined) {
         // First sight: the app has just learned what the device is — that is the
-        // moment the card counts from.
+        // moment the card counts from (the cache counts from when it was written).
         prev.current.set(e.id, current);
-        updatedAt.current.set(e.id, now);
+        updatedAt.current.set(e.id, knownAt ?? now);
         changed = true;
         continue;
       }
@@ -56,7 +56,7 @@ export function useEntityActivity(entities: Entity[]): Activity {
       prev.current.set(e.id, current);
     }
     if (changed) bump((n) => n + 1);
-  }, [entities]);
+  }, [entities, knownAt]);
 
   return { updatedAt: updatedAt.current, pressedAt: pressedAt.current };
 }

@@ -6,6 +6,7 @@ import type {
   DeviceOtaSession,
   Entity,
   HubInfo,
+  MatterEvent,
   Rule,
   Scene,
   Schedule,
@@ -28,6 +29,10 @@ export interface HomeState {
   status: ConnectionStatus;
   /** Last error code worth showing (e.g. "busy"), cleared on `ready`. */
   error: string | null;
+  /** True while the data on screen is the last known state, not what the hub says right now. */
+  stale: boolean;
+  /** When the data on screen was last known to be true (epoch ms); null while it is live. */
+  savedAt: number | null;
   hub: HubInfo | null;
   entities: Entity[];
   chips: Chip[];
@@ -35,13 +40,15 @@ export interface HomeState {
   schedules: Schedule[];
   timers: Timer[];
   scenes: Scene[];
-  /** The last firmware session per device (a Zigbee device can be given new firmware). */
   deviceOta: Record<number, DeviceOtaSession>;
+  matter: MatterEvent | null;
 }
 
 export const initialState: HomeState = {
   status: 'idle',
   error: null,
+  stale: false,
+  savedAt: null,
   hub: null,
   entities: [],
   chips: [],
@@ -50,6 +57,7 @@ export const initialState: HomeState = {
   timers: [],
   scenes: [],
   deviceOta: {},
+  matter: null,
 };
 
 export function withStatus(s: HomeState, status: ConnectionStatus, error: string | null = null): HomeState {
@@ -59,8 +67,16 @@ export function withStatus(s: HomeState, status: ConnectionStatus, error: string
 
 /** Forget what a previous connection knew (a new snapshot replaces it anyway). */
 export function cleared(s: HomeState): HomeState {
-  // initialState has no firmware sessions either: a reconnect starts with a clean picture.
   return { ...initialState, status: s.status, error: s.error };
+}
+
+/**
+ * The link is gone: keep what we know — the devices, their names, the last values —
+ * and say that it is not live any more.
+ */
+export function markedStale(s: HomeState, at: number): HomeState {
+  if (s.stale && s.savedAt !== null) return s;
+  return { ...s, stale: true, savedAt: at };
 }
 
 /** Apply one hub message. Messages that carry no state (acks, errors) return `s`. */
@@ -73,6 +89,9 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
       const base = (m.part ?? 0) === 0 ? initialState : s;
       const next: HomeState = {
         ...s,
+        // The hub speaks now: what is on screen is live again.
+        stale: false,
+        savedAt: null,
         entities: [...base.entities, ...(m.entities ?? [])],
         chips: [...base.chips, ...(m.chips ?? [])],
         rules: [...base.rules, ...(m.rules ?? [])],
@@ -122,12 +141,13 @@ export function reduce(s: HomeState, m: ServerMessage): HomeState {
     case 'timers':
       return { ...s, timers: m.timers };
     case 'device_ota': {
-      // The firmware session of one device: the last thing the hub said about it.
       const next: DeviceOtaSession = { phase: m.phase, status: m.status, percent: m.percent };
       const prev = s.deviceOta[m.entity];
       if (prev && prev.phase === next.phase && prev.status === next.status && prev.percent === next.percent) return s;
       return { ...s, deviceOta: { ...s.deviceOta, [m.entity]: next } };
     }
+    case 'matter':
+      return { ...s, matter: m };
     case 'hub':
       return { ...s, hub: m.hub };
     case 'time':

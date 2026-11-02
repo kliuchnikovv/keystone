@@ -25,7 +25,7 @@ import {
   validateSettings,
   type Settings,
 } from '../settings';
-import { Chip, ChipRow } from './controls';
+import { Chip, ChipRow, Note } from './controls';
 import { Glyph, type GlyphName } from './Glyph';
 import { ScreenHeader } from './ScreenHeader';
 import { radius, space, useTheme } from './theme';
@@ -116,6 +116,8 @@ export function ConnectScreen({
   }, [failure]);
 
   const input = [styles.input, { color: t.text, backgroundColor: t.bg, borderColor: t.border }];
+  // An address and a token are read, not read aloud: they wear the monospace face.
+  const monoInput = [...input, styles.mono];
   const muted = connecting ? 0.5 : 1;
 
   return (
@@ -237,7 +239,7 @@ export function ConnectScreen({
               >
                 <TextInput
                   accessibilityLabel={isRelay ? 'Relay URL' : 'Hub address'}
-                  style={input}
+                  style={monoInput}
                   value={url}
                   onChangeText={setUrl}
                   placeholder={isRelay ? 'wss://relay.example.com/client/my-hub' : '192.168.0.202 or ws://hub:8080/ws'}
@@ -263,7 +265,7 @@ export function ConnectScreen({
               <TextInput
                 ref={tokenRef}
                 accessibilityLabel="Token"
-                style={[styles.secret, { color: t.text }]}
+                style={[styles.secret, styles.mono, { color: t.text }]}
                 value={token}
                 onChangeText={setToken}
                 placeholder="at least 8 characters"
@@ -291,6 +293,13 @@ export function ConnectScreen({
               </Text>
             )}
           </Card>
+
+          {isRelay && url.trim() !== '' && (
+            <Note
+              title="What changed for you."
+              text="The address and the token used to be typed by hand. The app fills them in — one tap."
+            />
+          )}
 
           {secure && mode === 'local' && (
             <Card title="Certificate fingerprint (SHA-256)" icon="signal">

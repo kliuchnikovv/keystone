@@ -37,6 +37,13 @@ void describe(char* buf, std::size_t cap);
 // The configured relay URL ("" when there is none). The secret is never handed out.
 bool configured_url(char* out, std::size_t cap);
 
+// The identity baked into the firmware when the box is flashed (main/relay_identity.h):
+// the relay this hub belongs to, the id it uses there, and a secret of its own.
+// Empty strings when the firmware was not flashed with one.
+const char* baked_host();
+const char* baked_id();
+const char* baked_secret();
+
 bool start(const char* token, HubInfoFn info);
 void stop();
 void set_token(const char* token);

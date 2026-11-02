@@ -57,6 +57,8 @@ describe('the hub tab', () => {
     click('Set up relay');
     await screen.findByLabelText('Relay URL');
     type('Relay URL', 'https://relay.example.com');
+    // The secret is only for a relay the person runs themselves.
+    click('I run my own relay');
     type('Secret', 'shared-secret');
     click('Save');
     await waitFor(() => expect(screen.getByText('https://relay.example.com')).toBeTruthy());
@@ -70,12 +72,21 @@ describe('the hub tab', () => {
     click('Set up relay');
     await screen.findByLabelText('Relay URL');
     type('Relay URL', 'wss://relay.example.com/tunnel/home');
-    type('Secret', 'shared-secret');
     click('Save');
     // The hub's own address ends in /tunnel/, the app's one in /client/.
     await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());
     click('Connect through the relay');
     expect(used).toEqual(['wss://relay.example.com/client/home']);
+  });
+
+  it('sets up a relay without a secret — the hub uses the one in its firmware', async () => {
+    await openHub();
+    click('Set up relay');
+    await screen.findByLabelText('Relay URL');
+    type('Relay URL', 'wss://relay.example.com/tunnel/home');
+    // No secret: the person who received the box never types one.
+    click('Save');
+    await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());
   });
 
   it('starts an update and follows it', async () => {

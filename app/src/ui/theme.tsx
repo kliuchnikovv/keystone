@@ -6,10 +6,11 @@ import { useColorScheme } from 'react-native';
 //
 // The palette is a setting: "sandstone" is this paper-and-ink look (it follows the
 // system light/dark), "ember" is the dark glass-and-amber look of the room mock —
-// always dark, with warm translucent surfaces.
+// always dark, with warm translucent surfaces, "paper" is the always-light look of
+// the remote-access mock — cream page, white cards with a hairline, terracotta.
 
 /** The palettes the app can wear. */
-export type PaletteId = 'sandstone' | 'ember';
+export type PaletteId = 'sandstone' | 'ember' | 'paper';
 
 export interface PaletteInfo {
   id: PaletteId;
@@ -20,6 +21,7 @@ export interface PaletteInfo {
 export const PALETTES: PaletteInfo[] = [
   { id: 'sandstone', name: 'Sandstone', hint: 'Warm paper, terracotta accent' },
   { id: 'ember', name: 'Ember', hint: 'Dark glass, amber accent' },
+  { id: 'paper', name: 'Paper', hint: 'Always light, cream and ink' },
 ];
 
 export interface Theme {
@@ -39,14 +41,26 @@ export interface Theme {
   muted: string;
   border: string;
   accent: string;
+  /** The deeper ink of the accent — accent text on a soft accent chip. */
+  accentInk: string;
   /** A 10–14 % wash of the accent, for selected chips and soft chips. */
   accentSoft: string;
   /** A quiet filled surface: secondary buttons, pressed rows. */
   fill: string;
+  /** The quiet button: a filled surface in the dark palettes, an outline on paper. */
+  secondaryBg: string;
+  /** The line around the quiet button. */
+  secondaryBorder: string;
   /** A cool accent — the one place the palette is allowed a second hue. */
   cool: string;
   onAccent: string;
   good: string;
+  /** The ink of a note that says everything works. */
+  goodInk: string;
+  /** The wash behind such a note. */
+  goodSoft: string;
+  /** The line around such a note. */
+  goodBorder: string;
   warn: string;
   bad: string;
   /** Which palette this theme came from. */
@@ -68,11 +82,17 @@ const light: Theme = {
   muted: '#6f6a5c',
   border: '#e3ddcd',
   accent: '#c4512a',
+  accentInk: '#a23e1f',
   accentSoft: 'rgba(196,81,42,0.12)',
   fill: 'rgba(0,0,0,0.06)',
+  secondaryBg: 'rgba(0,0,0,0.06)',
+  secondaryBorder: 'rgba(0,0,0,0.06)',
   cool: '#2f6fb8',
   onAccent: '#ffffff',
   good: '#2f7a4d',
+  goodInk: '#215c3a',
+  goodSoft: 'rgba(47,125,79,0.07)',
+  goodBorder: 'rgba(47,125,79,0.22)',
   warn: '#a8760f',
   bad: '#b53b3b',
   palette: 'sandstone',
@@ -91,11 +111,17 @@ const dark: Theme = {
   muted: '#9a9384',
   border: '#2c303a',
   accent: '#e07a4a',
+  accentInk: '#f0a077',
   accentSoft: 'rgba(224,122,74,0.18)',
   fill: 'rgba(255,255,255,0.08)',
+  secondaryBg: 'rgba(255,255,255,0.08)',
+  secondaryBorder: 'rgba(255,255,255,0.08)',
   cool: '#5aa2e8',
   onAccent: '#14161b',
   good: '#4fbe7f',
+  goodInk: '#b9f0cf',
+  goodSoft: 'rgba(79,190,127,0.10)',
+  goodBorder: 'rgba(79,190,127,0.28)',
   warn: '#e0a63c',
   bad: '#ef6b6b',
   palette: 'sandstone',
@@ -116,11 +142,17 @@ const ember: Theme = {
   muted: 'rgba(255,205,128,0.62)',
   border: 'rgba(255,182,92,0.14)',
   accent: '#FF9F0A',
+  accentInk: '#ffc36b',
   accentSoft: 'rgba(255,152,32,0.26)',
   fill: 'rgba(255,255,255,0.06)',
+  secondaryBg: 'rgba(255,255,255,0.06)',
+  secondaryBorder: 'rgba(255,255,255,0.06)',
   cool: '#64b4ff',
   onAccent: '#1a0b00',
   good: '#78f096',
+  goodInk: '#c9f7d6',
+  goodSoft: 'rgba(120,240,150,0.10)',
+  goodBorder: 'rgba(120,240,150,0.28)',
   warn: '#ffc048',
   bad: '#ff6e5a',
   palette: 'ember',
@@ -128,12 +160,47 @@ const ember: Theme = {
   tabBar: 'rgba(8,3,1,0.97)',
 };
 
+// Paper: the remote-access mock. Always light — a cream page, white cards with
+// a hairline, terracotta for what can be pressed, green for what works.
+const paper: Theme = {
+  bg: '#f5f1e8',
+  card: '#ffffff',
+  surface: '#ffffff',
+  glass: '#ffffff',
+  glassBorder: '#e3ddcd',
+  glassSheen: 'rgba(255,255,255,0.95)',
+  text: '#15171c',
+  muted: '#6f6a5c',
+  border: '#e3ddcd',
+  accent: '#c4512a',
+  accentInk: '#a23e1f',
+  accentSoft: 'rgba(196,81,42,0.09)',
+  fill: '#eee9dc',
+  // On paper a quiet button is an outline, not a grey slab.
+  secondaryBg: 'transparent',
+  secondaryBorder: '#e3ddcd',
+  cool: '#2f6fb8',
+  onAccent: '#ffffff',
+  good: '#2f7d4f',
+  goodInk: '#215c3a',
+  goodSoft: 'rgba(47,125,79,0.07)',
+  goodBorder: 'rgba(47,125,79,0.22)',
+  warn: '#a8760f',
+  bad: '#b53b3b',
+  palette: 'paper',
+  cardRadius: 16,
+  tabBar: 'rgba(255,255,255,0.97)',
+};
+
 const ThemeContext = createContext<Theme>(light);
+
+/** Every palette, so a picker can show what a choice looks like before it is made. */
+export const THEMES: Record<PaletteId, Theme> = { sandstone: light, ember, paper };
 
 /** The theme the whole app wears: the chosen palette, and the system's light/dark for sandstone. */
 export function ThemeProvider({ palette, children }: { palette: PaletteId; children: ReactNode }) {
   const scheme = useColorScheme();
-  const theme = palette === 'ember' ? ember : scheme === 'dark' ? dark : light;
+  const theme = palette === 'ember' ? ember : palette === 'paper' ? paper : scheme === 'dark' ? dark : light;
   return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
 }
 

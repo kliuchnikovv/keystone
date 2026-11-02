@@ -31,6 +31,15 @@ node_modules/
 dist/
 .expo/
 
+# Secrets. The .env in the root of the repository holds the relay's master key
+# and whatever else has to stay out of git.
+.env
+.env.*
+
+# The hub's relay identity (scripts/gen-hub-relay.sh): the secret the hub uses to
+# register with the relay. Never in git.
+firmware/*/main/relay_identity.h
+
 # The hub's TLS identity (scripts/gen-hub-cert.sh): never commit the private key.
 firmware/*/main/hub_key.pem
 firmware/*/main/hub_cert.pem

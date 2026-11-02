@@ -140,6 +140,9 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
+  // The secret is only needed for a relay the person runs themselves. Our relay
+  // knows the hub already, so the field stays out of the way until it is asked for.
+  const [showSecret, setShowSecret] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The hub's own address ends in /tunnel/<id>; the app talks to the client side.
   const clientUrl = info?.relay_url ? relayClientUrl(info.relay_url) : '';
@@ -164,7 +167,12 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
 
   const setRelay = async () => {
     setError(null);
-    const r = await commands.request('access.relay.set', { url: url.trim(), secret: secret.trim() });
+    const trimmed = secret.trim();
+    // The secret is optional: a hub that was flashed with a secret of its own uses
+    // the one in its firmware, and the person who received the box never types one.
+    const args: { url: string; secret?: string } = { url: url.trim() };
+    if (trimmed) args.secret = trimmed;
+    const r = await commands.request('access.relay.set', args);
     if (r === null) return;
     setOpen(false);
     setUrl('');
@@ -231,14 +239,30 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
         </View>
       ) : null}
 
+      {clientUrl && onUseRelay ? (
+        <View style={{ marginTop: 8 }}>
+          <Button label="Connect through the relay" a11y="Connect through the relay" onPress={() => onUseRelay(clientUrl)} />
+          <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 6 }}>
+            The app keeps its token and switches to the relay address — nothing to type.
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.row}>
+        <Button
+          kind="secondary"
+          size="compact"
+          label={info?.relay_url ? 'Change relay' : 'Set up relay'}
+          onPress={() => {
+            setUrl(info?.relay_url ?? '');
+            setSecret('');
+            setShowSecret(false);
+            setOpen(true);
+          }}
+        />
         {info?.relay_url ? (
           <Button kind="secondary" size="compact" label="Remove relay" onPress={() => void clearRelay()} />
         ) : null}
-        {clientUrl && onUseRelay ? (
-          <Button size="compact" label="Connect through the relay" a11y="Connect through the relay" onPress={() => onUseRelay(clientUrl)} />
-        ) : null}
-        <Button kind="secondary" size="compact" label="Set up relay" onPress={() => setOpen(true)} />
         <Button size="compact" label="New token" a11y="New token" onPress={() => void newToken()} />
       </View>
       <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 6 }}>
@@ -248,12 +272,29 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
 
       <Sheet visible={open} title="Remote access" onCancel={() => setOpen(false)}>
         <Text style={{ color: t.muted, fontSize: 13, marginTop: 4 }}>
-          The hub keeps a tunnel to a relay server you run; the app talks to it through there.
+          The hub keeps a tunnel to a relay server; the app talks to it through there.
         </Text>
         <Text style={[styles.label, { color: t.muted }]}>Relay URL</Text>
         <Input label="Relay URL" value={url} onChangeText={setUrl} placeholder="wss://relay.example.com:9090/tunnel/my-hub" keyboardType="url" />
-        <Text style={[styles.label, { color: t.muted }]}>Secret</Text>
-        <Input label="Secret" value={secret} onChangeText={setSecret} placeholder="the same secret on both sides" secureTextEntry />
+        {showSecret ? (
+          <>
+            <Text style={[styles.label, { color: t.muted }]}>Secret</Text>
+            <Input label="Secret" value={secret} onChangeText={setSecret} placeholder="the same secret on both sides" secureTextEntry />
+            <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 4 }}>
+              For a relay you run yourself. The hub keeps it; it is never sent back.
+            </Text>
+          </>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="I run my own relay"
+            onPress={() => setShowSecret(true)}
+            hitSlop={8}
+            style={{ marginTop: 10 }}
+          >
+            <Text style={{ color: t.accent, fontSize: 12.5, fontWeight: '600' }}>I run my own relay — it needs a secret</Text>
+          </Pressable>
+        )}
         <ErrorText text={error} />
         <View style={styles.row}>
           <Button kind="secondary" label="Cancel" onPress={() => setOpen(false)} />

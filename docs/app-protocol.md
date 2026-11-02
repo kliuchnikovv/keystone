@@ -115,6 +115,7 @@ Incremental events (no `id`, pushed as they happen):
 | `time` | `time`, `tz`, `synced` — on sync or tz change |
 | `hub` | `hub`: the whole hub object as in `welcome` — when the location changes or the clock becomes known (today's `sun`) |
 | `device_ota` | `entity`, `phase` (`idle`/`receiving`/`verifying`/`notifying`/`transferring`/`done`/`failed`), `status` (`ok`/`busy`/`too_large`/`bad_checksum`/`bad_format`/`unsupported`/`timeout`/`mismatch`/`aborted`), `percent` — the firmware session of a Zigbee device (see docs/ota.md) |
+| `matter` | `state`, `entity`, `code`, `message` — how the attempt to add a Matter device stands (§5.3) |
 
 **What the real hub does today.** Live attribute changes are pushed as `state`
 events and chip health as `chip` events (on change, and every 10 s for telemetry).
@@ -179,6 +180,8 @@ so they also update the desired state (reconciler).
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
 | `device.ota` | `entity`, `url` (`http(s)`), `sha256` (64 hex digits) | pushes a vendor `.ota` file to a **Zigbee device** (lamp, dimmer): the hub downloads it and hands it to the coordinator, which serves it over the OTA Upgrade cluster (docs/ota.md). `res ok` means the update started; the progress arrives as `device_ota` events. Only Zigbee devices: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args`, a second running update `busy` |
+| `matter.commission` | `kind` (0 = service data, 1 = advertisement, 2 = QR code), `payload` (hex bytes) | asks the hub to add a Matter device the phone found. Fire-and-forget like `pair`: `ok {state:"started"}` means the bytes were handed to the Matter chip; how it goes is reported by the `matter` event (§5.3). `bad_args` when the payload is not the shape the kind promises, `unsupported` when the hub has no Matter chip — or when its Matter chip is alive and has no commissioner (the hub asks once, learns this, and refuses straight away after that) |
+| `matter.status` | — | where the attempt stands: `result: {state, entity, code, message}` (§5.3) |
 | `history` | all optional: `before` (a `seq`: only events strictly older), `limit` (1..24, default 24), `entity` (only events about this device, also one that has since been removed) | a newest-first page of the event history (§5.1): `result: {now, latest, oldest, more, events}` |
 | `ota.start` | `chip` (1 = Zigbee C6, 2 = Thread C6), `url` (`http://` or `https://`), `sha256` (64 hex characters) | updates that co-processor over the UART link, exactly as the console's `ota <chip> <url> <sha256>`. The hub downloads the image itself, so the URL must be reachable **from the hub**; the client uploads nothing. One update at a time: `busy` while another runs. See §5.2 |
 | `ota.status` | — | where the update stands: `result: {state, pct, chip, message}` (§5.2) |
@@ -186,7 +189,7 @@ so they also update the desired state (reconciler).
 | `hub.factory_reset` | — | answers `ok`, then ~500 ms later erases the hub's own settings (rules, names, schedules, timers, scenes, desired state, the app token, the relay credentials, the location) and reboots. The Wi-Fi credentials stay, and the co-processors keep their own partitions (their networks and images). See §5.2 |
 | `access.get` | — | `result: {token, fingerprint, remote, relay_url}` (§5.2) |
 | `access.token.set` | `token` (8..64 printable ASCII characters, no spaces) | the same rule as the console's `webtoken`. Answers `ok`, then ~300 ms later saves the token and restarts the app server: **the connection drops and the client must reconnect with the new token** |
-| `access.relay.set` | `url` (`ws://`, `wss://`, `http://` or `https://`), `secret` | the remote-access relay (§13), like the console's `relay <url> <secret>`: the credentials are saved and the hub connects out. The secret is never sent back |
+| `access.relay.set` | `url` (`ws://`, `wss://`, `http://` or `https://`), `secret` (optional) | the remote-access relay (§13), like the console's `relay <url> [<secret>]`: the address is saved and the hub connects out. The secret may be left out — a hub that was flashed with a secret of its own (`scripts/gen-hub-relay.sh`) uses the one in its firmware, and the person who received the box never types one. The secret is never sent back |
 | `access.relay.clear` | — | disconnects the tunnel and erases the relay credentials |
 | `wifi.forget` | — | answers `ok`, then ~300 ms later erases the saved Wi-Fi credentials and disconnects: the hub comes up on its setup access point (§11) |
 
@@ -234,6 +237,68 @@ after `hub.reboot`, `hub.factory_reset` and `access.token.set`, and reconnect.
 `device.ota` — a **device's** own vendor firmware — follows the same rules as the ops
 above: it needs the token, the hub downloads the `.ota` file and the progress arrives
 as `device_ota` events (§4).
+
+### 5.3 Adding a Matter device
+
+The phone has no Matter stack and cannot hold one: it cannot commission anything by
+itself. What it can do is **read what a device says about itself over Bluetooth** (or
+read its QR code) and hand those bytes to the hub, which does have the stack — on the
+Matter chip (0x02).
+
+```jsonc
+// the phone found a device and hands the bytes it read
+{ "type": "req", "id": 12, "op": "matter.commission",
+  "args": { "kind": 1, "payload": "0001f1ff0080000fa1b2c3d4" } }
+// → { "type": "res", "id": 12, "ok": true, "result": { "state": "started" } }
+```
+
+`kind` says what the bytes are, because the hub's stack parses each kind its own way:
+
+| kind | what the bytes are | what the hub needs them for |
+|---|---|---|
+| 0 | the commissioning service data (UUID 0xFFF6), exactly 7 bytes | only to **recognise** the device (its discriminator and setup hash) — not enough to commission it |
+| 1 | the bytes of the enhanced commissioning advertisement (company 0xFFF1), as they came out of the air (at least 11 bytes) | commissioning |
+| 2 | the payload of a QR code (`MT:…`, the standard commissioning payload), at least 11 bytes | commissioning |
+
+The phone never interprets the bytes beyond that: the hub checks only that they are
+the shape the kind promises (`bad_args` otherwise — odd length, a character that is
+not a hex digit, the wrong length for the kind) and passes them on unchanged.
+
+The answer is fire-and-forget, like `pair`: `ok` means the bytes reached the Matter
+chip, not that the device was added. How the attempt goes is reported by the `matter`
+event, which every client receives:
+
+```json
+{"type":"matter","state":"adding","entity":0,"code":"ok","message":"the hub is working on it"}
+```
+
+- `state`: `idle` · `scanning` · `commissioning` · `adding` · `done` · `failed`;
+- `entity`: the device the hub produced (0 while there is none yet);
+- `code`: `ok` · `no_device` (the device did not answer) · `bad_payload` (the hub did
+  not understand the payload) · `no_setup_hash` (the device did not share its setup
+  code — the QR code is needed) · `busy` (another device is being added) ·
+  `unsupported` (this hub cannot add Matter devices: there is no Matter chip, or the
+  chip is alive and simply has no commissioner) · `timeout` (nobody answered — the
+  chip itself is silent) · `failed`;
+- `message`: one short line for a person — the hub's own words, so that a client that
+  does not know the codes can still say something useful.
+
+`matter.status` answers the same thing on demand (`result: {state, entity, code,
+message}`) — a client asks it when it opens the screen, so that a half-finished
+attempt is visible after a reconnect.
+
+Three honest limits the client must respect. The **hub** commissions the device,
+not the phone: Bluetooth only tells the phone *which* device is in the room, the hub
+does the rest — so the device has to be reachable by the hub (on the home network,
+or over the transport the hub's Matter stack offers). The code printed on the
+label of a device (11 digits) carries no setup hash, so it cannot commission
+anything by itself — the QR code or the advertisement can. And a **native Matter
+device cannot be bridged**: a bridge aggregates *non-Matter* devices as its own
+endpoints, while a Matter device joins a fabric as a node of its own. If the hub
+commissions it, the device lands in the hub's own fabric — controllable from the
+Keystone app, but invisible to Apple Home, whose fabric the phone administers. So a
+client must not promise that a device it added will appear in Apple Home; that
+needs the Home app itself (scan the QR code there).
 
 ### 5.1 History
 
@@ -421,6 +486,14 @@ whose certificate is replaced is caught on the next reconnect. Trust-on-first-us
 by a person: `npm run probe -- --url wss://…` without `--fingerprint` prints what the
 hub presents and stops.
 
+**Through a relay the pin is dropped.** A relay is a different peer: it presents **its
+own** certificate (a CA-signed one, checked by the platform the usual way), and the hub's
+self-signed certificate never appears on the wire. Pinning the hub's fingerprint there
+would refuse every connection, so `Settings.pinnedFingerprintFor()` returns nothing for
+a `/client/<hub-id>` address and the platform's own TLS validation takes over. The hub's
+identity then rests on its **token** (the hub refuses a wrong one), and the relay is a
+trusted party — it sees the traffic (see [relay-security.md](relay-security.md)).
+
 **By platform** (what is implemented and what was actually exercised):
 
 | Platform | How it trusts the hub | Status |
@@ -509,7 +582,10 @@ code).
    (mock or real) and all pass on the brain (36 with `--mutate` over TLS); heap measured (§9).
 4. ✅ **App screens** (Expo, `app/`): connect screen, device cards with switches /
    brightness / live values, offline marking when a chip is silent, failure messages, chip
-   health, auto-reconnect with the stale picture cleared; **Automations** tab (schedules,
+   health, auto-reconnect that keeps the last known state (a **state cache** on the
+   device — a file on a phone, localStorage in a browser — so the app still shows the
+   devices and their last values while the hub is out of reach; the banner says how old
+   they are); **Automations** tab (schedules,
    timers with a live countdown, rules with time window / extra condition / cooldown, each
    readable as a sentence, delete with a second tap), renaming a device. Verified in a real
    browser against the real brain: a click toggles the plug in 280–490 ms, and
@@ -544,13 +620,12 @@ code).
    same ring. Later: `command` events say who asked (`what`), new events are pushed (`type: "history"`), repeated
    `state` and crash-loop `chip` events are not recorded again.
 
-9. ✅ **Remote access / relay** (hub + relay server + app + console; the ESP relay client is
-   hardware-verified): §13. The brain connects out to a relay server (`esp_websocket_client`);
-   a cloud relay exposes HTTP+SSE for apps; a console tool gives a full REPL. The connect screen
-   has Local / Cloud / Relay modes. 299 vitest, 349 host tests. Verified on the rig through a
-   relay on the LAN: 36/36 `hub-check --mutate`, real commands to the plug, reconnect after a
-   relay restart. Not yet run against a public relay over `wss://` (no VPS yet) — see
-   [relay-deploy.md](relay-deploy.md).
+9. **Remote access / relay** (hub + relay server + app + console; hardware-verified):
+   §13. The brain connects out to a relay server (`esp_websocket_client`); a cloud relay
+   exposes HTTP+SSE for apps; a console tool gives a full REPL. The connect screen has
+   Local / Cloud / Relay modes. The ESP relay client was verified on the real hub
+   against a public relay (commit `2d5be9e`): it dialed out, registered the tunnel and
+   answered a client that came through the public wss endpoint.
 
 10. ✅ **Firmware update, access and hub actions** (hub side; §5.2): `ota.start` /
     `ota.status` (the co-processor update the console's `ota` command drives, with the
@@ -561,11 +636,26 @@ code).
     the validation live in `core/app_requests.hpp` (host-tested), the encoders in
     `core/app_protocol.hpp`.
 
+11. 🚧 **Matter commissioning** (hub + app; §5.3): the phone reads a Matter device over
+    Bluetooth and hands the hub the bytes it read; the hub passes them to the Matter chip
+    and reports how the attempt went (`matter.commission`, `matter.status`, the `matter`
+    push). The phone does not interpret the payload — the kind says how the hub's stack
+    parses it. Hub, protocol and app are done and host-tested; the **commissioner itself
+    (on the Matter chip) is not** — see the RAM gate in `docs/matter-backlog.md`.
+
 ## 13. Remote access (relay)
 
 Remote access lets a phone or web app reach the hub from outside the LAN through a
 relay server on a VPS.  Three deployment options exist; all share the hub's token-based
-auth end-to-end — the relay sees ciphertext, never the token.
+auth end-to-end.
+
+**The relay is a trusted component.**  Inside the tunnel the hub protocol travels as
+plain JSON (the hub's relay client decodes it directly, `firmware/brain-s3/main/relay_client.cpp`),
+so the relay sees the hub token and the traffic.  Each hop is protected by TLS — the
+hub verifies the relay's certificate against the Mozilla CA bundle — but the relay
+itself is not blind to the content.  See [relay-security.md](relay-security.md) for the
+threat model, the findings and the target design (per-hub secret, TLS mandatory,
+limits).
 
 ### 13.1 Architecture options
 
@@ -598,6 +688,13 @@ Text WebSocket frames, same for all three options:
 The relay assigns a numeric `cid` (client id) to each remote client.  The hub/tunnel
 matches it to a virtual or local socket.  The hub-protocol payload (`hello`, `welcome`,
 `cmd`, `state`, …) is forwarded as-is — the relay does not inspect it.
+
+**Every frame that goes to the hub/tunnel carries the client id — including the ones
+that waited for the hub.** A client speaks before the hub has answered `!ready:` (the
+app sends its `hello` the moment the socket opens), so those frames wait in the relay
+until the hub is ready. The firmware drops a frame it cannot read (one without
+`<cid>:`), and such a client is then dropped by the hub's hello timeout (5 s) with
+"hub disconnected". Prefix the buffered frames too.
 
 ### 13.3 ESP relay client (brain-s3)
 
@@ -681,17 +778,44 @@ idle, 146 KB with three remote clients, 0 dropped frames.
 
 Not done / not verified:
 
-- The tunnel has never been run to a **public** relay: no VPS yet, so `wss://` with a real
-  certificate (Let's Encrypt) is untested, as is the hub reaching a host by DNS name.  The
-  deployment artifacts are ready: [relay-deploy.md](relay-deploy.md),
-  `scripts/keystone-relay.service`, `scripts/keystone-relay.env.example`, `scripts/Caddyfile`.
 - The cloud relay has no persistent state (sessions are in memory).
-- No auth rate limiting on the cloud relay itself (the hub has its own lockout).
-- The app's Cloud mode has not been tested against a live cloud relay + hub; the Relay mode
-  works with the stock `HubClient` (the checks above go through the same `/client/<hub-id>`
-  endpoint).
-- Remote clients cannot use the setup code (no setup access point remotely), and `pair` /
-  `unpair` reach the hub but the reply of a device that is not there is not tested.
+- No auth rate limiting on the **cloud** relay (the hub has its own lockout, and the
+  tunnel relay has one since 29.10.2026).
+- The app's Cloud mode has not been tested against a live cloud relay + hub.
+- The relay still uses **one shared secret for all hubs** (`RELAY_SECRET`); the target
+  is a per-hub secret that never crosses the wire (nonce + HMAC). See
+  [relay-security.md](relay-security.md).
+- The relay sees the hub token and the traffic inside the tunnel — it is a trusted
+  component, not a blind one.
+
+### 13.8 Deploying the relay
+
+`relay.Dockerfile` builds the relay from `relay/` (Go — one static binary, no runtime
+inside the image):
+
+```bash
+docker build -f relay.Dockerfile -t keystone-relay .
+docker run --rm -p 9090:9090 -e RELAY_SECRET=<secret> keystone-relay
+```
+
+Locally: `scripts/build-relay.sh` puts the binary into `build/` (`go test ./...` in
+`relay/` runs the policy and the server tests).
+
+| Variable | Meaning |
+|---|---|
+| `PORT` | the port to listen on (Railway sets it) |
+| `RELAY_SECRET` | the shared secret the hub authenticates with — **required** |
+| `RELAY_STATUS_TOKEN` | if set, the status page shows the hub ids only to whoever sends this token (`Authorization: Bearer …` or `?token=`); without it the page shows counters only. With the token the page also says **the address the app has to use** for each hub — `wss://<host>/client/<hub-id>`: a person copies an address from there, and the relay's own home page is not an address the app can talk to |
+| `RELAY_ALLOWED_ORIGINS` | comma-separated browser origins allowed to open a socket. Native clients (the hub, the phone app, the console) send no `Origin` and are always allowed; a browser is refused unless it is listed here |
+
+TLS is terminated in front of the container. The hub verifies the relay's certificate
+against the Mozilla CA bundle, so the certificate has to come from a public CA —
+the deployed relay uses a Let's Encrypt certificate for `*.up.railway.app`, and
+plain HTTP answers `301` to HTTPS.
+
+The deployed instance (29.10.2026) was checked from outside: TLS valid, HTTP
+redirects to HTTPS, the status page answered `200` with the hub ids — that page is
+now behind a token.
 
 Out of scope for v1: multiple users/roles, push
 notifications, OTA from the app (see [backlog](backlog.md#firmware-update-from-the-phone-app)).

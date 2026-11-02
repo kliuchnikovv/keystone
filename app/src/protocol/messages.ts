@@ -200,6 +200,26 @@ export interface TimersEvent {
   type: 'timers';
   timers: Timer[];
 }
+
+/** How the attempt to add a Matter device stands (the hub's Matter chip does the work). */
+export type MatterState = 'idle' | 'scanning' | 'commissioning' | 'adding' | 'done' | 'failed';
+export type MatterCode =
+  | 'ok'
+  | 'no_device'
+  | 'bad_payload'
+  | 'no_setup_hash'
+  | 'busy'
+  | 'unsupported'
+  | 'timeout'
+  | 'failed';
+export interface MatterEvent {
+  type: 'matter';
+  state: MatterState;
+  /** The device the hub produced (0 while there is none yet). */
+  entity: number;
+  code: MatterCode;
+  message: string;
+}
 /** The hub's own facts changed (location, today's sun): the whole object again. */
 export interface WifiNetwork {
   ssid: string;
@@ -328,6 +348,7 @@ export type ServerMessage =
   | RulesEvent
   | SchedulesEvent
   | TimersEvent
+  | MatterEvent
   | TimeEvent
   | HubEvent
   | HistoryPush

@@ -1,222 +1,133 @@
-// Keystone relay — remote access to the hub without anything else in the house.
+// Keystone Relay — remote access for the hub.
 //
-// The hub opens one WebSocket to this server and keeps it; a phone or browser opens another
-// and the two are paired. The relay never reads the payloads, so the hub's own token auth
-// stays end to end.
+// A hub (or a tunnel agent on the hub's LAN) dials out and registers a tunnel;
+// a remote client connects and is wired through to that hub.
 //
-//	keystone-relay --secret <shared-secret> [--port 9090] [--tls-cert cert.pem --tls-key key.pem]
+//	relay --port 9090 --secret <shared-secret>
 //
-// Same protocol as app/tools/relay-server.ts (docs/app-protocol.md §13), so a hub configured
-// against one works against the other. Single static binary, standard library only.
+// Environment:
+//
+//	PORT                    the port to listen on (a PaaS sets it)
+//	RELAY_SECRET            the shared secret the hubs authenticate with — required
+//	                        unless every hub has a secret of its own
+//	RELAY_MASTER_SECRET     the key every hub's secret is derived from: a new home
+//	                        needs nothing here, the hub carries its secret in its
+//	                        firmware and the relay derives the same value
+//	RELAY_HUB_SECRETS       "id:secret,id2:secret2" — a secret per hub, for the
+//	                        hubs that have one of their own
+//	RELAY_STATUS_TOKEN      if set, the status page shows the hub ids only to
+//	                        whoever sends this token; without it, counters only
+//	RELAY_ALLOWED_ORIGINS   comma-separated browser origins allowed to connect
+//	                        (the relay's own origin is always allowed)
+//
+// TLS is terminated in front of this process: the hub verifies the relay's
+// certificate against the Mozilla CA bundle, so the certificate has to come
+// from a public CA.
+//
+// See docs/relay-security.md for the threat model.
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
+	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
-
-	"github.com/kliuchnikovv/keystone-esp/relay/internal/ws"
 )
 
-type server struct {
-	secret       string
-	hubs         *registry
-	maxClients   int
-	pingInterval time.Duration
-	pingSlack    time.Duration
-	authTimeout  time.Duration
-	wsOpts       ws.Options
-}
-
-var logMu sync.Mutex
-
-// logf writes one line in the same shape as the Node relay (app/tools/relay-server.ts):
-// a timestamp, a tag, the message. The standard logger already stamps the time.
-func logf(tag, format string, args ...any) {
-	logMu.Lock()
-	defer logMu.Unlock()
-	log.Printf("[%s] %s", tag, fmt.Sprintf(format, args...))
-}
-
-// envOr returns the environment value for name, or def when it is unset or empty. Flags win
-// over the environment.
-func envOr(name, def string) string {
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		return v
-	}
-	return def
-}
-
 func main() {
-	var (
-		port        = flag.Int("port", 9090, "TCP port to listen on")
-		secret      = flag.String("secret", "", "shared secret the hub authenticates with (or $SECRET)")
-		tlsCert     = flag.String("tls-cert", "", "TLS certificate; serve plain ws:// without it")
-		tlsKey      = flag.String("tls-key", "", "TLS private key")
-		maxClients  = flag.Int("max-clients", 16, "backstop against a flood; the hub itself allows 3 authenticated clients and answers \"busy\"")
-		pingEvery   = flag.Duration("ping-interval", 30*time.Second, "keepalive ping interval (0 disables)")
-		authTimeout = flag.Duration("auth-timeout", 10*time.Second, "how long a tunnel has to send !auth")
-		maxMessage  = flag.Int("max-message", 1<<20, "largest accepted WebSocket message")
-		readTimeout = flag.Duration("read-timeout", 0, "drop a connection that sends nothing for this long (0 = two ping intervals + 10 s)")
-		showVersion = flag.Bool("version", false, "print the version and exit")
-	)
+	port := flag.Int("port", 0, "port to listen on (0: the PORT variable, or 9090)")
+	secret := flag.String("secret", "", "shared secret the hubs authenticate with (default: the RELAY_SECRET variable)")
+	maxClients := flag.Int("max-clients", MaxClientsPerHub, "remote clients per hub")
+	maxHubs := flag.Int("max-hubs", MaxHubs, "hubs this relay serves")
 	flag.Parse()
 
-	if *showVersion {
-		fmt.Println("keystone-relay", version)
-		return
+	listenPort := *port
+	if listenPort == 0 {
+		listenPort = 9090
+		if p := os.Getenv("PORT"); p != "" {
+			if n, err := strconv.Atoi(p); err == nil {
+				listenPort = n
+			}
+		}
 	}
 
 	sec := *secret
 	if sec == "" {
-		sec = strings.TrimSpace(os.Getenv("SECRET"))
+		sec = os.Getenv("RELAY_SECRET")
 	}
-	if sec == "" {
-		fmt.Fprintln(os.Stderr, "keystone-relay: --secret (or $SECRET) is required")
-		flag.Usage()
+	// The master key: the relay derives the secret of every hub from it, so a new
+	// home needs nothing here - the hub carries its secret in its firmware.
+	master := os.Getenv("RELAY_MASTER_SECRET")
+	// Some hubs have a secret of their own, given as a pair.
+	hubSecrets := ParseHubSecrets(os.Getenv("RELAY_HUB_SECRETS"))
+	if sec == "" && master == "" && len(hubSecrets) == 0 {
+		fmt.Fprintln(os.Stderr,
+			"relay: no secret at all. Set RELAY_MASTER_SECRET (the relay derives every "+
+				"hub's secret from it), RELAY_SECRET (one secret for every hub) or "+
+				"RELAY_HUB_SECRETS (\"id:secret,...\", one pair per hub) - without one, "+
+				"anybody could register a tunnel under your hub id.")
 		os.Exit(2)
 	}
-	if len(sec) < 16 {
-		fmt.Fprintln(os.Stderr, "keystone-relay: use a secret of at least 16 characters (openssl rand -hex 32)")
-		os.Exit(2)
-	}
-	if (*tlsCert == "") != (*tlsKey == "") {
-		fmt.Fprintln(os.Stderr, "keystone-relay: --tls-cert and --tls-key go together")
-		os.Exit(2)
+	if len(sec) < 16 && sec != "" {
+		fmt.Fprintln(os.Stderr,
+			"relay: the shared secret is short. Use at least 16 random characters — it is "+
+				"the only thing that keeps a stranger from registering a tunnel under your hub id.")
 	}
 
-	s := &server{
-		secret:       sec,
-		hubs:         newRegistry(),
-		maxClients:   *maxClients,
-		pingInterval: *pingEvery,
-		authTimeout:  *authTimeout,
-		wsOpts:       ws.Options{MaxMessage: *maxMessage, ReadTimeout: readTimeoutFor(*readTimeout, *pingEvery)},
-	}
+	statusToken := os.Getenv("RELAY_STATUS_TOKEN")
+	origins := ParseOriginAllowlist(os.Getenv("RELAY_ALLOWED_ORIGINS"))
+	r := newRelay(sec, statusToken, origins, *maxClients, *maxHubs)
+	r.setMaster(master)
+	r.setHubSecrets(hubSecrets)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/tunnel/", func(w http.ResponseWriter, r *http.Request) {
-		s.handleTunnel(w, r, pathID(r.URL.Path, "tunnel"))
-	})
-	mux.HandleFunc("/client/", func(w http.ResponseWriter, r *http.Request) {
-		s.handleClient(w, r, pathID(r.URL.Path, "client"))
-	})
-	mux.HandleFunc("/", s.statusPage)
-
-	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
+		Addr:              fmt.Sprintf("0.0.0.0:%d", listenPort),
+		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
-		// No write timeout: WebSocket connections are long-lived and idle between events.
-		ErrorLog: log.New(newLockedWriter(), "http ", 0),
 	}
 
-	scheme := "ws"
-	if *tlsCert != "" {
-		scheme = "wss"
-	}
-	logf("relay", "listening on %s (%s), max %d client(s) per hub, ping every %s",
-		addr, scheme, *maxClients, *pingEvery)
-
-	idle := make(chan struct{})
+	// Forget the counters of sources that have not failed for a while.
 	go func() {
-		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-		<-sigs
-		logf("relay", "shutting down")
-		_ = srv.Close()
-		close(idle)
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for range t.C {
+			r.limiter.Sweep(time.Now())
+		}
 	}()
 
-	var err error
-	if *tlsCert != "" {
-		cert, loadErr := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
-		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "keystone-relay: %v\n", loadErr)
-			os.Exit(1)
-		}
-		srv.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-			NextProtos:   []string{"http/1.1"},
-		}
-		err = srv.ListenAndServeTLS("", "")
-	} else {
-		err = srv.ListenAndServe()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-stop
+		r.log("relay", "shutting down")
+		_ = srv.Close()
+	}()
+
+	r.log("relay", fmt.Sprintf("listening on port %d", listenPort))
+	if master != "" {
+		r.log("relay", "master key: set (every hub's secret is derived from it)")
 	}
-	if err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "keystone-relay: %v\n", err)
+	if len(hubSecrets) > 0 {
+		r.log("relay", fmt.Sprintf("%d hub(s) with a secret of their own", len(hubSecrets)))
+	}
+	if statusToken != "" {
+		r.log("relay", "status page: token required")
+	} else {
+		r.log("relay", "status page: counters only")
+	}
+	if len(origins) > 0 {
+		r.log("relay", "browser origins allowed: "+strings.Join(origins, ", "))
+	} else {
+		r.log("relay", "browser origins allowed: none (the relay's own origin is always allowed)")
+	}
+
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintln(os.Stderr, "relay:", err)
 		os.Exit(1)
 	}
-	<-idle
 }
-
-// readTimeoutFor picks how long a connection may stay silent before it is dropped. Every
-// pong refreshes it, so it must survive one missed ping: a phone that slept through one is
-// not a dead connection. Two ping intervals + 10 s catches a peer that really went away
-// without punishing a slow one.
-func readTimeoutFor(flagValue, pingInterval time.Duration) time.Duration {
-	if flagValue > 0 {
-		return flagValue
-	}
-	if pingInterval <= 0 {
-		return 0 // keepalives off: no deadline, only the OS notices a dead socket
-	}
-	return 2*pingInterval + 10*time.Second
-}
-
-// pathID pulls "<kind>/<id>" apart and refuses anything else, so a bad path never turns into
-// an empty hub id.
-func pathID(path, kind string) string {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 2 || parts[0] != kind || parts[1] == "" {
-		return ""
-	}
-	return parts[1]
-}
-
-func (s *server) statusPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	s.hubs.mu.Lock()
-	names := make([]string, 0, len(s.hubs.hubs))
-	for id := range s.hubs.hubs {
-		names = append(names, id)
-	}
-	s.hubs.mu.Unlock()
-	sort.Strings(names)
-
-	var b strings.Builder
-	b.WriteString("Keystone Relay\n")
-	fmt.Fprintf(&b, "%d hub(s) connected\n", len(names))
-	for _, id := range names {
-		fmt.Fprintf(&b, "  %s: %d client(s)\n", id, s.hubs.get(id).clientCount())
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte(b.String()))
-}
-
-// lockedWriter keeps the relay's own lines from interleaving with net/http's.
-type lockedWriter struct{}
-
-func newLockedWriter() *lockedWriter { return &lockedWriter{} }
-
-func (*lockedWriter) Write(p []byte) (int, error) {
-	logMu.Lock()
-	defer logMu.Unlock()
-	return log.Writer().Write(p)
-}
-
-const version = "0.1.0"

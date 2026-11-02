@@ -10,7 +10,7 @@ import { Button, ErrorText, Input } from './controls';
 import { ScreenHeader } from './ScreenHeader';
 import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
 import { WifiCard } from './WifiCard';
-import { PALETTES, radius, useTheme, type PaletteId } from './theme';
+import { PALETTES, THEMES, radius, useTheme, type PaletteId } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
 function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -139,10 +139,11 @@ function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?
   return (
     <View accessibilityLabel="Appearance" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
       <Text style={[styles.h2, { color: t.text }]}>Appearance</Text>
-      <Text style={{ color: t.muted, fontSize: 13 }}>The palette the app wears. Ember is the dark glass look.</Text>
+      <Text style={{ color: t.muted, fontSize: 13 }}>The palette the app wears. Ember is the dark glass look, Paper the always-light one.</Text>
       <View style={styles.paletteRow}>
         {PALETTES.map((p) => {
           const on = p.id === palette;
+          const preview = THEMES[p.id];
           return (
             <Pressable
               key={p.id}
@@ -152,6 +153,11 @@ function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?
               onPress={() => onPalette?.(p.id)}
               style={[styles.palette, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
             >
+              <View style={styles.swatches}>
+                <View style={[styles.swatch, { backgroundColor: preview.bg, borderColor: preview.border }]} />
+                <View style={[styles.swatch, { backgroundColor: preview.card, borderColor: preview.border }]} />
+                <View style={[styles.swatch, { backgroundColor: preview.accent, borderColor: preview.accent }]} />
+              </View>
               <Text style={{ color: on ? t.accent : t.text, fontSize: 14, fontWeight: '700' }}>{p.name}</Text>
               <Text style={{ color: t.muted, fontSize: 11 }}>{p.hint}</Text>
             </Pressable>
@@ -251,4 +257,6 @@ const styles = StyleSheet.create({
   code: { fontSize: 22, fontWeight: '700', letterSpacing: 2, fontVariant: ['tabular-nums'] },
   paletteRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
   palette: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
+  swatches: { flexDirection: 'row', gap: 4, marginBottom: 6 },
+  swatch: { width: 14, height: 14, borderRadius: 7, borderWidth: 1 },
 });

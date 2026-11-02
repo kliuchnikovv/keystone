@@ -1,0 +1,9 @@
+# The build context for relay.Dockerfile is the repository root; only relay/ is
+# copied into the image, but everything else still travels to the builder.
+.git/
+build/
+build-*/
+app/node_modules/
+firmware/*/build/
+firmware/*/build-docker/
+.DS_Store

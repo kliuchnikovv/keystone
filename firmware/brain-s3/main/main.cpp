@@ -614,6 +614,20 @@ void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
   }
 }
 
+// ---- Matter commissioning ---------------------------------------------------------------------
+// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read; the Matter
+// chip (the only one with a stack that can commission anything) does the work and says how far it
+// got. That answer arrives in the UART RX task, so here it is only queued — the main loop owns the
+// cache and the clients.
+struct MatterUpdate {
+  hubproto::MatterState state = hubproto::MatterState::Idle;
+  hubproto::MatterCode code = hubproto::MatterCode::Ok;
+  std::uint16_t entity = 0;
+};
+QueueHandle_t g_matter_q = nullptr;
+// Has the Matter chip ever said anything? Without it there is nothing to commission with.
+std::atomic<bool> g_thread_seen{false};
+
 // Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
 // co-processor (chip 0x02) exposes endpoints that mirror registry entities
 // living on the Zigbee coordinator (chip 0x01). We re-emit:
@@ -627,6 +641,7 @@ void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
 void on_bus_forward(void* ctx, const hubproto::Header& h,
                     const std::uint8_t* p, std::size_t len) {
   core::Bus* bus = static_cast<core::Bus*>(ctx);
+  if (h.chip_id == kThreadChipId) g_thread_seen = true;  // the Matter chip is alive
   // Zigbee -> Matter mirror: DECLARE (so Matter can create a bridged
   // endpoint), STATE (so it can update the Matter attribute). No need to
   // mirror DECLARE_END — Matter Bridge builds endpoints incrementally as
@@ -671,6 +686,18 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     bus->publish(fwd, p, len);
     ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> Zigbee seq=%u",
              static_cast<unsigned>(h.entity_id), static_cast<unsigned>(h.seq));
+  } else if (h.type == hubproto::MsgType::MatterResult && h.chip_id == kThreadChipId) {
+    // How far the commissioning got. Queue it — the main loop owns the cache and the clients.
+    hubproto::MatterResult res{};
+    if (!hubproto::decode_matter_result(p, len, res)) {
+      ESP_LOGW(kTag, "matter: the chip sent a result of %u bytes that makes no sense",
+               static_cast<unsigned>(len));
+    } else if (g_matter_q != nullptr) {
+      const MatterUpdate u{res.state, res.code, res.entity_id};
+      if (xQueueSend(g_matter_q, &u, 0) != pdTRUE) {
+        ESP_LOGW(kTag, "matter: the result queue is full, dropping a result");
+      }
+    }
   }
 }
 
@@ -2539,7 +2566,7 @@ void start_console() {
   reg_cmd("desired", "desired [clear <id_or_name>|all] - what the hub last asked each attribute to be", &cmd_desired);
   reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
-  reg_cmd("relay", "relay [<url> <secret> | clear] - remote access tunnel to a relay server", &cmd_relay);
+  reg_cmd("relay", "relay [<secret> | <host> <secret> | clear] - remote access tunnel", &cmd_relay);
   reg_cmd("led", "led [on|off] - status LED (green=healthy, amber=degraded, red=offline)", &cmd_led);
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -2585,6 +2612,25 @@ void app_on_state(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const 
   const AppEvent e{entity, attr, v};
   if (xQueueSend(g_app_ev_q, &e, 0) != pdTRUE) g_app_resync = true;  // clients resync, no gap recovery needed
 }
+
+// How the last attempt to add a Matter device stands. The main loop owns it: the chip's answer
+// arrives in the UART task (queued) and the app asks for it (`matter.status`) or hears about it
+// (the `matter` push).
+struct MatterStatus {
+  hubproto::MatterState state = hubproto::MatterState::Idle;
+  hubproto::MatterCode code = hubproto::MatterCode::Ok;
+  std::uint16_t entity = 0;
+  std::uint32_t deadline_ms = 0;  // when the attempt is given up on (0: nothing running)
+};
+MatterStatus g_matter;
+
+// Has the Matter chip ever answered a MatterPair? A chip that is alive but silent
+// has no commissioner — then a second attempt is refused right away instead of
+// making the app wait another minute.
+bool g_matter_cannot = false;
+
+// How long the hub waits for the Matter chip to say something before it gives up.
+constexpr std::uint32_t kMatterTimeoutMs = 60000;
 
 // Commands in flight on behalf of a client: CMD_ACK (any task) -> `ack` frame.
 struct AppPending {
@@ -3193,6 +3239,61 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
                                      kZigbeeChipId);
     o = cm.out;
     if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
+  } else if (!std::strcmp(op, "matter.commission")) {
+    // The bytes the phone read from a Matter device over Bluetooth. The phone does not
+    // interpret them any further — the Matter chip is the only one with a stack that can
+    // commission anything — so they go there, and the chip says how far it got.
+    const core::app::MatterRequest mreq = core::app::matter_commission_parse(reader, m.args);
+    o = mreq.out;
+    if (o.ok && !g_thread_seen) {
+      o = Outcome::fail(Err::Unsupported, "the hub has no Matter chip");
+    } else if (o.ok && g_matter_cannot) {
+      // The chip is alive and never answered the last time — it has no commissioner.
+      o = Outcome::fail(Err::Unsupported, "this hub's Matter chip cannot add Matter devices");
+    }
+    if (o.ok) {
+      std::uint8_t payload[hubproto::kMatterPairHeader + hubproto::kMatterMaxPayload] = {};
+      const auto enc =
+          hubproto::encode_matter_pair(mreq.kind, mreq.bytes, mreq.len, payload, sizeof(payload));
+      if (!enc.ok) {
+        o = Outcome::fail(Err::Internal, "the payload does not fit");
+      } else {
+        hubproto::Header h{};
+        h.version = hubproto::kProtocolVersion;
+        h.type = hubproto::MsgType::MatterPair;
+        h.chip_id = kThreadChipId;
+        bus.publish(h, payload, enc.len);
+        g_matter.state = hubproto::MatterState::Scanning;
+        g_matter.code = hubproto::MatterCode::Ok;
+        g_matter.entity = 0;
+        g_matter.deadline_ms = now + kMatterTimeoutMs;
+        ESP_LOGI(kTag, "app: matter.commission kind=%u %u byte(s) -> chip 0x%02x",
+                 static_cast<unsigned>(mreq.kind), static_cast<unsigned>(mreq.len),
+                 static_cast<unsigned>(kThreadChipId));
+        // The answer says the bytes were handed over — how the attempt goes is reported
+        // by the `matter` push, not here.
+        static char mb[64];
+        core::JsonWriter mw(mb, sizeof(mb));
+        mw.begin_object().kv("type", "res").kv("id", static_cast<std::int64_t>(in.id)).kv("ok", true)
+            .key("result").begin_object().kv("state", "started").end_object().end_object();
+        if (mw.ok()) {
+          hub_send(in.fd, mb, mw.size());
+          return;
+        }
+        o = Outcome::fail(Err::Internal, "matter reply too large");
+      }
+    }
+  } else if (!std::strcmp(op, "matter.status")) {
+    // A result of its own shape: sent right away.
+    static char mb[256];
+    core::JsonWriter mw(mb, sizeof(mb));
+    core::app::encode_res_ok_matter(mw, in.id, g_matter.state, g_matter.entity, g_matter.code,
+                                     core::app::matter_message(g_matter.state, g_matter.code));
+    if (mw.ok()) {
+      hub_send(in.fd, mb, mw.size());
+      return;
+    }
+    o = Outcome::fail(Err::Internal, "matter status too large");
   } else if (!std::strcmp(op, "ota.start")) {
     // Update a co-processor over the UART link, exactly as the `ota` console command does.
     core::app::OtaRequest ota_req;
@@ -3519,15 +3620,26 @@ int cmd_relay(int argc, char** argv) {
     printf("relay credentials erased; tunnel stopped\n");
     return 0;
   }
-  if (argc != 3) {
+  // relay <secret>          — default host
+  // relay <host> <secret>   — custom host
+  if (argc > 3) {
     printf("usage:\n"
            "  relay                          show status\n"
-           "  relay <url> <secret>           save credentials and connect\n"
-           "  relay clear                    disconnect and erase credentials\n"
-           "  url example: wss://relay.example.com:9090/tunnel/my-hub\n");
+           "  relay <secret>                 connect to %s\n"
+           "  relay <host> <secret>          connect to a custom relay\n"
+           "  relay clear                    disconnect and erase credentials\n",
+           relay::default_host());
     return 1;
   }
-  if (!relay::configure(argv[1], argv[2])) {
+  const char* host = argc == 3 ? argv[1] : nullptr;
+  const char* sec = argc == 3 ? argv[2] : argv[1];
+  char url[256];
+  const int n = relay::build_url(url, sizeof(url), host, nullptr);
+  if (n < 0 || static_cast<std::size_t>(n) >= sizeof(url)) {
+    printf("relay host too long\n");
+    return 1;
+  }
+  if (!relay::configure(url, sec)) {
     printf("bad relay credentials\n");
     return 1;
   }
@@ -3535,7 +3647,7 @@ int cmd_relay(int argc, char** argv) {
   const bool have = restore_webtoken(tok, sizeof(tok));
   if (relay::running()) relay::stop();
   if (relay::start(have ? tok : nullptr, &app_hub_info)) {
-    printf("relay configured and connecting to %s\n", argv[1]);
+    printf("relay configured and connecting to %s\n", url);
   } else {
     printf("relay configured but could not start (will retry on next boot)\n");
   }
@@ -3871,6 +3983,7 @@ extern "C" void app_main(void) {
   // server itself (only when a token has been set with `webtoken`).
   g_app_ev_q = xQueueCreate(32, sizeof(AppEvent));
   g_dev_ota_q = xQueueCreate(16, sizeof(DevOtaEvent));
+  g_matter_q = xQueueCreate(8, sizeof(MatterUpdate));
   g_app_pending_mu = xSemaphoreCreateMutex();
   {
     char tok[core::app::kMaxToken + 1] = {};
@@ -4101,6 +4214,45 @@ extern "C" void app_main(void) {
         core::app::encode_device_ota(w, de.entity, dev_ota_phase_name(de.phase),
                                      dev_ota_status_name(de.status), de.percent);
         if (w.ok()) hub_broadcast(b, w.size());
+      }
+      // What the Matter chip said about the attempt to add a device — and what the app hears.
+      {
+        MatterUpdate mu;
+        bool moved = false;
+        while (g_matter_q != nullptr && xQueueReceive(g_matter_q, &mu, 0) == pdTRUE) {
+          g_matter.state = mu.state;
+          g_matter.code = mu.code;
+          g_matter.entity = mu.entity;
+          if (mu.state == hubproto::MatterState::Done || mu.state == hubproto::MatterState::Failed) {
+            g_matter.deadline_ms = 0;  // it is over, one way or another
+          }
+          moved = true;
+        }
+        // The chip went quiet: the attempt is given up on, so the app is not left waiting.
+        if (!moved && g_matter.deadline_ms != 0 &&
+            static_cast<std::int32_t>(t - g_matter.deadline_ms) >= 0) {
+          const auto* ti = g_monitor != nullptr ? g_monitor->info(kThreadChipId) : nullptr;
+          const bool chip_alive = ti != nullptr && !ti->silent;
+          if (chip_alive) g_matter_cannot = true;
+          g_matter.state = hubproto::MatterState::Failed;
+          g_matter.code = chip_alive ? hubproto::MatterCode::Unsupported : hubproto::MatterCode::Timeout;
+          g_matter.entity = 0;
+          g_matter.deadline_ms = 0;
+          moved = true;
+          ESP_LOGW(kTag, "matter: the chip did not answer (chip alive: %s)",
+                   chip_alive ? "yes" : "no");
+        }
+        if (moved) {
+          ESP_LOGI(kTag, "matter: %s (%s), entity 0x%04x", core::app::matter_state_name(g_matter.state),
+                   core::app::matter_code_name(g_matter.code), static_cast<unsigned>(g_matter.entity));
+          if (hub_client_count() > 0) {
+            char b[192];
+            core::JsonWriter w(b, sizeof(b));
+            core::app::encode_matter_event(w, g_matter.state, g_matter.entity, g_matter.code,
+                                            core::app::matter_message(g_matter.state, g_matter.code));
+            if (w.ok()) hub_broadcast(b, w.size());
+          }
+        }
       }
       history_push(scene_store, t);
       mdns_sync();

@@ -26,6 +26,8 @@ bool is_known_type(std::uint8_t t) noexcept {
     case MsgType::DevOtaChunk:
     case MsgType::DevOtaEnd:
     case MsgType::DevOtaStatus:
+    case MsgType::MatterPair:
+    case MsgType::MatterResult:
       return true;
   }
   return false;

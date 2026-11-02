@@ -7,7 +7,7 @@ import type { PaletteId } from './ui/theme';
 const KEY = 'keystone.palette';
 
 export function isPaletteId(v: unknown): v is PaletteId {
-  return v === 'sandstone' || v === 'ember';
+  return v === 'sandstone' || v === 'ember' || v === 'paper';
 }
 
 export function createPaletteStore(kv: KeyValueStore) {
