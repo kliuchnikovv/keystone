@@ -120,12 +120,12 @@ describe('which devices can be updated', () => {
   };
 
   it('only a device on the Zigbee chip gets the item', async () => {
-    render(<DevicesScreen home={home} commands={noCommands} />);
+    render(<DevicesScreen home={home} commands={noCommands} onFindDevices={() => {}} />);
     await longPress(screen.getByLabelText('Device lamp'));
     expect(await screen.findByLabelText('Update firmware lamp')).toBeTruthy();
     cleanup();
 
-    render(<DevicesScreen home={home} commands={noCommands} />);
+    render(<DevicesScreen home={home} commands={noCommands} onFindDevices={() => {}} />);
     await longPress(screen.getByLabelText('Device matter lamp'));
     await screen.findByLabelText('Rename matter lamp');
     expect(screen.queryByLabelText('Update firmware matter lamp')).toBeNull();

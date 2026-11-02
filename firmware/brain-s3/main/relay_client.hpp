@@ -13,7 +13,8 @@
 //
 // Console:
 //   relay                              show status
-//   relay <url> <secret>               save credentials to NVS, connect
+//   relay <secret>                     connect to the default relay
+//   relay <host> <secret>              connect to a custom relay
 //   relay clear                        disconnect, erase NVS credentials
 #pragma once
 
@@ -43,6 +44,12 @@ bool configured_url(char* out, std::size_t cap);
 const char* baked_host();
 const char* baked_id();
 const char* baked_secret();
+
+const char* default_host();
+const char* default_id();
+// Build "wss://<host>/tunnel/<id>". Null/empty host → the default relay,
+// null/empty id → "home". Returns snprintf result (< 0 or >= cap on overflow).
+int build_url(char* out, std::size_t cap, const char* host, const char* id);
 
 bool start(const char* token, HubInfoFn info);
 void stop();

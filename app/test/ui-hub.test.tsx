@@ -55,13 +55,14 @@ describe('the hub tab', () => {
   it('sets up a relay and takes it away again', async () => {
     await openHub();
     click('Set up relay');
-    await screen.findByLabelText('Relay URL');
-    type('Relay URL', 'https://relay.example.com');
+    await screen.findByLabelText('Relay server');
+    type('Relay server', 'relay.example.com');
+    type('Hub ID', 'myhub');
     // The secret is only for a relay the person runs themselves.
     click('I run my own relay');
     type('Secret', 'shared-secret');
     click('Save');
-    await waitFor(() => expect(screen.getByText('https://relay.example.com')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('wss://relay.example.com/tunnel/myhub')).toBeTruthy());
     click('Remove relay');
     await waitFor(() => expect(screen.getByText('not set up')).toBeTruthy());
   });
@@ -70,8 +71,9 @@ describe('the hub tab', () => {
     const used: string[] = [];
     await openHub({ onUseRelay: (u) => used.push(u) });
     click('Set up relay');
-    await screen.findByLabelText('Relay URL');
-    type('Relay URL', 'wss://relay.example.com/tunnel/home');
+    await screen.findByLabelText('Relay server');
+    type('Relay server', 'relay.example.com');
+    type('Hub ID', 'home');
     click('Save');
     // The hub's own address ends in /tunnel/, the app's one in /client/.
     await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());
@@ -82,8 +84,9 @@ describe('the hub tab', () => {
   it('sets up a relay without a secret — the hub uses the one in its firmware', async () => {
     await openHub();
     click('Set up relay');
-    await screen.findByLabelText('Relay URL');
-    type('Relay URL', 'wss://relay.example.com/tunnel/home');
+    await screen.findByLabelText('Relay server');
+    type('Relay server', 'relay.example.com');
+    type('Hub ID', 'home');
     // No secret: the person who received the box never types one.
     click('Save');
     await waitFor(() => expect(screen.getByText('wss://relay.example.com/client/home')).toBeTruthy());

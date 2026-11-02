@@ -6,7 +6,7 @@ import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import type { HubConnection } from '../hooks/useHub';
 import type { HomeState } from '../protocol/store';
-import { relayClientUrl } from '../settings';
+import { DEFAULT_RELAY_HOST, relayClientUrl, relayTunnelUrlFromParts } from '../settings';
 import { Button, ErrorText, Input } from './controls';
 import { ConfirmDialog, Sheet } from './Sheet';
 import { radius, useTheme } from './theme';
@@ -138,7 +138,8 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
   const [info, setInfo] = useState<{ token: string; fingerprint: string; remote: boolean; relay_url: string } | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [open, setOpen] = useState(false);
-  const [url, setUrl] = useState('');
+  const [relayHost, setRelayHost] = useState(DEFAULT_RELAY_HOST);
+  const [relayId, setRelayId] = useState('');
   const [secret, setSecret] = useState('');
   // The secret is only needed for a relay the person runs themselves. Our relay
   // knows the hub already, so the field stays out of the way until it is asked for.
@@ -167,15 +168,15 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
 
   const setRelay = async () => {
     setError(null);
+    const tunnelUrl = relayTunnelUrlFromParts(relayHost.trim(), relayId.trim());
     const trimmed = secret.trim();
-    // The secret is optional: a hub that was flashed with a secret of its own uses
-    // the one in its firmware, and the person who received the box never types one.
-    const args: { url: string; secret?: string } = { url: url.trim() };
+    const args: { url: string; secret?: string } = { url: tunnelUrl };
     if (trimmed) args.secret = trimmed;
     const r = await commands.request('access.relay.set', args);
     if (r === null) return;
     setOpen(false);
-    setUrl('');
+    setRelayHost(DEFAULT_RELAY_HOST);
+    setRelayId('');
     setSecret('');
     await load();
     commands.notify('The hub now uses this relay. Connect through it below.');
@@ -254,7 +255,11 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
           size="compact"
           label={info?.relay_url ? 'Change relay' : 'Set up relay'}
           onPress={() => {
-            setUrl(info?.relay_url ?? '');
+            const ru = info?.relay_url ?? '';
+            const hm = ru.match(/^wss:\/\/([^/]+)\/tunnel\//i);
+            const im = ru.match(/\/tunnel\/([^\s/]+)\s*$/i);
+            setRelayHost(hm?.[1] ?? DEFAULT_RELAY_HOST);
+            setRelayId(im?.[1] ?? '');
             setSecret('');
             setShowSecret(false);
             setOpen(true);
@@ -274,8 +279,10 @@ export function AccessCard({ client, commands, onTokenChange, onUseRelay }: { cl
         <Text style={{ color: t.muted, fontSize: 13, marginTop: 4 }}>
           The hub keeps a tunnel to a relay server; the app talks to it through there.
         </Text>
-        <Text style={[styles.label, { color: t.muted }]}>Relay URL</Text>
-        <Input label="Relay URL" value={url} onChangeText={setUrl} placeholder="wss://relay.example.com:9090/tunnel/my-hub" keyboardType="url" />
+        <Text style={[styles.label, { color: t.muted }]}>Relay server</Text>
+        <Input label="Relay server" value={relayHost} onChangeText={setRelayHost} placeholder={DEFAULT_RELAY_HOST} keyboardType="url" />
+        <Text style={[styles.label, { color: t.muted }]}>Hub ID</Text>
+        <Input label="Hub ID" value={relayId} onChangeText={setRelayId} placeholder="e.g. home" />
         {showSecret ? (
           <>
             <Text style={[styles.label, { color: t.muted }]}>Secret</Text>
