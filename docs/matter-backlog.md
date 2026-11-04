@@ -230,6 +230,60 @@ does not have a name for):
   variant of the S3-Zero** (the Waveshare S3FH4R2 is 4 MB; a plain S3 module
   with 8 MB keeps the same pinout and PSRAM).
 
+**Flashed and booted on the real brain-s3 04.11.2026 (commit `2ca3ab7`, with
+the console command `matter_pair`).** The *runtime* RAM picture turned out to
+be worse than the linker map said — the static gate had slack, but the live
+heap did not:
+
+```
+I (660) heap_init: At 3FCDA330 len 0000F3E0 (60 KiB): RAM
+I (661) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (661) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (799) matter: heap before bringup: 39135 B internal
+I (829) BLE_INIT: Malloc failed
+E (829) BLE_INIT: esp_bt_controller_init -4
+E (829) chip[DL]: Disabling CHIPoBLE service due to error: b
+I (1949) matter: controller up: heap 1939 B (-37196 B), psram free 2045172 B
+Guru Meditation Error: Core 0 panic'ed (LoadProhibited).  → crash-loop
+```
+
+What that says:
+
+- internal RAM is handed out as **three non-contiguous pools** (60 + 21 + 32 KB),
+  not one. The BLE controller (`libbtdm_app.a`) asks for its ~30 KB of HCI/LLCP
+  buffers as a **single contiguous block from internal RAM**, and no pool is
+  big enough once the brain's own startup has run. `BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL`
+  only moves the NimBLE **host**; there is a separate knob for the controller
+  (`CONFIG_BT_CTRL_HCI_...`, undocumented in esp-matter) that we did not set.
+- `esp_matter::start()` itself consumes 37 KB of what little internal heap
+  remained (nvs opens, mDNS tables, Operational-Credentials storage, test DAC,
+  CASE server setup) and leaves **1939 B of internal RAM live** before
+  anything else wakes up. Matter does bring up (fabric 0x2 is retrieved, CASE
+  server enables, operational node is advertised on mDNS), but there is
+  nothing left for the first scheduled task that wants internal memory, so
+  the brain panics in under a second.
+
+**Verdict: option A does not cross even the PASE step on this hardware** —
+the BLE radio never comes up. The brain reverted cleanly to its PlatformIO
+image (1.37 MB, no Matter) and runs normally; nothing in NVS or Zigbee state
+was affected. Options to try before giving up on F5:
+
+- **Move the BLE controller allocations to PSRAM** (`CONFIG_BT_CTRL_HCI_TL_MODE`,
+  `CONFIG_BT_CTRL_HCI_SERIAL_MODE`, or the newer `BT_CONTROLLER_HOST_HEAP`
+  knobs; esp-matter examples/controller does not use them, so some digging in
+  IDF Bluetooth config is required). If any of those takes the 30 KB demand
+  out of internal RAM, the gate reopens.
+- **Shrink the brain's own startup footprint.** The relay client's 1-KB
+  outbound queue, the websocket server's per-client buffers (3 clients × a few
+  KB each), the status-LED LED-strip RMT buffers all sit in internal RAM.
+  Tagging them with `EXT_RAM_BSS_ATTR` or allocating them via `heap_caps_malloc(MALLOC_CAP_SPIRAM)`
+  should give back more than 30 KB.
+- **F5' (8 MB S3)** does not help this one — internal RAM is the chip's, not
+  the module's. PSRAM capacity would need to grow (it is already enough).
+
+The CASE-session heap number is still unmeasured, but that is now behind the
+BLE and panic gates and depends on their fix first.
+
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person
 adds it to Apple Home with the Home app) needs no chip work at all.
