@@ -8,6 +8,14 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # 4 MB flash (this board).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
+# Custom partition table — two OTA slots of 1.92 MB each.
+# PlatformIO picks the table from `board_build.partitions = partitions.csv` in
+# platformio.ini; plain idf.py (Docker build via scripts/matter-build.sh) needs
+# the CUSTOM switch explicitly.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
 # Compile in DEBUG log statements so the console `log on` command can enable
 # them at runtime. Default log level stays at INFO (quiet by default).
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
