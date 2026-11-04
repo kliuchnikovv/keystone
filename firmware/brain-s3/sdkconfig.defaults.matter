@@ -25,14 +25,19 @@ CONFIG_USE_BLE_ONLY_FOR_COMMISSIONING=n
 # Matter needs HKDF.
 CONFIG_MBEDTLS_HKDF_C=y
 
-# LwIP / IPv6: Matter uses link-local + ULA per fabric. The vendor example
-# raises the ULA count. The brain already has CONFIG_LWIP_IPV6=y.
+# LwIP / IPv6: Matter uses link-local + ULA per fabric. The brain already has
+# CONFIG_LWIP_IPV6=y. The address count is one ULA per fabric + a link-local.
+# The controller vendor example wrote 12 in the main defaults and then 6 lower
+# down — the 6-address override is what actually lands. We stay at 6 (fits 5
+# fabrics + 1 LL) so the static BSS of lwip netif stays small.
 CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
 CONFIG_LWIP_HOOK_ND6_GET_GW_DEFAULT=y
 CONFIG_LWIP_IPV6_AUTOCONFIG=y
-CONFIG_LWIP_IPV6_NUM_ADDRESSES=12
-# A controller needs more UDP endpoints for CASE sessions.
-CONFIG_NUM_UDP_ENDPOINTS=16
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=6
+# A controller normally needs more UDP endpoints for CASE sessions, but 8 is
+# enough for a single-user hub (one commissioning session + a few open fabrics)
+# and halves the UDP PCB BSS vs the vendor's default of 16.
+CONFIG_NUM_UDP_ENDPOINTS=8
 
 # CHIP task stack. The brain's own main task is already at 8192 (its own
 # sdkconfig.defaults); the controller example keeps it at 10240.

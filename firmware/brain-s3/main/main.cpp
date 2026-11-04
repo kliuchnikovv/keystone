@@ -76,6 +76,7 @@
 #include "core/wifi_policy.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "app_server.hpp"
 #include "core/app_protocol.hpp"
 #include "core/zcl_profile.hpp"
@@ -95,6 +96,14 @@
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
 #include "hubproto/version.hpp"
+
+// experiment/commissioner-on-s3: when the Docker build links esp_matter in,
+// brain-s3 also runs the Matter controller (CASE/PASE + BLE commissioner).
+// PlatformIO builds without KEYSTONE_HAVE_MATTER and skips all of this.
+#ifdef KEYSTONE_HAVE_MATTER
+#include <esp_matter.h>
+#include <esp_matter_controller_client.h>
+#endif
 
 #ifdef KEYSTONE_HAVE_TLS
 // The setup code lives in the generated hub_identity.cpp (scripts/gen-hub-cert.sh). An identity made before
@@ -407,7 +416,13 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // Event here. The ring answers the app's `history` and the console's `events`; another sink (a flash
 // file, the SD recorder) would join the fanout. Producers run in the UART RX tasks and the main loop,
 // readers in the main loop and the console task, hence the mutex.
-core::EventRing<256> g_ev_ring;
+// The ring is ~6 KB of `Event buf_[256]` — plain POD under a virtual-table
+// pointer. `EXT_RAM_BSS_ATTR` moves it to .ext_ram.bss (PSRAM), freeing that
+// much internal DRAM. Required by experiment/commissioner-on-s3 to fit the
+// Matter controller's static BSS alongside the brain's. With PSRAM off
+// (CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=n) the attribute is empty, so
+// the brain still builds and runs — the ring simply stays in internal DRAM.
+EXT_RAM_BSS_ATTR core::EventRing<256> g_ev_ring;
 core::EventFanout<4> g_ev_out;
 core::StateDedup<64> g_ev_state_seen;  // a restarted chip re-reports what has not changed: not news
 core::ChipEventGate g_ev_chip_gate;    // a crash loop must not fill the ring with "rebooted"
@@ -3848,6 +3863,48 @@ const char* reset_reason_text(esp_reset_reason_t r) {
   }
 }
 
+#ifdef KEYSTONE_HAVE_MATTER
+// Minimal event callback — same shape as the vendor controller example
+// (ChipDeviceEvent + intptr_t). We don't act on events yet; the hook exists so
+// esp_matter::start() has something to call.
+static void matter_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event,
+                            intptr_t /*arg*/) {
+  (void)event;
+}
+
+// Bring up the Matter stack and the controller/commissioner. Called once from
+// app_main() after WiFi/NVS are ready. The controller's own BLE + CHIP tasks
+// start here; UDP listen port 5580 is Matter's default secure-session port.
+// Fabric 1 / node 112233 are placeholder admin credentials (test DAC); the
+// production path will mint per-hub credentials later, see docs/matter-backlog.md §6.
+static void matter_bringup() {
+  const std::size_t heap_before =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGI("matter", "heap before bringup: %u B internal",
+           static_cast<unsigned>(heap_before));
+
+  esp_err_t err = esp_matter::start(&matter_event_cb);
+  if (err != ESP_OK) {
+    ESP_LOGE("matter", "esp_matter::start failed: %d", err);
+    return;
+  }
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    auto &client = esp_matter::controller::matter_controller_client::get_instance();
+    client.init(/*node_id=*/112233, /*fabric_id=*/1, /*udp_port=*/5580);
+    client.setup_commissioner();
+  }
+
+  const std::size_t heap_after =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGI("matter",
+           "controller up: heap %u B (-%d B), psram free %u B",
+           static_cast<unsigned>(heap_after),
+           static_cast<int>(heap_before) - static_cast<int>(heap_after),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -3855,6 +3912,12 @@ extern "C" void app_main(void) {
 
   // Инициализация Wi-Fi
   wifi_init();
+
+#ifdef KEYSTONE_HAVE_MATTER
+  // experiment/commissioner-on-s3: bring up the Matter controller/commissioner
+  // right after NVS + netif + WiFi are ready. The stack owns BLE on its own.
+  matter_bringup();
+#endif
 
   // Event history first: everything below may emit.
   g_ev_mu = xSemaphoreCreateMutex();
