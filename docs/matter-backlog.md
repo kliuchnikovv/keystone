@@ -194,6 +194,42 @@ to a bridge that already takes 190 KB. Two ways to change that verdict:
 - **F2 — a second C6 as a controller-only node**: the ~250 KB is then not
   shared with the bridge, but that node needs its own Thread path.
 
+**Measured on the Linux dev box 04.11.2026 (branch `experiment/commissioner-on-s3`
+commit `a11c223`).** The static DRAM was measurable on this machine because
+Docker + the esp-matter image are here, so the same gate that could not be run
+on the Mac was run and gives real numbers for the **S3** path (F5 — commissioner
+on brain-s3, not on the C6):
+
+| what | bytes | note |
+|---|---|---|
+| S3 internal DRAM (`dram0_0_seg`) | 341 760 (334 KB) | after the boot ROM reservations |
+| brain (pre-Matter) static DRAM | 165 723 | `.bss` 57 312 + `.text` 78 519 + `.data` 29 892 (commit `63bf9c1`) |
+| with the controller called | 336 451 | `.bss` 209 584 + `.text` 101 991 + `.data` 24 876 |
+| controller's own static cost | **+170 728** | almost all of it `.bss`: fabric table, session manager, DNS-SD caches, ACL |
+| DRAM left after the call | 5 309 B | the slack for DMA / ISR / things that must be internal |
+| flash image | 1 945 880 (1.86 MB) | 20 KB free in the 1.92 MB OTA slot |
+| flash cost of the controller | +685 KB | `.text` 856 → 1407 KB (+551), `.rodata` 279 → 395 KB (+115) |
+
+What this means for F5 (commissioner on brain-s3 — the one the F-list above
+does not have a name for):
+
+- **RAM gate: cleared, barely.** The controller's ~170 KB static BSS does
+  fit, but only after `EXT_RAM_BSS_ATTR` on `g_ev_ring` moved 6 KB of our own
+  BSS to PSRAM — that is what turned a 992-byte overflow into 5 309 B of
+  slack. Heap during a live CASE session is still not measured (no device
+  connected). The ~250 KB "controller heap budget" the F-list mentioned now
+  lives in PSRAM via `CONFIG_ESP_MATTER_MEM_ALLOC_MODE_EXTERNAL` +
+  `MBEDTLS_EXTERNAL_MEM_ALLOC` + `BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL`; the 5 KB
+  internal slack is only for allocations that refuse PSRAM.
+- **Flash gate: tight.** 20 KB free in a 1.92 MB OTA slot. Adding the real
+  pairing path (QR decode, the Rendezvous state machine, UDC, Zigbee→Matter
+  mirroring on this chip) will not fit the current slot. Choices then are
+  **F1'** — shrink the brain image (some application state can move to PSRAM
+  the same way `g_ev_ring` did, and the status LED / relay client / websocket
+  console paths each carry their own tables) — or **F5' — go to an 8 MB flash
+  variant of the S3-Zero** (the Waveshare S3FH4R2 is 4 MB; a plain S3 module
+  with 8 MB keeps the same pinout and PSRAM).
+
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person
 adds it to Apple Home with the Home app) needs no chip work at all.
