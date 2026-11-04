@@ -103,6 +103,7 @@
 #ifdef KEYSTONE_HAVE_MATTER
 #include <esp_matter.h>
 #include <esp_matter_controller_client.h>
+#include <esp_matter_controller_pairing_command.h>
 #endif
 
 #ifdef KEYSTONE_HAVE_TLS
@@ -2528,6 +2529,43 @@ int cmd_led(int argc, char** argv) {
   return 1;
 }
 
+#ifdef KEYSTONE_HAVE_MATTER
+// experiment/commissioner-on-s3: minimal entry point to drive the Matter
+// controller. `matter_pair <node_id> <setup-code>` hands the setup payload
+// (manual pairing code or the MT: QR text) to esp_matter_controller. The
+// controller starts BLE discovery + PASE; for a Thread device (TIMMERFLOTTE)
+// there is no Thread transport on brain-s3 and no dataset to hand over, so the
+// commissioning will fail AFTER PASE at the network step — that is the point
+// of this test (docs/matter-backlog.md §3, option A). The log will show
+// whether SPAKE2+ with a real Matter device worked at all.
+int cmd_matter_pair(int argc, char** argv) {
+  if (argc != 3) {
+    printf("usage: matter_pair <node_id> <setup-code>\n"
+           "  node_id:    decimal, the id you assign in our fabric (any >1)\n"
+           "  setup-code: 11-digit manual code (\"12345678901\") or QR payload (\"MT:...\")\n");
+    return 1;
+  }
+  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  if (node_id < 2) {
+    printf("node_id must be >= 2 (1 is reserved for the commissioner itself)\n");
+    return 1;
+  }
+  printf("matter: pairing node 0x%016llx with code '%s'\n",
+         static_cast<unsigned long long>(node_id), argv[2]);
+  esp_err_t err;
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    err = esp_matter::controller::pairing_code(node_id, argv[2]);
+  }
+  if (err != ESP_OK) {
+    printf("matter: pairing_code returned %d (commissioning did not start)\n", err);
+    return 1;
+  }
+  printf("matter: commissioning started; watch the log for PASE/CASE progress\n");
+  return 0;
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
   c.command = name;
@@ -2583,6 +2621,11 @@ void start_console() {
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
   reg_cmd("relay", "relay [<secret> | <host> <secret> | clear] - remote access tunnel", &cmd_relay);
   reg_cmd("led", "led [on|off] - status LED (green=healthy, amber=degraded, red=offline)", &cmd_led);
+#ifdef KEYSTONE_HAVE_MATTER
+  reg_cmd("matter_pair",
+          "matter_pair <node_id> <setup-code> - try to commission a Matter device from the hub",
+          &cmd_matter_pair);
+#endif
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }
