@@ -52,6 +52,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_console.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -74,6 +75,7 @@
 #include "core/sun.hpp"
 #include "core/setup_mode.hpp"
 #include "core/wifi_policy.hpp"
+#include "matter_paa.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_attr.h"
@@ -266,9 +268,12 @@ static bool wifi_current(char* ssid, std::size_t ssid_cap, int& rssi, char* ip, 
     return true;
 }
 
-// Функция для инициализации WiFi
-static void wifi_init(void) {
-    // Инициализация NVS Flash
+// Phase 1: NVS + netif + default event loop + default STA/AP netifs. Cheap
+// — none of this allocates the big Wi-Fi driver buffers. Split out of
+// wifi_init() so matter_bringup() can run between the two phases: that way
+// the BLE controller's ~30 KB contiguous allocation competes with Wi-Fi only
+// once, not twice (docs/matter-backlog.md §3, step 1a of the R3 path).
+static void wifi_bootstrap(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -276,19 +281,23 @@ static void wifi_init(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    // Инициализация TCP/IP стека
     ESP_ERROR_CHECK(esp_netif_init());
-    // Создание default event loop
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Создание default Wi-Fi station
     esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
     esp_netif_set_hostname(sta_netif, kHubHostname);
     esp_netif_create_default_wifi_ap();  // only used while the setup access point is up
+}
 
-    // Конфигурация Wi-Fi
+// Phase 2: Wi-Fi driver init/config/start. On the Matter build, esp_matter::start()
+// already called esp_wifi_init() and esp_wifi_start() internally; we skip both
+// and only apply our own credentials + event handlers on top. On PlatformIO
+// (no Matter) this phase does the full init itself.
+static void wifi_start_driver(void) {
+#ifndef KEYSTONE_HAVE_MATTER
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+#endif
     // Our own NVS key is the single source of truth, not the driver's copy (a trial must not stick).
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
@@ -297,7 +306,6 @@ static void wifi_init(void) {
                                         .skip_unhandled_events = true};
     ESP_ERROR_CHECK(esp_timer_create(&ta, &s_wifi_retry));
 
-    // Регистрация обработчика событий WiFi
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
@@ -310,7 +318,10 @@ static void wifi_init(void) {
         std::strncpy(creds.pass, KEYSTONE_WIFI_PASSWORD, sizeof(creds.pass) - 1);
         source = "built-in default";
     }
+#ifndef KEYSTONE_HAVE_MATTER
+    // Matter sets STA mode itself when it starts the Wi-Fi stack.
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#endif
     if (creds.ssid[0] != '\0') {
         wifi_config_t wc = {};
         std::strncpy(reinterpret_cast<char*>(wc.sta.ssid), creds.ssid, sizeof(wc.sta.ssid) - 1);
@@ -323,7 +334,15 @@ static void wifi_init(void) {
     } else {
         ESP_LOGW(kTag, "Wi-Fi: no credentials yet; use `wifi_join <ssid> <password>`");
     }
+#ifdef KEYSTONE_HAVE_MATTER
+    // Matter already called esp_wifi_start() during esp_matter::start(); calling
+    // it again returns ESP_ERR_WIFI_NOT_INIT or similar. Just connect with our creds.
+    if (creds.ssid[0] != '\0') {
+      (void)esp_wifi_connect();  // first attempt; event handler will retry on failure
+    }
+#else
     ESP_ERROR_CHECK(esp_wifi_start());
+#endif
 }
 
 // UART1 = Zigbee coordinator (chip 0x01).
@@ -418,12 +437,17 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // file, the SD recorder) would join the fanout. Producers run in the UART RX tasks and the main loop,
 // readers in the main loop and the console task, hence the mutex.
 // The ring is ~6 KB of `Event buf_[256]` — plain POD under a virtual-table
-// pointer. `EXT_RAM_BSS_ATTR` moves it to .ext_ram.bss (PSRAM), freeing that
-// much internal DRAM. Required by experiment/commissioner-on-s3 to fit the
-// Matter controller's static BSS alongside the brain's. With PSRAM off
-// (CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=n) the attribute is empty, so
-// the brain still builds and runs — the ring simply stays in internal DRAM.
-EXT_RAM_BSS_ATTR core::EventRing<256> g_ev_ring;
+// pointer. It deliberately stays in internal DRAM instead of
+// `EXT_RAM_BSS_ATTR` (.ext_ram.bss = PSRAM): `EventRing` is polymorphic, and
+// a namespace-scope object whose constructor is constexpr-able is
+// *constant-initialised* by GCC — the vtable pointer is written into the
+// object's own section. .ext_ram.bss is a NOLOAD section (zeroed at boot, no
+// image), so that constant never reaches RAM: the vptr stays 0 and the first
+// virtual call faults (LoadProhibited at 0x8). That is why only plain data
+// arrays and function-local statics carry the attribute below: an array is
+// all-zero either way, and a function-local static runs its constructor at
+// runtime (under a guard), which writes the vptr properly.
+core::EventRing<256> g_ev_ring;
 core::EventFanout<4> g_ev_out;
 core::StateDedup<64> g_ev_state_seen;  // a restarted chip re-reports what has not changed: not news
 core::ChipEventGate g_ev_chip_gate;    // a crash loop must not fill the ring with "rebooted"
@@ -845,7 +869,8 @@ void persist_names(const core::EntityRegistry<>::Names& names) {
   if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
   // static: this runs in the request-drain path of the main task, whose stack
   // (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is far too small for a 2 KB local.
-  static std::uint8_t buf[kNamesBlobMax];
+  // PSRAM: frees internal-DRAM BSS space before heap_init pool.
+  static EXT_RAM_BSS_ATTR std::uint8_t buf[kNamesBlobMax];
   std::size_t written = names.save(buf, sizeof(buf));
   if (written > 0) {
     nvs_set_blob(h, "ent_names", buf, written);
@@ -862,7 +887,7 @@ void restore_names(core::EntityRegistry<>::Names& names) {
   if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
   std::size_t sz = 0;
   if (nvs_get_blob(h, "ent_names", nullptr, &sz) == ESP_OK && sz <= kNamesBlobMax) {
-    static std::uint8_t buf[kNamesBlobMax];
+    static EXT_RAM_BSS_ATTR std::uint8_t buf[kNamesBlobMax];
     if (nvs_get_blob(h, "ent_names", buf, &sz) == ESP_OK) {
       if (names.load(buf, sz)) {
         ESP_LOGI(kTag, "restored %u entity name(s) from NVS",
@@ -1875,7 +1900,7 @@ int cmd_cancel(int argc, char** argv) {
 }
 
 int cmd_rule(int argc, char** argv) {
-  static char buf[1536];  // only the console task calls this
+  static EXT_RAM_BSS_ATTR char buf[1536];  // only the console task calls this
   Req r{};
   r.kind = REQ_RULE;
   r.argc = argc;
@@ -1887,7 +1912,7 @@ int cmd_rule(int argc, char** argv) {
 }
 
 int cmd_desired(int argc, char** argv) {
-  static char buf[1024];
+  static EXT_RAM_BSS_ATTR char buf[1024];
   Req r{};
   r.kind = REQ_DESIRED;
   r.argc = argc;
@@ -1939,7 +1964,7 @@ int cmd_identify(int argc, char** argv) {
 // scene add <name> <id> <attr> <value> …  create or replace (one or more triples)
 // scene del <name>
 int cmd_scene(int argc, char** argv) {
-  static char buf[1024];
+  static EXT_RAM_BSS_ATTR char buf[1024];
   Req r{};
   r.kind = REQ_SCENE;
   r.argc = argc;
@@ -2530,6 +2555,115 @@ int cmd_led(int argc, char** argv) {
 }
 
 #ifdef KEYSTONE_HAVE_MATTER
+// experiment/commissioner-on-s3: the node id of the last commissioning
+// attempt, so a stuck attempt can be aborted.
+static chip::NodeId g_matter_pair_node = chip::kUndefinedNodeId;
+
+// The commissioning entry points run a deep CHIP call chain — the PAKE setup,
+// the BLE bring-up, the crypto — and all of it happens under the caller's
+// stack. The console REPL task has 8 KB, and that was not enough: the brain
+// died with "***ERROR*** A stack overflow in task console_repl has been
+// detected ***" and panic-rebooted in the middle of an attempt. So the console
+// command only checks the arguments and hands the request over; the CHIP call
+// happens on this task, which has a stack of its own.
+static constexpr std::uint32_t kMatterTaskStackBytes = 12288;
+
+struct MatterRequest {
+  enum class Kind { kNone, kPairCode, kPairBle, kCancel };
+  Kind kind = Kind::kNone;
+  chip::NodeId node_id = chip::kUndefinedNodeId;
+  std::uint32_t pincode = 0;
+  std::uint16_t disc = 0;
+  char payload[80] = {0};  // the manual code / QR text for kPairCode
+};
+
+static MatterRequest g_matter_req;
+static SemaphoreHandle_t g_matter_req_sem = nullptr;
+
+// CHIP keeps the pairing delegate registered when a discovery attempt ends
+// without a device: RendezvousCleanup() only reports OnPairingComplete once a
+// device has actually connected, so a failed scan leaves the delegate in
+// place and the next attempt is refused with "There is already a pairing
+// process" (esp_err 259). StopPairing() resets the pairer's state; clearing
+// the delegate then lets the next attempt start. Note that the radio is NOT
+// stopped by the cancel: CHIP's NimBLE layer implements CancelConnection() as
+// CHIP_ERROR_NOT_IMPLEMENTED, so the GAP scan keeps running until its 60 s
+// window expires and a scan started right after a cancel fails with
+// CHIP_ERROR_INVALID_STATE ("Failed to start a BLE scan: 3").
+// The CHIP stack lock must be held.
+static void matter_pair_abort_locked() {
+  auto& client = esp_matter::controller::matter_controller_client::get_instance();
+  auto* comm = client.get_commissioner();
+  if (comm == nullptr || comm->GetPairingDelegate() == nullptr) {
+    return;
+  }
+  if (g_matter_pair_node != chip::kUndefinedNodeId) {
+    const CHIP_ERROR err = comm->StopPairing(g_matter_pair_node);
+    printf("matter: stopped the previous attempt (%s)\n", chip::ErrorStr(err));
+  }
+  comm->RegisterPairingDelegate(nullptr);
+}
+
+// The one task that talks to the CHIP commissioner. Everything that ends up
+// in CHIP (PairDevice, StopPairing, the crypto behind them) runs here.
+static void matter_worker_task(void* arg) {
+  (void)arg;
+  for (;;) {
+    if (xSemaphoreTake(g_matter_req_sem, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+    const MatterRequest req = g_matter_req;
+    esp_err_t err = ESP_FAIL;
+    {
+      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+      auto& client = esp_matter::controller::matter_controller_client::get_instance();
+      auto* comm = client.get_commissioner();
+      if (comm != nullptr) {
+        switch (req.kind) {
+          case MatterRequest::Kind::kCancel: {
+            matter_pair_abort_locked();
+            err = ESP_OK;
+            break;
+          }
+          case MatterRequest::Kind::kPairBle: {
+            // Abort the previous attempt first: CHIP refuses a second pairing
+            // while the delegate of the first one is still registered.
+            matter_pair_abort_locked();
+            g_matter_pair_node = req.node_id;
+            static std::uint8_t no_dataset[1] = {0};
+            err = esp_matter::controller::pairing_ble_thread(req.node_id, req.pincode, req.disc,
+                                                             no_dataset, 0);
+            break;
+          }
+          case MatterRequest::Kind::kPairCode: {
+            matter_pair_abort_locked();
+            g_matter_pair_node = req.node_id;
+            err = esp_matter::controller::pairing_code(req.node_id, req.payload);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    }
+    ESP_LOGI(kTag, "matter: worker done (%s), %u B of its stack left",
+             esp_err_to_name(err),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+  }
+}
+
+// Hand the request to the worker and return at once — the console must not
+// wait for the CHIP stack lock.
+static bool matter_enqueue(const MatterRequest& req) {
+  if (g_matter_req_sem == nullptr) {
+    printf("matter: the commissioner is not running\n");
+    return false;
+  }
+  g_matter_req = req;
+  xSemaphoreGive(g_matter_req_sem);
+  return true;
+}
+
 // experiment/commissioner-on-s3: minimal entry point to drive the Matter
 // controller. `matter_pair <node_id> <setup-code>` hands the setup payload
 // (manual pairing code or the MT: QR text) to esp_matter_controller. The
@@ -2550,18 +2684,67 @@ int cmd_matter_pair(int argc, char** argv) {
     printf("node_id must be >= 2 (1 is reserved for the commissioner itself)\n");
     return 1;
   }
-  printf("matter: pairing node 0x%016llx with code '%s'\n",
-         static_cast<unsigned long long>(node_id), argv[2]);
-  esp_err_t err;
-  {
-    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-    err = esp_matter::controller::pairing_code(node_id, argv[2]);
-  }
-  if (err != ESP_OK) {
-    printf("matter: pairing_code returned %d (commissioning did not start)\n", err);
+  MatterRequest req;
+  req.kind = MatterRequest::Kind::kPairCode;
+  req.node_id = node_id;
+  std::snprintf(req.payload, sizeof(req.payload), "%s", argv[2]);
+  if (!matter_enqueue(req)) {
     return 1;
   }
-  printf("matter: commissioning started; watch the log for PASE/CASE progress\n");
+  printf("matter: pairing node 0x%016llx with code '%s' queued\n",
+         static_cast<unsigned long long>(node_id), argv[2]);
+  printf("matter: watch the log for PASE/CASE progress\n");
+  return 0;
+}
+
+// experiment/commissioner-on-s3, option A: the pure BLE path. The controller
+// scans BLE for a device that advertises `discriminator`, connects to it and
+// runs PASE (SPAKE2+) with `pincode` over the BLE GATT link. The Thread
+// operational dataset is empty on purpose — brain-s3 has no Thread radio, so
+// this test can only prove the BLE stack and the controller up to PASE; the
+// device will not get a fabric afterwards (docs/matter-backlog.md §3).
+int cmd_matter_pair_ble(int argc, char** argv) {
+  if (argc != 4) {
+    printf("usage: matter_pair_ble <node_id> <pincode> <discriminator>\n"
+           "  node_id:      decimal, the id you assign in our fabric (any >1)\n"
+           "  pincode:      the setup PIN of the device, decimal (1..99999998,\n"
+           "                chip::kSetupPINCodeMaximumValue — a Matter manual code\n"
+           "                packs it in bits, so it is not the digits you read)\n"
+           "  discriminator: the 12-bit setup discriminator (0..4095)\n");
+    return 1;
+  }
+  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
+  if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
+    printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
+    return 1;
+  }
+  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
+         static_cast<unsigned long long>(node_id), pincode, disc);
+  MatterRequest req;
+  req.kind = MatterRequest::Kind::kPairBle;
+  req.node_id = node_id;
+  req.pincode = pincode;
+  req.disc = disc;
+  if (!matter_enqueue(req)) {
+    return 1;
+  }
+  printf("matter: watch the log for PASE/CASE progress\n");
+  return 0;
+}
+
+// experiment/commissioner-on-s3: abort a commissioning attempt that is still
+// running (the BLE scan waits ~60 s for the device).
+int cmd_matter_pair_cancel(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+  MatterRequest req;
+  req.kind = MatterRequest::Kind::kCancel;
+  if (!matter_enqueue(req)) {
+    return 1;
+  }
+  printf("matter: cancelling the commissioning attempt\n");
   return 0;
 }
 #endif  // KEYSTONE_HAVE_MATTER
@@ -2625,6 +2808,10 @@ void start_console() {
   reg_cmd("matter_pair",
           "matter_pair <node_id> <setup-code> - try to commission a Matter device from the hub",
           &cmd_matter_pair);
+  reg_cmd("matter_pair_ble",
+          "matter_pair_ble <node_id> <pincode> <discriminator> - commission a Matter device over BLE",
+          &cmd_matter_pair_ble);
+  reg_cmd("matter_pair_cancel", "matter_pair_cancel - abort a running Matter commissioning attempt", &cmd_matter_pair_cancel);
 #endif
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -2931,7 +3118,11 @@ struct AppSource {
 // Send the snapshot (in parts) to one client, or to all (fd < 0). Main loop only: the
 // buffer is shared.
 void app_send_snapshot(int fd, const AppSource& src) {
-  static char buf[core::app::kMaxFrame];
+  // 4 KB snapshot frame: in PSRAM via EXT_RAM_BSS_ATTR so it does not sit in
+  // the brain's internal-DRAM BSS (experiment/commissioner-on-s3: each KB
+  // freed before the heap pool starts widens the pool and the BLE controller's
+  // contiguous allocation gate with it).
+  static EXT_RAM_BSS_ATTR char buf[core::app::kMaxFrame];
   core::app::SnapshotCursor cur;
   while (!cur.done()) {
     core::JsonWriter w(buf, sizeof(buf));
@@ -3051,8 +3242,9 @@ std::uint32_t g_ev_push_ms = 0;
 void history_push(Scenes& scenes, std::uint32_t now_ms) {
   if (g_ev_mu == nullptr || now_ms - g_ev_push_ms < 250) return;
   g_ev_push_ms = now_ms;
-  static char hb[core::app::kMaxFrame];
-  static core::Event page[core::app::kHistoryPage];
+  // 4 KB history frame + ~576 B event page in PSRAM (see app_send_snapshot).
+  static EXT_RAM_BSS_ATTR char hb[core::app::kMaxFrame];
+  static EXT_RAM_BSS_ATTR core::Event page[core::app::kHistoryPage];
   xSemaphoreTake(g_ev_mu, portMAX_DELAY);
   const std::uint32_t latest = g_ev_ring.latest();
   std::size_t n = 0;
@@ -3173,16 +3365,16 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     std::memset(pass, 0, sizeof(pass));
   } else if (!std::strcmp(op, "wifi.scan")) {
     // The scan blocks for a couple of seconds; it is the whole reply, so answer here.
-    static char sb[1200];
+    static EXT_RAM_BSS_ATTR char sb[1200];
     struct Net { char ssid[core::kMaxSsidLen + 1]; int rssi; bool secure; };
-    static Net nets[16];
+    static EXT_RAM_BSS_ATTR Net nets[16];
     std::size_t n = 0;
     wifi_scan_config_t sc = {};
     if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
       uint16_t found = 0;
       esp_wifi_scan_get_ap_num(&found);
       uint16_t take = found > 40 ? 40 : found;
-      static wifi_ap_record_t recs[40];
+      static EXT_RAM_BSS_ATTR wifi_ap_record_t recs[40];
       if (esp_wifi_scan_get_ap_records(&take, recs) == ESP_OK) {
         for (uint16_t i = 0; i < take; ++i) {
           const char* name = reinterpret_cast<const char*>(recs[i].ssid);
@@ -3222,8 +3414,8 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     core::app::HistoryQuery q;
     o = core::app::history_parse(reader, m.args, q);
     if (o.ok) {
-      static char hb[core::app::kMaxFrame];
-      static core::Event page[core::app::kHistoryPage + 1];
+      static EXT_RAM_BSS_ATTR char hb[core::app::kMaxFrame];
+      static EXT_RAM_BSS_ATTR core::Event page[core::app::kHistoryPage + 1];
       std::size_t n = 0;
       std::uint32_t oldest = 0, latest = 0;
       xSemaphoreTake(g_ev_mu, portMAX_DELAY);
@@ -3923,27 +4115,56 @@ static void matter_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event,
 static void matter_bringup() {
   const std::size_t heap_before =
       heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  ESP_LOGI("matter", "heap before bringup: %u B internal",
-           static_cast<unsigned>(heap_before));
+  const std::size_t largest_before =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGI("matter", "heap before bringup: %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_before),
+           static_cast<unsigned>(largest_before));
 
   esp_err_t err = esp_matter::start(&matter_event_cb);
   if (err != ESP_OK) {
     ESP_LOGE("matter", "esp_matter::start failed: %d", err);
     return;
   }
+  ESP_LOGI("matter",
+           "after esp_matter::start: heap %u B internal, largest block %u B, psram free %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
   {
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     auto &client = esp_matter::controller::matter_controller_client::get_instance();
     client.init(/*node_id=*/112233, /*fabric_id=*/1, /*udp_port=*/5580);
+    // The trust store for the accessory's attestation chain — esp-matter reads
+    // it inside setup_commissioner(), so it has to be in place before that.
+    matter_install_paa_trust_store();
     client.setup_commissioner();
+  }
+
+  // The task that runs the commissioning calls. It is created here, while the
+  // internal heap is still one big block — the CHIP stack needs a large
+  // contiguous chunk later on.
+  g_matter_req_sem = xSemaphoreCreateBinary();
+  if (g_matter_req_sem == nullptr) {
+    ESP_LOGE("matter", "no memory for the commissioning queue");
+  } else if (xTaskCreate(matter_worker_task, "matter_cmd",
+                         kMatterTaskStackBytes / sizeof(StackType_t), nullptr, 5,
+                         nullptr) != pdPASS) {
+    ESP_LOGE("matter", "could not create the commissioning task");
+    vSemaphoreDelete(g_matter_req_sem);
+    g_matter_req_sem = nullptr;
+  } else {
+    ESP_LOGI("matter", "commissioning task up (%u B of stack)",
+             static_cast<unsigned>(kMatterTaskStackBytes));
   }
 
   const std::size_t heap_after =
       heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   ESP_LOGI("matter",
-           "controller up: heap %u B (-%d B), psram free %u B",
+           "controller up: heap %u B (-%d B), largest block %u B, psram free %u B",
            static_cast<unsigned>(heap_after),
            static_cast<int>(heap_before) - static_cast<int>(heap_after),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
 }
 #endif  // KEYSTONE_HAVE_MATTER
@@ -3951,16 +4172,34 @@ static void matter_bringup() {
 }  // namespace
 
 extern "C" void app_main(void) {
+#ifdef KEYSTONE_HAVE_MATTER
+  ESP_LOGI("matter", "app_main entry: heap %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+#endif
   status_led::init();
 
-  // Инициализация Wi-Fi
-  wifi_init();
+  // NVS + netif + default event loop + default STA/AP netifs (cheap).
+  wifi_bootstrap();
+#ifdef KEYSTONE_HAVE_MATTER
+  ESP_LOGI("matter", "after bootstrap: heap %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+#endif
 
 #ifdef KEYSTONE_HAVE_MATTER
-  // experiment/commissioner-on-s3: bring up the Matter controller/commissioner
-  // right after NVS + netif + WiFi are ready. The stack owns BLE on its own.
+  // experiment/commissioner-on-s3: bring up Matter + BLE BEFORE the Wi-Fi
+  // driver init, so the BLE controller gets to take its ~30 KB contiguous
+  // internal-RAM allocation from the fattest pool (the Wi-Fi driver's own
+  // ~20 KB had been fragmenting it into chunks too small for BLE to fit).
+  // Step 1a of docs/matter-backlog.md §3's R3 path; the hardware log from
+  // the previous commit (BLE_INIT: Malloc failed) is what justifies this
+  // reordering.
   matter_bringup();
 #endif
+
+  // Heavy Wi-Fi driver init + config + start.
+  wifi_start_driver();
 
   // Event history first: everything below may emit.
   g_ev_mu = xSemaphoreCreateMutex();
@@ -3999,30 +4238,37 @@ extern "C" void app_main(void) {
   }());
   ESP_ERROR_CHECK(link_th.begin());
 
-  static core::UartTransport bus_zb(link_zb);
-  static core::UartTransport bus_th(link_th);
+  // experiment/commissioner-on-s3: tagged EXT_RAM_BSS_ATTR so all the brain's
+  // core tables (registry, bus router, radio coord, state machine, dispatcher,
+  // chip monitor, rule engine, OTA jobs, reconciler) live in PSRAM instead of
+  // internal-DRAM BSS. That frees ~15 KB of internal RAM for the Matter
+  // controller to use at runtime. These are plain C++ aggregates with no
+  // vtables; their constructors run on first entry to app_main (long after
+  // PSRAM is initialised by the bootloader).
+  static EXT_RAM_BSS_ATTR core::UartTransport bus_zb(link_zb);
+  static EXT_RAM_BSS_ATTR core::UartTransport bus_th(link_th);
 
-  static Registry reg;
+  static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
-  static ChipRouter bus;                            // presents itself as one Bus
+  static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
   bus.bind(kZigbeeChipId, bus_zb);                  // publish(chip=0x01) -> UART1
   bus.bind(kThreadChipId, bus_th);                  // publish(chip=0x02) -> UART2
 
-  static core::RadioCoordinator<Registry> coord(bus, reg);
-  static core::StateMachine<Registry> sm(bus, reg);
-  static Dispatcher disp(bus, reg);
-  static core::ChipMonitor monitor(bus, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR core::RadioCoordinator<Registry> coord(bus, reg);
+  static EXT_RAM_BSS_ATTR core::StateMachine<Registry> sm(bus, reg);
+  static EXT_RAM_BSS_ATTR Dispatcher disp(bus, reg);
+  static EXT_RAM_BSS_ATTR core::ChipMonitor monitor(bus, &now_ms, nullptr);
   g_monitor = &monitor;
   monitor.on_event(&on_chip_event, nullptr);
   disp.set_alive_filter(&core::ChipMonitor::alive_thunk, &monitor);
-  static Rules rules(disp, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR Rules rules(disp, &now_ms, nullptr);
 
-  static fw::OtaJob ota_job(bus);
+  static EXT_RAM_BSS_ATTR fw::OtaJob ota_job(bus);
   g_ota = &ota_job;
-  static fw::DeviceOtaJob dev_ota_job(bus);
+  static EXT_RAM_BSS_ATTR fw::DeviceOtaJob dev_ota_job(bus);
   g_dev_ota = &dev_ota_job;
   dev_ota_job.on_phase(&on_dev_ota_phase, nullptr);
-  static core::OtaVerifier verifier(bus);
+  static EXT_RAM_BSS_ATTR core::OtaVerifier verifier(bus);
   g_verifier = &verifier;
   verifier.on_done(&on_verify_done, nullptr);
   ota_job.on_accepted(&on_ota_accepted, nullptr);
@@ -4051,7 +4297,7 @@ extern "C" void app_main(void) {
 
   g_rec_mu = xSemaphoreCreateRecursiveMutex();
   g_reg = &reg;
-  static Reconciler reconciler(disp, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR Reconciler reconciler(disp, &now_ms, nullptr);
   g_rec = &reconciler;
   restore_desired(reconciler);
   reconciler.on_event(&on_reconcile, nullptr);
@@ -4064,19 +4310,20 @@ extern "C" void app_main(void) {
   link_zb.start();
   link_th.start();
 
-  // Persistent timers table (survives reboots via NVS).
-  static core::TimerTable<8> timer_table;
+  // Persistent timers table (survives reboots via NVS). PSRAM-backed storage
+  // (EXT_RAM_BSS_ATTR) to keep internal-DRAM BSS small for Matter+BLE on S3.
+  static EXT_RAM_BSS_ATTR core::TimerTable<8> timer_table;
   time_t boot_now = 0;
   if (s_time_synced) time(&boot_now);
   restore_timers(timer_table, now_ms(nullptr), static_cast<std::uint64_t>(boot_now));
 
   // Recurring time-of-day actions (`at HH:MM …`); they only run once the clock is
   // synced, in local time (see `tz`).
-  static Schedules schedule_table;
+  static EXT_RAM_BSS_ATTR Schedules schedule_table;
   restore_schedules(schedule_table);
 
   // Scenes: named groups of actions (`scene`), applied from the console or the app.
-  static Scenes scene_store;
+  static EXT_RAM_BSS_ATTR Scenes scene_store;
   restore_scenes(scene_store);
   g_scenes = &scene_store;
   g_scene_q = xQueueCreate(8, sizeof(std::uint8_t));

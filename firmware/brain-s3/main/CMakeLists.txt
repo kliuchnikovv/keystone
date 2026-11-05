@@ -21,6 +21,9 @@ set(KS_REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_s
 if(DEFINED ENV{ESP_MATTER_PATH})
     list(APPEND KS_REQUIRES esp_matter esp_matter_controller)
     list(APPEND KS_DEFS KEYSTONE_HAVE_MATTER=1)
+    # The PAA trust store for the commissioner's attestation verification
+    # (it includes CHIP headers, so it only builds with the Matter SDK).
+    list(APPEND KS_SRCS matter_paa.cpp)
 endif()
 
 idf_component_register(SRCS ${KS_SRCS}

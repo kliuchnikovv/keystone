@@ -263,26 +263,281 @@ What that says:
   nothing left for the first scheduled task that wants internal memory, so
   the brain panics in under a second.
 
-**Verdict: option A does not cross even the PASE step on this hardware** —
-the BLE radio never comes up. The brain reverted cleanly to its PlatformIO
-image (1.37 MB, no Matter) and runs normally; nothing in NVS or Zigbee state
-was affected. Options to try before giving up on F5:
+**Verdict of that run: option A did not cross even the PASE step on this
+hardware** — the BLE radio never came up. The brain reverted cleanly to its
+PlatformIO image (1.37 MB, no Matter) and runs normally; nothing in NVS or
+Zigbee state was affected.
 
-- **Move the BLE controller allocations to PSRAM** (`CONFIG_BT_CTRL_HCI_TL_MODE`,
-  `CONFIG_BT_CTRL_HCI_SERIAL_MODE`, or the newer `BT_CONTROLLER_HOST_HEAP`
-  knobs; esp-matter examples/controller does not use them, so some digging in
-  IDF Bluetooth config is required). If any of those takes the 30 KB demand
-  out of internal RAM, the gate reopens.
-- **Shrink the brain's own startup footprint.** The relay client's 1-KB
-  outbound queue, the websocket server's per-client buffers (3 clients × a few
-  KB each), the status-LED LED-strip RMT buffers all sit in internal RAM.
-  Tagging them with `EXT_RAM_BSS_ATTR` or allocating them via `heap_caps_malloc(MALLOC_CAP_SPIRAM)`
-  should give back more than 30 KB.
-- **F5' (8 MB S3)** does not help this one — internal RAM is the chip's, not
-  the module's. PSRAM capacity would need to grow (it is already enough).
+**But the radio does come up — three fixes (05.11.2026, working tree of
+`experiment/commissioner-on-s3`).** All three causes above are gone, and the
+BLE stack is provably alive on the real board:
 
-The CASE-session heap number is still unmeasured, but that is now behind the
-BLE and panic gates and depends on their fix first.
+| fix | what | why |
+|---|---|---|
+| the controller singleton → PSRAM | `matter_controller_client::s_instance` tagged `EXT_RAM_BSS_ATTR` (patched in the container, `scripts/matter-build.sh`) | the singleton embeds a whole `CHIPDeviceController` — ~130 KB of internal `.bss`, more than half of what the radio needs in one block |
+| the brain's own tables → PSRAM | `bus`, `reg`, `coord`, `sm`, `disp`, `monitor`, `rules`, the NVS/scene/timer buffers, the relay RX buffer … all `EXT_RAM_BSS_ATTR` | the brain's own `.bss` sat on top of the three small internal pools |
+| BLE slimming + a different `app_main` order | one connection, no ISO / privacy / extended / periodic advertising, minimum buffer counts, and the Matter bring-up **before** the Wi-Fi driver starts | the BLE controller wants one contiguous ~30 KB block of internal RAM, and the Wi-Fi driver, started first, was fragmenting the big pool |
+
+The last one is the subtle one: the S3-Zero hands out its internal RAM as
+**three non-contiguous pools** (60 + 21 + 32 KB), the radio asks for its
+HCI/LLCP buffers as *one* contiguous block, and the Wi-Fi driver split what
+was left. Bringing Matter up first — and only then starting the Wi-Fi driver
+— gives the radio its block. The boot now reaches:
+
+```
+matter: app_main entry: heap 269391 B internal, largest block 204800 B
+matter: heap before bringup: heap 253903 B internal, largest block 196608 B
+matter: after esp_matter::start: heap 141583 B internal, largest block 81920 B, psram free 1838396 B
+matter: controller up: heap 115847 B (-138056 B), largest block 55296 B, psram free 1773896 B
+chip[FP]: Fabric index 0x2 was retrieved from storage … NodeId 0x000000000001B669
+chip[IN]: CASE Server enabling CASE session setups
+NimBLE: GAP procedure initiated: discovery
+NimBLE: duration=60000ms
+BLE Scanner: 02 01 1a 02 0a 0c 0b ff 4c 00 10 06 …
+```
+
+Compare that with the first attempt, where the controller came up with **1939 B**
+of internal heap and the radio had **no** block at all: the radio now gets a
+55 KB contiguous block and **115 KB** of internal heap is still live afterwards
+(the case session's own peak is still unmeasured — that needs a device).
+
+**The scan ran — and the device was in range the whole time.** The 60 s
+window catches live advertisements from the neighbourhood, and among them the
+**TIMMERFLOTTE itself**: Matter commissioning service data (0xFFF6) with
+vendor 0x117C (IKEA) and product 0x8005 — which *is* the TIMMERFLOTTE
+(matter-survey: "IKEA of Sweden TIMMERFLOTTE temp/hmd sensor", vendor
+0x117C, product 0x8005). Its advertising discriminator is **0x0239**.
+
+Why CHIP never connected to it: the discriminator and the PIN were read off
+the manual pairing code **as if it were "discriminator then PIN"** — it is
+not. The Matter manual code is bit-packed (CHIP `ManualSetupPayloadParser`:
+chunk1 = 1 digit, chunk2 = 5, chunk3 = 4, the last character is a Verhoeff
+check digit), and it carries only a **4-bit short discriminator** (the top
+nibble of the 12-bit one) plus a 27-bit PIN. Decoding the device's code the
+way CHIP does gives short discriminator 2 — and the sensor advertises
+0x0239, whose top nibble is 2. The device matched all along; our parameters
+were wrong, and CHIP only ever logged `chip[BLE]: Discriminator did not
+match`.
+
+**The earlier "not a single Matter service-data AD" was our own parsing bug.**
+`ESP_LOG_BUFFER_HEX` prints a multi-line hex dump, so concatenating the dump
+line by line and re-syncing the AD structures desynchronised them. A
+self-synchronising AD walker over the same log finds 15 (resp. 9) Matter
+commissioning advertisements — exactly the number of CHIP's own
+"Discriminator did not match" messages in the same log. The radio, NimBLE
+and CHIP's scanner all work.
+
+So the option-A verdict is **"the stack is alive, our parameters were
+wrong"**, not "the BLE radio never comes up". The proof line to wait for is
+`pairing_command: PASE session establishment success` — the controller prints
+it when SPAKE2+ has finished against a real device. Until the sensor
+answers, the CASE-session heap is still unmeasured.
+
+**Four traps worth writing down.**
+
+1. **The GCC/NOLOAD trap.** `EXT_RAM_BSS_ATTR` puts an object into
+   `.ext_ram.bss`, which is a **NOBITS** section: zeroed at boot, never
+   loaded from flash. A namespace-scope object with a constant-initialisable
+   constructor is **constant-initialised** by GCC, and its vtable pointer is a
+   *constant* emitted into the object's own section — which NOLOAD never
+   loads. The vptr stays 0 and the first virtual call faults
+   (`LoadProhibited`, EXCVADDR 0x8). `core::EventRing` (`g_ev_ring`) hit
+   exactly that. The rule: **only plain data arrays and objects whose
+   constructor runs at runtime may carry the attribute** — a function-local
+   `static` with a non-trivial constructor is initialised at run time and is
+   fine.
+2. **A failed scan leaves the commissioner "busy".** CHIP reports
+   `OnPairingComplete` only once a device has actually connected
+   (`RendezvousCleanup` returns early while `mDeviceInPASEEstablishment` is
+   null), so after a scan that found nothing the pairing delegate stays
+   registered and the next attempt is refused with "There is already a
+   pairing process" (esp_err 259). The firmware now calls `StopPairing()`
+   (resets the pairer) and `RegisterPairingDelegate(nullptr)` before every new
+   attempt, and has a `matter_pair_cancel` console command to abort a running
+   attempt — both verified on the board: after a cancel the next
+   `matter_pair_ble` starts again instead of answering 259.
+3. **A cancel does not stop the radio.** CHIP's NimBLE layer implements
+   `BLEManagerImpl::CancelConnection()` as `CHIP_ERROR_NOT_IMPLEMENTED`, so
+   `StopPairing()` resets the pairer but leaves the GAP scan running until its
+   60 s window expires. An attempt started right after a cancel therefore
+   fails with `Failed to start a BLE scan: 3` →
+   `PASE session establishment failure: Matter-Error CHIP:0x00000003` — the
+   error is CHIP_ERROR_INVALID_STATE, not a device problem. Either let the
+   old scan expire or reboot the brain (`DTR=False` on the console port gives
+   `rst:0x15`, and the console stays alive through the boot).
+4. **A Matter manual pairing code is bit-packed, not "discriminator then
+   PIN".** The 11-digit code (`DDDD-DDD-DDDD`) packs a version bit, a
+   vid/pid-present bit, a **4-bit** discriminator, the PIN split 14 + 13
+   bits, and a Verhoeff check digit — so the digits you can read carry the
+   discriminator and the PIN in an unreadable form. Decode the code with
+   CHIP's `ManualSetupPayloadParser` (the python reference `SetupPayload.py`
+   does the same) and check the Verhoeff digit before touching hardware. The
+   control case is the esp-matter test DAC code `3497-0112-332` → it must
+   decode to discriminator 3840 and PIN 20202021.
+
+**A hard limit of the S3's Bluetooth controller: no LE Extended Advertising.**
+The ESP32-S3 uses the original ESP32 controller (`lib_esp32`), which has no
+extended-advertising support at all — no ext-adv symbols in the controller
+archive, no `ble_ext_adv_max_size` in the SoC capability struct, and
+`CONFIG_BT_NIMBLE_EXT_ADV` off by default (it depends on
+`BT_NIMBLE_50_FEATURE_SUPPORT`). CHIP's ESP32 commissioner scans with the
+legacy `ble_gap_disc` only, so it can never see a device that advertises
+*exclusively* via extended advertising (Matter 1.4 enhanced commissioning,
+service data 0xFFF1). The TIMMERFLOTTE uses legacy 0xFFF6 and is therefore
+commissionable from the brain — but a commissioner on this silicon has that
+ceiling: for R3 it means "the brain's radio only ever sees legacy
+advertisers".
+
+**The flash gate needed -Os.** The controller does not fit the 1.875 MB app
+partition at IDF's default optimisation (`-Og`): the image was 0x1e0650 —
+1616 B over the slot, so the board did not boot at all.
+`CONFIG_COMPILER_OPTIMIZATION_SIZE=y` (the vendor's own release setting)
+brings it to **0x1de350** — 7344 B free. The switch lives in the Matter-only
+overlay (`sdkconfig.defaults.matter`), so the normal PlatformIO build of the
+brain stays untouched.
+
+**PASE reached — two more traps in CHIP's ESP32 NimBLE backend (05.11.2026,
+hardware-verified).** The radio was alive and the parameters were right, yet
+every attempt still died before PASE — and the brain rebooted on the way out.
+Both causes are in CHIP's ESP32 BLE backend, and both are fatal only because
+CHIP treats a *recoverable* condition as fatal:
+
+| trap | what actually happens | fix (`scripts/matter-patches.py`) |
+|---|---|---|
+| the ATT MTU exchange "fails" | `HandleGAPConnect()` calls `ble_gattc_exchange_mtu()`; on the S3 it returns **2** = `BLE_HS_EALREADY` ("already in progress" — *not* a link failure), and CHIP maps that to `CHIP_ERROR_INTERNAL` → *"Disabling CHIPoBLE service due to error: ac"* → the BLE layer is deinitialised → the freshly established connection is **torn down by CHIP itself**, before the commissioner ever gets to PASE | keep the connection and log the reason: a smaller MTU is survivable, a dead connection is not |
+| the connect timeout cancels a dead link | 30 s later `HandleConnectTimeout()` → `CancelConnect()` → `ble_gap_conn_cancel()` → `ble_hs_is_enabled()` reads the **deinitialised** NimBLE host context → `LoadProhibited` → the brain **panic-reboots** (reproducible every round) | skip `ble_gap_conn_cancel()` — the connection we would cancel is gone anyway |
+
+The patches live in `scripts/matter-patches.py` and are applied inside the
+container by `scripts/matter-build.sh` (each patch verifies the exact source
+text it replaces and hard-errors if the upstream text is gone, so a future
+esp-matter release cannot silently skip one). With them the brain talks to the
+real TIMMERFLOTTE:
+
+```
+I (67421) chip[CTL]: Commission called for node ID 0x000000000001B66A
+I (67541) chip[BLE]: Device Discriminator match. Attempting to connect
+W (67741) CHIP[DL]: ble_gattc_exchange_mtu failed: 2 (keeping the connection)
+I (67741) chip[DL]: BLE GAP connection established (con 1)
+I (69191) chip[BLE]: GATT discovery complete status:0 conn_handle:1
+I (70081) chip[EM]: <<< … Type 0000:22 (SecureChannel:PASE_Pake1)
+I (70191) chip[EM]: >>> … Type 0000:23 (SecureChannel:PASE_Pake2)
+I (70881) chip[EM]: <<< … Type 0000:24 (SecureChannel:PASE_Pake3)
+I (71051) pairing_command: PASE session establishment success
+```
+
+That is the proof line of option A, reached twice in a row. The BLE stack, the
+CHIP commissioner and the sensor's GATT server all work on the S3-Zero; the hub
+itself keeps running on that image (Wi-Fi up, SNTP synced, 48 KB internal heap
++ 1.75 MB PSRAM free after the attempt). With the trust store of the next
+paragraph the run goes much further — through attestation and the NOC, all the
+way to the Thread step, which is where R3 picks up.
+
+**Attestation is the next wall (05.11.2026 — passed).** The commissioning ran
+past PASE and died in the certificate step:
+
+```
+I chip[CTL]: Received certificate chain from the device
+I chip[CTL]: Successfully finished commissioning step 'SendAttestationRequest'
+E chip[-]: Unable to find PAA, err: 4a, PAI's AKID: 6B:31:8C:FC:E9:99:…
+E chip[CTL]: Error on commissioning step 'AttestationVerification': 'Error CHIP:0x00000020'
+I chip[CTL]: Failsafe disarmed
+I chip[CTL]: Commissioning complete for node ID 0x000000000001B66A: Error CHIP:0x00000020
+```
+
+The device's DAC is signed by a real PAA, and the commissioner's trust store
+holds only the **two hardcoded Chip-Test PAA certificates**
+(`CONFIG_ESP_MATTER_COMMISSIONER_ATTESTATION_TRUST_STORE` defaults to
+`TEST_ATTESTATION_TRUST_STORE`). esp-matter offers three more:
+`DCL_ATTESTATION_TRUST_STORE` (fetch the PAA from the CSA's Device
+Certification List over HTTPS — `…/dcl/pki/certificates?subjectKeyId=…`),
+`SPIFFS_ATTESTATION_TRUST_STORE` (the PAA in a `paa_cert` partition) and
+`CUSTOM_ATTESTATION_TRUST_STORE` (our own implementation). The sensor is left
+clean — the failsafe is disarmed, so it stays in commissioning mode and the
+attempt can be repeated.
+
+**Our own PAA trust store (05.11.2026, hardware-verified).** We took the custom
+route: `firmware/brain-s3/main/matter_paa.{hpp,cpp}` implements
+`chip::Credentials::AttestationTrustStore` with the **IKEA production PAA**
+("IKEA of Sweden Matter PAA G1", 487 bytes of DER, taken from the CSA
+certification list) compiled in and looked up by the key id the PAI's AKID names
+— that is the PAA's own SKID. Three details cost a build each:
+
+- the store has to be installed **before** `setup_commissioner()` — esp-matter
+  reads `get_attestation_trust_store()` inside it
+  (`firmware/brain-s3/main/main.cpp::matter_bringup`);
+- `CONFIG_CUSTOM_ATTESTATION_TRUST_STORE=y` in `sdkconfig.defaults.matter` is
+  **not enough**: kconfgen does not override a value that already exists in
+  `sdkconfig`, and the choice had already been resolved to the test store — the
+  resolved `sdkconfig` has to be switched as well;
+- the declaration of `set_custom_attestation_trust_store()` sits behind
+  `#ifdef CONFIG_CUSTOM_ATTESTATION_TRUST_STORE`, so with the wrong choice the
+  call does not even compile ("is not a member of 'chip::Credentials'").
+
+With the store in place the commissioning runs the **whole chain** — from PASE
+through the certificate exchange to an operational credential — and stops only
+where it has to, at the Thread step:
+
+```
+I chip[CTL]: Successfully finished commissioning step 'SendAttestationRequest'
+I chip[CTL]: Performing next commissioning step 'AttestationVerification'
+I chip[CTL]: Successfully finished commissioning step 'AttestationVerification'
+I chip[CTL]: Successfully validated 'Attestation Information' command received from the device.
+I chip[CTL]: Successfully finished commissioning step 'SendNOC'
+I chip[CTL]: Performing next commissioning step 'ThreadNetworkSetup'
+I chip[DMG]: Received NetworkConfig response, networkingStatus=1
+E chip[CTL]: Error on commissioning step 'ThreadNetworkSetup': 'Error CHIP:0x000000AC'
+I chip[CTL]: Successfully finished commissioning step 'Cleanup'
+```
+
+`ThreadNetworkSetup` fails because we deliberately hand over an **empty
+dataset**: the brain has no 802.15.4 radio and no Thread network of its own, and
+`networkingStatus=1` is the device refusing that empty dataset. This is the R3
+wall, not a bug — it needs the dataset from the C6 (as a pure OTBR) over a new
+hubproto message, and `pairing_ble_thread` with a real dataset in hand.
+
+The device stays usable: the failsafe was armed for 60 s
+(`ArmFailSafe response errorCode=0`) and the aborted run left it to expire on
+its own, so the sensor reboots itself, forgets the operational credential it
+was given and returns to commissioning mode.
+
+**Flash is the constraint for the DCL route.** The image now ends at
+`0x1deac0` — **0x1540 (5.4 KB) free** in the 1.875 MB slot — while the DCL client
+pulls in the HTTP client, TLS and cJSON. The 4 MB flash has 128 KB unused
+after `ota_1` (`0x3E0000…0x400000`), but that is not an app slot. So the DCL
+route means F1' (shrink the image) or F5' (an 8 MB S3). The custom trust store
+costs ~2 KB and fits today — but it is **vendor-specific**: every vendor we
+want to commission needs its PAA added (or the DCL route, or the SPIFFS
+partition with a folder of PAAs, once there is flash for it).
+
+**A third trap: the console REPL's stack is too small for a commissioning call
+(05.11.2026).** With the trust store in place the *next* attempt died
+differently — the brain panic-rebooted with
+
+```
+***ERROR*** A stack overflow in task console_repl has been detected.
+```
+
+The console command called `esp_matter::controller::pairing_ble_thread()`
+directly, so the whole CHIP call chain — the PAKE setup, the BLE bring-up, the
+crypto — ran on the console REPL task's 8 KB stack, on top of the REPL's own
+frames. The fix: the console command only checks the arguments and hands the
+request to a dedicated task (`matter_cmd`, 12 KB of stack), which is created
+while the internal heap is still one big block — the CHIP stack wants a large
+contiguous chunk later on. The call itself needs **~3.7 KB** (the worker task
+reports its own high-water mark), so the stack is comfortable now:
+
+```
+I matter: commissioning task up (12288 B of stack)
+I matter: worker done (ESP_OK), 8588 B of its stack left
+```
+
+Verified on the board: with the task in place the commissioning runs the same
+chain as before (PASE → attestation → NOC → `ThreadNetworkSetup`) and the hub
+survives it — no stack overflow, no reboot, 34.5 KB of internal heap left
+afterwards.
+
+The price is 12 KB of internal RAM: the hub has **35.7 KB free** (was 48.8 KB)
+and its largest free block is 25.6 KB (was 31.7 KB).
 
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person

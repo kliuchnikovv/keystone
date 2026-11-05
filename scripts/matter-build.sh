@@ -20,18 +20,22 @@ fi
 # alone and must stay Matter-free. Pass SDKCONFIG_DEFAULTS so idf.py merges the
 # overlay on top of the base defaults.
 #
-# The brain-s3 build also patches one esp-matter source inside the container:
-# esp_matter_controller_pairing_command.cpp in release/v1.6 uses bare
-# `PeerAddress` but forgets `using chip::Transport::PeerAddress;` at file
-# scope — the sibling file esp_matter_controller_console.cpp has exactly that
-# using-declaration, so this is clearly an upstream omission. The patch adds
-# the missing line only to the in-container copy for this build (the image
-# itself is `--rm`'d after, so nothing leaks). thread-c6 does not build the
-# controller and never hits this.
+# The brain-s3 build also patches a few esp-matter sources inside the
+# container. The patches touch only the in-container copy for this build (the
+# image itself is `--rm`'d after, so nothing leaks) and live in
+# scripts/matter-patches.py, which documents each one:
+#
+# 1) the pairing command misses `using chip::Transport::PeerAddress;`
+#    (an upstream omission in release/v1.6 — the sibling console file has it);
+# 2) the controller singleton (130 KB of .bss) has to live in PSRAM, or the
+#    S3-Zero runs out of internal RAM inside CHIP's own init;
+# 3) the ESP32 NimBLE backend must not tear the connection down when the ATT
+#    MTU exchange fails — that killed the commissioning attempt before PASE;
+# 4) ... and must not call ble_gap_conn_cancel() on a BLE layer that is
+#    already gone (LoadProhibited panic on the S3).
 BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
-  PATCH='sed -i "/^using namespace chip::Controller;/a using chip::Transport::PeerAddress;" /opt/espressif/esp-matter/components/esp_matter_controller/commands/esp_matter_controller_pairing_command.cpp'
-  BUILD_CMD="${PATCH} && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
+  BUILD_CMD="python3 /project/scripts/matter-patches.py && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
 fi
 
 echo "==> Building ${APP} in ${IMAGE}"
