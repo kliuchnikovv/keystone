@@ -28,7 +28,8 @@ add_executable(core_tests
   test_sha256.cpp
   test_ota.cpp
   test_zigbee_ota.cpp
-  test_device_ota.cpp)
+  test_device_ota.cpp
+  test_thread_dataset.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 

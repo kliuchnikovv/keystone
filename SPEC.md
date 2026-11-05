@@ -163,6 +163,13 @@ offset size field       meaning
                                pushes the vendor .ota file to the coordinator,
                                which serves it over the OTA Upgrade cluster
                                (BEGIN/CHUNK/END + STATUS); see docs/ota.md
+0x60 MATTER_PAIR brain→chip   commission a Matter device: kind(u8) + bytes[]
+0x61 MATTER_RESULT chip→brain the result of a commissioning attempt
+0x62 THREAD_DATASET_REQ brain→chip "give me your active Thread dataset"
+0x63 THREAD_DATASET chip→brain the dataset, as Thread operational TLVs
+                               (the brain has no 802.15.4 radio, so the
+                               commissioner borrows the co-processor's
+                               network); see docs/matter-backlog.md §3
 ```
 
 ### 4.4 Lifecycle

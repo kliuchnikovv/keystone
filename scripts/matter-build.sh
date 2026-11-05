@@ -32,10 +32,15 @@ fi
 # 3) the ESP32 NimBLE backend must not tear the connection down when the ATT
 #    MTU exchange fails — that killed the commissioning attempt before PASE;
 # 4) ... and must not call ble_gap_conn_cancel() on a BLE layer that is
-#    already gone (LoadProhibited panic on the S3).
+#    already gone (LoadProhibited panic on the S3);
+# 5) the ESP32 platform event header uses chip::System::PacketBuffer without
+#    including the header that declares it — with esp-matter's BLE controller
+#    enabled the file does not compile at all (the thread-c6 build needs this).
 BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
-  BUILD_CMD="python3 /project/scripts/matter-patches.py && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
+  BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
+elif [[ "${APP}" == "thread-c6" ]]; then
+  BUILD_CMD="python3 /project/scripts/matter-patches.py --app thread-c6 && idf.py build"
 fi
 
 echo "==> Building ${APP} in ${IMAGE}"

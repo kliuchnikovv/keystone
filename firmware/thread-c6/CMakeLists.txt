@@ -47,4 +47,7 @@ endif()
 idf_build_set_property(CXX_COMPILE_OPTIONS "-std=gnu++17;-Os;-DCHIP_HAVE_CONFIG_H;-Wno-overloaded-virtual" APPEND)
 idf_build_set_property(C_COMPILE_OPTIONS "-Os" APPEND)
 # For RISC-V chips, project_include.cmake sets -Wno-format but leaves the -Wformat-derived flags on.
-idf_build_set_property(COMPILE_OPTIONS "-Wno-format-nonliteral;-Wno-format-security" APPEND)
+# -Wformat=0 turns the whole family off: CHIP's own sources are not portable enough for
+# it (uint32_t printed with %u is an error on this toolchain), and the build is -Werror=all.
+# The brain-s3 build does the same.
+idf_build_set_property(COMPILE_OPTIONS "-Wno-format-nonliteral;-Wno-format-security;-Wformat=0" APPEND)

@@ -28,6 +28,8 @@ bool is_known_type(std::uint8_t t) noexcept {
     case MsgType::DevOtaStatus:
     case MsgType::MatterPair:
     case MsgType::MatterResult:
+    case MsgType::ThreadDatasetReq:
+    case MsgType::ThreadDataset:
       return true;
   }
   return false;

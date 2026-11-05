@@ -1,5 +1,10 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
+# The C6's USB connector is the USB-Serial-JTAG peripheral. Keep the console
+# (and with it the log output and our REPL) there: it is the same cable we
+# flash with, while the UART0 pins of the DevKitC are not wired to it.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 #enable BT
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y

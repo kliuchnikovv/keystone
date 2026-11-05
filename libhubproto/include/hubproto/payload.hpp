@@ -426,4 +426,22 @@ EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
 bool decode_matter_result(const std::uint8_t* in, std::size_t len,
                            MatterResult& out) noexcept;
 
+// ---- The Thread operational dataset -----------------------------------------
+// The brain has no 802.15.4 radio, so the Matter commissioner has no Thread
+// network of its own to hand to a device. The co-processor does have a radio
+// and a formed network, so it sends its active operational dataset (Thread
+// TLVs, the same bytes CHIP's SetThreadOperationalDataset expects) over the
+// hub link. 254 bytes is the Thread maximum for a dataset and the size of
+// CHIP's own buffer.
+inline constexpr std::size_t kThreadDatasetMax = 254;
+
+struct ThreadDatasetView {
+  const std::uint8_t* bytes;
+  std::size_t         len;
+};
+EncodeResult encode_thread_dataset(const std::uint8_t* bytes, std::size_t len,
+                                    std::uint8_t* out, std::size_t cap) noexcept;
+bool decode_thread_dataset(const std::uint8_t* in, std::size_t len,
+                           ThreadDatasetView& out) noexcept;
+
 }  // namespace hubproto

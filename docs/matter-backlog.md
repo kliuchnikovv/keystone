@@ -539,6 +539,64 @@ afterwards.
 The price is 12 KB of internal RAM: the hub has **35.7 KB free** (was 48.8 KB)
 and its largest free block is 25.6 KB (was 31.7 KB).
 
+**R3: the Thread dataset comes over the link (05.11.2026 — written, not yet on
+hardware).** `ThreadNetworkSetup` wants the **operational dataset TLVs** — the
+bytes of the Thread network the device is supposed to join. The brain has no
+802.15.4 radio and therefore no dataset of its own; the co-processor does (it
+runs OpenThread and forms the network). So the dataset travels over the link:
+
+| step | where | what |
+|---|---|---|
+| `THREAD_DATASET_REQ` (0x62) | brain → chip 0x02 | "give me your active dataset" |
+| `THREAD_DATASET` (0x63) | chip 0x02 → brain | `len(u8) bytes[]` — the Thread TLVs as they are |
+
+The chip side hands them over straight out of OpenThread
+(`otDatasetGetActiveTlvs()`; 254 bytes — the Thread maximum *and* the size of
+CHIP's own buffer, so one frame carries it). The brain checks them before
+trusting them (`core::ThreadDataset`, portable and host-tested): the TLVs have
+to parse exactly, and the three things a device cannot do without — the
+channel, the PAN id and the network key — have to be in there. A truncated or
+key-less dataset would otherwise make the device attach to nothing and fail
+with a message that says nothing about the cause.
+
+The commissioning then runs the same BLE path as before, but with a real
+dataset in hand: `pairing_ble_thread(node_id, pin, disc, dataset, len)`. The
+console command is `matter_pair_thread <node_id> <pincode> <discriminator>`: it
+asks the co-processor, waits up to 15 s for the answer, prints the channel and
+the network name, and only then hands the request to the `matter_cmd` worker.
+The dataset lives in a static object, not on a stack: CHIP keeps the pointer
+for the whole multi-minute commissioning.
+
+**Two build fixes and one move, on the way to the image.** The thread-c6 image
+did not build for two reasons, both in the container's CHIP sources: the ESP32
+platform event header uses `chip::System::PacketBuffer` without including the
+header that declares it (the file does not compile at all once esp-matter's BLE
+controller is enabled — the fifth patch in `scripts/matter-patches.py`, now
+applied for both apps), and CHIP's own sources are not portable enough for this
+toolchain's format warnings (a `uint32_t` printed with `%u`) while the build
+runs with `-Werror=all` — so the thread-c6 turns the format family off, like
+the brain-s3 does.
+
+And the console moved: in ESP-IDF 5.5 the C6's console *is* the USB-Serial-JTAG
+peripheral by default, and `esp_console_new_repl_uart()` is declared only under
+`CONFIG_ESP_CONSOLE_UART_DEFAULT` — the old REPL call did not compile at all.
+The REPL (`thread>` with `factoryreset` and `reboot`) and the log output now go
+to the same USB connector we flash through, which is exactly what the R3 test
+needs: the thread-c6's answer has to be readable.
+
+**Not yet on hardware.** The thread-c6 has to be connected and flashed with
+this firmware — the board plugged in here is the zigbee-c6, and the C6s are
+untouched under the standing rule «Пока не трогать C6». The brain's Matter
+image ends at **0x1df2c0** — 0xd40 (3.3 KB) free in the 1.875 MB slot, so the
+dataset path cost ~2 KB of the 5.4 KB that were free. The thread-c6 image now
+builds again and fits with room to spare: **0x1b6110** (1.75 MB) in the 1.92 MB
+slot, **0x29ef0 (168 KB, 9 %) free** — 175 KB smaller than the November build,
+because the CHIP *controller* is not linked into the bridge image (the
+commissioner lives in the brain; the bridge is a server). What the answer will
+look like depends on the co-processor's own Thread network: if OpenThread runs
+there without an active dataset, the chip says so and the dataset cannot be
+lent out yet.
+
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person
 adds it to Apple Home with the Home app) needs no chip work at all.

@@ -8,7 +8,11 @@ build, so nothing leaks back to the host.
 
 Run inside the container (scripts/matter-build.sh does that for us):
 
-    python3 /project/scripts/matter-patches.py [esp-matter-root]
+    python3 /project/scripts/matter-patches.py [--app brain-s3|thread-c6] [esp-matter-root]
+
+`--app` selects the patch set: the controller-only patches (the brain runs a
+Matter controller, the thread-c6 only a bridge) are skipped for the bridge, and
+the patches that every app needs are applied to both.
 
 The script is idempotent: a patch that is already applied is skipped, and a
 source that does not contain the expected text is a hard error (so a future
@@ -17,7 +21,19 @@ upstream release cannot silently skip a patch we still need).
 import sys
 from pathlib import Path
 
-ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/espressif/esp-matter")
+APP = "brain-s3"
+ROOT = Path("/opt/espressif/esp-matter")
+
+_argv = sys.argv[1:]
+if _argv and _argv[0] in ("--app", "-a"):
+    APP = _argv[1]
+    _argv = _argv[2:]
+if _argv:
+    ROOT = Path(_argv[0])
+
+BRAIN = "brain-s3"
+BRIDGE = "thread-c6"
+ALL = (BRAIN, BRIDGE)
 
 # --- 1) missing using-declaration in the pairing command -------------------
 #
@@ -106,8 +122,31 @@ CANCEL_NEW = """void BLEManagerImpl::CancelConnect(void)
 }
 """
 
+# --- 5) the platform event header uses PacketBuffer without including it ---
+#
+# src/platform/ESP32/CHIPDevicePlatformEvent.h declares, inside
+# `#ifdef CONFIG_ENABLE_ESP32_BLE_CONTROLLER`, a member
+# `chip::System::PacketBuffer * mData;` — but the header never includes
+# <system/SystemPacketBuffer.h>, so the type is incomplete at that point.
+# Upstream survives because nothing defines CONFIG_ENABLE_ESP32_BLE_CONTROLLER
+# there; esp-matter does (the C6 and the S3 run the new ESP32 BLE controller),
+# and then every translation unit that pulls the platform event header in
+# before PacketBuffer fails to compile:
+#
+#     CHIPDevicePlatformEvent.h:118:27: error: 'PacketBuffer' in namespace
+#     'chip::System' does not name a type
+#
+# The fix is the obvious one: include the header that declares the class.
+PLATFORM_EVENT_H = (ROOT / "connectedhomeip/connectedhomeip/config/esp32/third_party/"
+                    "connectedhomeip/src/platform/ESP32/CHIPDevicePlatformEvent.h")
+PACKETBUF_OLD = "#include <esp_event.h>\n"
+PACKETBUF_NEW = "#include <esp_event.h>\n#include <system/SystemPacketBuffer.h>\n"
 
-def patch(path, old, new, what):
+
+def patch(path, old, new, what, apps=ALL):
+    if APP not in apps:
+        print(f"  skip  {what} (not needed by {APP})")
+        return
     text = path.read_text(encoding="utf-8")
     if new in text:
         print(f"  skip  {what} (already patched)")
@@ -121,12 +160,13 @@ def patch(path, old, new, what):
 
 
 def main():
-    print(f"== patching esp-matter sources in {ROOT}")
-    patch(PAIRING_CMD, PEER_OLD, PEER_NEW, "pairing command: using chip::Transport::PeerAddress")
-    patch(CLIENT_HDR, PSRAM_OLD, PSRAM_NEW, "controller header: include esp_attr.h")
-    patch(CLIENT_HDR, SINGLE_OLD, SINGLE_NEW, "controller header: singleton in PSRAM")
-    patch(NIMBLE_CPP, MTU_OLD, MTU_NEW, "nimble backend: survive a failed MTU exchange")
-    patch(NIMBLE_CPP, CANCEL_OLD, CANCEL_NEW, "nimble backend: no ble_gap_conn_cancel on a dead host")
+    print(f"== patching esp-matter sources in {ROOT} for {APP}")
+    patch(PAIRING_CMD, PEER_OLD, PEER_NEW, "pairing command: using chip::Transport::PeerAddress", (BRAIN,))
+    patch(CLIENT_HDR, PSRAM_OLD, PSRAM_NEW, "controller header: include esp_attr.h", (BRAIN,))
+    patch(CLIENT_HDR, SINGLE_OLD, SINGLE_NEW, "controller header: singleton in PSRAM", (BRAIN,))
+    patch(NIMBLE_CPP, MTU_OLD, MTU_NEW, "nimble backend: survive a failed MTU exchange", (BRAIN,))
+    patch(NIMBLE_CPP, CANCEL_OLD, CANCEL_NEW, "nimble backend: no ble_gap_conn_cancel on a dead host", (BRAIN,))
+    patch(PLATFORM_EVENT_H, PACKETBUF_OLD, PACKETBUF_NEW, "platform event header: include system/SystemPacketBuffer.h")
 
 
 if __name__ == "__main__":

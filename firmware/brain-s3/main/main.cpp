@@ -74,6 +74,7 @@
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
 #include "core/setup_mode.hpp"
+#include "core/thread_dataset.hpp"
 #include "core/wifi_policy.hpp"
 #include "matter_paa.hpp"
 #include "esp_heap_caps.h"
@@ -542,6 +543,10 @@ struct ChipStats {
 ChipStats g_chip_stats[16] = {};
 
 core::ChipMonitor* g_monitor = nullptr;  // set in app_main
+// The hub's bus, so a console command can talk to a chip without going through
+// the main loop (the Matter commissioner needs to ask the co-processor for its
+// Thread dataset and wait for the answer).
+core::Bus* g_bus = nullptr;  // set in app_main
 
 const char* chip_label(std::uint8_t id) {
   return id == 1 ? "zigbee" : id == 2 ? "thread" : "?";
@@ -668,6 +673,16 @@ QueueHandle_t g_matter_q = nullptr;
 // Has the Matter chip ever said anything? Without it there is nothing to commission with.
 std::atomic<bool> g_thread_seen{false};
 
+#ifdef KEYSTONE_HAVE_MATTER
+// The Thread operational dataset the commissioner hands to the device over BLE.
+// The brain has no 802.15.4 radio, so the dataset comes from the co-processor
+// that has one (hubproto ThreadDatasetReq/ThreadDataset). It lives in a
+// static, not on a stack: CHIP keeps a pointer to the bytes for the whole
+// commissioning, and that takes minutes.
+static core::ThreadDataset g_thread_dataset;
+static SemaphoreHandle_t g_thread_dataset_sem = nullptr;
+#endif
+
 // Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
 // co-processor (chip 0x02) exposes endpoints that mirror registry entities
 // living on the Zigbee coordinator (chip 0x01). We re-emit:
@@ -739,6 +754,26 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
       }
     }
   }
+#ifdef KEYSTONE_HAVE_MATTER
+  else if (h.type == hubproto::MsgType::ThreadDataset && h.chip_id == kThreadChipId) {
+    // The co-processor's Thread network, for the Matter commissioner: the brain has no
+    // 802.15.4 radio, so this is where the dataset the device needs comes from.
+    hubproto::ThreadDatasetView view{};
+    if (!hubproto::decode_thread_dataset(p, len, view)) {
+      ESP_LOGW(kTag, "matter: the chip sent a Thread dataset of %u bytes that makes no sense",
+               static_cast<unsigned>(len));
+    } else if (!g_thread_dataset.set(view.bytes, view.len)) {
+      ESP_LOGW(kTag, "matter: the Thread dataset of the chip is not one we can use (%u bytes)",
+               static_cast<unsigned>(view.len));
+    } else {
+      ESP_LOGI(kTag, "matter: got the Thread dataset (%u bytes, channel %u, name '%s')",
+               static_cast<unsigned>(g_thread_dataset.size()),
+               static_cast<unsigned>(g_thread_dataset.channel()),
+               g_thread_dataset.network_name());
+      if (g_thread_dataset_sem != nullptr) xSemaphoreGive(g_thread_dataset_sem);
+    }
+  }
+#endif
 }
 
 // ---- Console <-> main-loop request channel --------------------------------
@@ -2568,8 +2603,11 @@ static chip::NodeId g_matter_pair_node = chip::kUndefinedNodeId;
 // happens on this task, which has a stack of its own.
 static constexpr std::uint32_t kMatterTaskStackBytes = 12288;
 
+// How long the console waits for the co-processor's answer.
+static constexpr std::uint32_t kThreadDatasetWaitMs = 15000;
+
 struct MatterRequest {
-  enum class Kind { kNone, kPairCode, kPairBle, kCancel };
+  enum class Kind { kNone, kPairCode, kPairBle, kPairBleThread, kCancel };
   Kind kind = Kind::kNone;
   chip::NodeId node_id = chip::kUndefinedNodeId;
   std::uint32_t pincode = 0;
@@ -2633,6 +2671,20 @@ static void matter_worker_task(void* arg) {
             static std::uint8_t no_dataset[1] = {0};
             err = esp_matter::controller::pairing_ble_thread(req.node_id, req.pincode, req.disc,
                                                              no_dataset, 0);
+            break;
+          }
+          case MatterRequest::Kind::kPairBleThread: {
+            // The same, but with the dataset the co-processor lent us: the device
+            // can then find a Thread network to join.
+            matter_pair_abort_locked();
+            g_matter_pair_node = req.node_id;
+            if (!g_thread_dataset.valid()) {
+              err = ESP_ERR_INVALID_STATE;
+              break;
+            }
+            err = esp_matter::controller::pairing_ble_thread(
+                req.node_id, req.pincode, req.disc, g_thread_dataset.mutable_data(),
+                static_cast<std::uint8_t>(g_thread_dataset.size()));
             break;
           }
           case MatterRequest::Kind::kPairCode: {
@@ -2747,6 +2799,74 @@ int cmd_matter_pair_cancel(int argc, char** argv) {
   printf("matter: cancelling the commissioning attempt\n");
   return 0;
 }
+
+// experiment/commissioner-on-s3: the same as matter_pair_ble, but with a Thread
+// network to hand to the device. The brain has no 802.15.4 radio, so the
+// dataset comes from the co-processor that has one: the console asks for it
+// (hubproto ThreadDatasetReq), waits for the answer and only then starts the
+// commissioning. Without a dataset the device refuses the network
+// (networkingStatus=1) and the commissioning dies at the Thread step.
+int cmd_matter_pair_thread(int argc, char** argv) {
+  if (argc != 4) {
+    printf("usage: matter_pair_thread <node_id> <pincode> <discriminator>\n"
+           "  node_id:      decimal, the id you assign in our fabric (any >1)\n"
+           "  pincode:      the setup PIN of the device, decimal (1..99999998)\n"
+           "  discriminator: the 12-bit setup discriminator (0..4095)\n"
+           "  the Thread dataset is borrowed from the co-processor (chip 0x02)\n");
+    return 1;
+  }
+  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
+  if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
+    printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
+    return 1;
+  }
+  if (g_bus == nullptr || g_thread_dataset_sem == nullptr) {
+    printf("matter: the commissioner is not running\n");
+    return 1;
+  }
+  // Forget an answer from an earlier attempt, so we do not start with a stale
+  // dataset.
+  g_thread_dataset.clear();
+  while (xSemaphoreTake(g_thread_dataset_sem, 0) == pdTRUE) {
+  }
+  hubproto::Header q{};
+  q.version = hubproto::kProtocolVersion;
+  q.type = hubproto::MsgType::ThreadDatasetReq;
+  q.chip_id = kThreadChipId;
+  if (!g_bus->publish(q, nullptr, 0)) {
+    printf("matter: cannot reach the co-processor (chip 0x%02x)\n", kThreadChipId);
+    return 1;
+  }
+  printf("matter: asked chip 0x%02x for its Thread dataset, waiting %u ms...\n",
+         kThreadChipId, static_cast<unsigned>(kThreadDatasetWaitMs));
+  if (xSemaphoreTake(g_thread_dataset_sem, pdMS_TO_TICKS(kThreadDatasetWaitMs)) != pdTRUE) {
+    printf("matter: no dataset in %u ms (is the co-processor alive?)\n",
+           static_cast<unsigned>(kThreadDatasetWaitMs));
+    return 1;
+  }
+  if (!g_thread_dataset.valid()) {
+    printf("matter: the co-processor sent a dataset we cannot use\n");
+    return 1;
+  }
+  printf("matter: dataset %u bytes, channel %u, network '%s'\n",
+         static_cast<unsigned>(g_thread_dataset.size()),
+         static_cast<unsigned>(g_thread_dataset.channel()),
+         g_thread_dataset.network_name());
+  MatterRequest req;
+  req.kind = MatterRequest::Kind::kPairBleThread;
+  req.node_id = node_id;
+  req.pincode = pincode;
+  req.disc = disc;
+  if (!matter_enqueue(req)) {
+    return 1;
+  }
+  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
+         static_cast<unsigned long long>(node_id), pincode, disc);
+  printf("matter: watch the log for PASE/CASE progress\n");
+  return 0;
+}
 #endif  // KEYSTONE_HAVE_MATTER
 
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
@@ -2812,6 +2932,9 @@ void start_console() {
           "matter_pair_ble <node_id> <pincode> <discriminator> - commission a Matter device over BLE",
           &cmd_matter_pair_ble);
   reg_cmd("matter_pair_cancel", "matter_pair_cancel - abort a running Matter commissioning attempt", &cmd_matter_pair_cancel);
+  reg_cmd("matter_pair_thread",
+          "matter_pair_thread <node_id> <pincode> <discriminator> - commission a Matter device with the Thread dataset of the co-processor",
+          &cmd_matter_pair_thread);
 #endif
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -4158,6 +4281,13 @@ static void matter_bringup() {
              static_cast<unsigned>(kMatterTaskStackBytes));
   }
 
+  // The queue the co-processor's Thread dataset arrives on. The brain has no
+  // 802.15.4 radio, so the dataset has to come from the chip that has one.
+  g_thread_dataset_sem = xSemaphoreCreateBinary();
+  if (g_thread_dataset_sem == nullptr) {
+    ESP_LOGE("matter", "no memory for the Thread dataset queue");
+  }
+
   const std::size_t heap_after =
       heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   ESP_LOGI("matter",
@@ -4253,6 +4383,7 @@ extern "C" void app_main(void) {
   static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
   bus.bind(kZigbeeChipId, bus_zb);                  // publish(chip=0x01) -> UART1
   bus.bind(kThreadChipId, bus_th);                  // publish(chip=0x02) -> UART2
+  g_bus = &bus;
 
   static EXT_RAM_BSS_ATTR core::RadioCoordinator<Registry> coord(bus, reg);
   static EXT_RAM_BSS_ATTR core::StateMachine<Registry> sm(bus, reg);

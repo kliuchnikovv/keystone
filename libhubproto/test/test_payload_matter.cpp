@@ -14,7 +14,7 @@ TEST_CASE("Matter message types are known and sit at the documented codes") {
   CHECK(static_cast<std::uint8_t>(MsgType::MatterResult) == 0x61);
   CHECK(is_known_type(0x60));
   CHECK(is_known_type(0x61));
-  CHECK_FALSE(is_known_type(0x62));
+  CHECK_FALSE(is_known_type(0x6F));
 }
 
 TEST_CASE("MATTER_PAIR carries the kind and the bytes, and round-trips") {

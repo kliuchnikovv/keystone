@@ -41,6 +41,8 @@
 #include "integration.h"
 #include "esp_openthread.h"
 #include "esp_openthread_types.h"
+#include <openthread/dataset.h>
+#include <openthread/instance.h>
 #include <app/server/Server.h>
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -787,6 +789,32 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
     case hubproto::MsgType::Undeclare:
       remove_bridged_endpoint(h.chip_id, h.entity_id);
       return;
+    case hubproto::MsgType::ThreadDatasetReq: {
+      // The brain has no 802.15.4 radio, so the Matter commissioner on it borrows ours: it
+      // asks for the active Thread dataset and hands it to the device over BLE
+      // (docs/matter-backlog.md §3). Without a dataset the device refuses the network
+      // (networkingStatus=1) and the commissioning dies at the Thread step.
+      otInstance* ot = esp_openthread_get_instance();
+      if (ot == nullptr) {
+        ESP_LOGW(kTag, "the brain asked for the Thread dataset, but there is no OpenThread");
+        return;
+      }
+      otOperationalDatasetTlvs tlvs{};
+      const otError err = otDatasetGetActiveTlvs(ot, &tlvs);
+      if (err != OT_ERROR_NONE || tlvs.mLength == 0) {
+        ESP_LOGW(kTag, "no active Thread dataset to give (err %d)", static_cast<int>(err));
+        return;
+      }
+      std::uint8_t buf[1 + hubproto::kThreadDatasetMax];
+      auto r = hubproto::encode_thread_dataset(tlvs.mTlvs, tlvs.mLength, buf, sizeof(buf));
+      if (!r.ok) {
+        ESP_LOGW(kTag, "the Thread dataset does not fit a frame (%u bytes)", tlvs.mLength);
+        return;
+      }
+      g_bus->publish(header(hubproto::MsgType::ThreadDataset), buf, r.len);
+      ESP_LOGI(kTag, "sent the Thread dataset (%u bytes) to the brain", tlvs.mLength);
+      return;
+    }
     default:
       return;
   }
@@ -917,9 +945,27 @@ static void start_console() {
   esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   repl_cfg.prompt = "thread>";
   repl_cfg.max_cmdline_length = 128;
-  esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
   esp_console_repl_t* repl = nullptr;
-  if (esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl) != ESP_OK) return;
+  // The C6's USB port is the USB-Serial-JTAG peripheral, and in ESP-IDF 5.5
+  // that is the default console for this chip — so the REPL lives there and is
+  // reachable over the very same cable we flash with (the UART0 pins of the
+  // DevKitC are not wired to the USB connector). The UART branch stays for a
+  // build that picks the UART console instead.
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+  esp_console_dev_usb_serial_jtag_config_t hw_cfg = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+  if (esp_console_new_repl_usb_serial_jtag(&hw_cfg, &repl_cfg, &repl) != ESP_OK) {
+    ESP_LOGW(kTag, "the REPL did not come up on USB-Serial-JTAG (the log still works)");
+    return;
+  }
+#elif CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
+  esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+  if (esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl) != ESP_OK) {
+    ESP_LOGW(kTag, "the REPL did not come up on UART");
+    return;
+  }
+#else
+  return;  // no console device selected — nothing to attach the REPL to
+#endif
   esp_console_register_help_command();
   static const esp_console_cmd_t cmds[] = {
       {"factoryreset", "Erase Matter commissioning data and reboot", nullptr, cmd_factoryreset, nullptr},
