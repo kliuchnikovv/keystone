@@ -54,6 +54,7 @@ TEST_CASE("the dataset: a well-formed one is accepted, with the channel and the 
   CHECK(ds.size() == bytes.size());
   CHECK(ds.channel() == 15);
   CHECK(std::string(ds.network_name()) == "OpenThread");
+  CHECK(std::string(ds.ext_pan_id()) == "0102030405060708");
   CHECK(ds.has(core::kTlvMasterKey));
   CHECK(ds.has(core::kTlvExtPanId));
   CHECK_FALSE(ds.has(0x42));
@@ -138,4 +139,41 @@ TEST_CASE("the dataset: clear() forgets it") {
   CHECK(ds.size() == 0);
   CHECK(ds.channel() == 0);
   CHECK(std::string(ds.network_name()).empty());
+  CHECK(std::string(ds.ext_pan_id()).empty());
+}
+
+TEST_CASE("the dataset: the extended PAN id tells which network this is") {
+  // The network identity, as hex. It is what says whether the devices that
+  // were commissioned earlier still live in the network the brain is about to
+  // hand to the next one: a different ext PAN id means a different network,
+  // and the old devices are orphaned.
+  std::vector<std::uint8_t> d;
+  auto tlv = [&d](std::uint8_t type, const std::vector<std::uint8_t>& value) {
+    d.push_back(type);
+    d.push_back(static_cast<std::uint8_t>(value.size()));
+    d.insert(d.end(), value.begin(), value.end());
+  };
+  tlv(core::kTlvChannel, {0x00, 0x00, 26});
+  tlv(core::kTlvPanId, {0x12, 0x34});
+  tlv(core::kTlvMasterKey, {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+  tlv(core::kTlvExtPanId, {0xe2, 0x2c, 0x46, 0x67, 0x86, 0x47, 0xf5, 0x40});
+
+  core::ThreadDataset ds;
+  REQUIRE(ds.set(d.data(), d.size()));
+  CHECK(std::string(ds.ext_pan_id()) == "e22c46678647f540");
+
+  // A dataset without that TLV has no identity to report.
+  std::vector<std::uint8_t> without;
+  std::size_t i = 0;
+  while (i + 2 <= d.size()) {
+    const std::uint8_t t = d[i];
+    const std::size_t vlen = d[i + 1];
+    if (t != core::kTlvExtPanId)
+      without.insert(without.end(), d.begin() + static_cast<long>(i),
+                     d.begin() + static_cast<long>(i + 2 + vlen));
+    i += 2 + vlen;
+  }
+  core::ThreadDataset bare;
+  REQUIRE(bare.set(without.data(), without.size()));
+  CHECK(std::string(bare.ext_pan_id()).empty());
 }

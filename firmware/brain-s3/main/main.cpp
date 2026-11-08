@@ -900,10 +900,11 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
       ESP_LOGW(kTag, "matter: the Thread dataset of the chip is not one we can use (%u bytes)",
                static_cast<unsigned>(view.len));
     } else {
-      ESP_LOGI(kTag, "matter: got the Thread dataset (%u bytes, channel %u, name '%s')",
+      ESP_LOGI(kTag, "matter: got the Thread dataset (%u bytes, channel %u, name '%s', ext pan id %s)",
                static_cast<unsigned>(g_thread_dataset.size()),
                static_cast<unsigned>(g_thread_dataset.channel()),
-               g_thread_dataset.network_name());
+               g_thread_dataset.network_name(),
+               g_thread_dataset.ext_pan_id());
       if (g_thread_dataset_sem != nullptr) xSemaphoreGive(g_thread_dataset_sem);
     }
   }
@@ -3138,10 +3139,11 @@ int cmd_matter_pair_thread(int argc, char** argv) {
     printf("matter: the co-processor sent a dataset we cannot use\n");
     return 1;
   }
-  printf("matter: dataset %u bytes, channel %u, network '%s'\n",
+  printf("matter: dataset %u bytes, channel %u, network '%s', ext pan id %s\n",
          static_cast<unsigned>(g_thread_dataset.size()),
          static_cast<unsigned>(g_thread_dataset.channel()),
-         g_thread_dataset.network_name());
+         g_thread_dataset.network_name(),
+         g_thread_dataset.ext_pan_id());
   MatterRequest req;
   req.kind = MatterRequest::Kind::kPairBleThread;
   req.node_id = node_id;

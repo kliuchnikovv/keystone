@@ -1005,6 +1005,24 @@ the brain's **source** address: the packet has to leave with an address the
 mesh can answer to (the on-link prefix the BR advertises), not with the Wi-Fi
 link-local — that is what the brain's `ip6` command prints.
 
+**The crash-loop recovery was re-forming the network behind our backs (08.11.2026).**
+The co-processor keeps the Thread dataset in NVS, and NVS is also what the
+crash-loop rule erases (`boot_id > 50` ⇒ `nvs_flash_erase()`): a wiped dataset
+means a **new network** — a new PAN id, new keys, a new mesh-local prefix and a
+new **OMR prefix** — and every device commissioned into the old one is orphaned
+for good. It stays in a network that no longer exists, and the brain's route to
+that network's OMR prefix points nowhere. The network was re-formed three times
+in two days, each time with a different Ext PAN ID.
+
+So the dataset is now read out **before** the wipe and written back **after** it
+— only the crash-looper's leftovers are lost — and our own copy of the dataset
+(`thread_net`/`ds`) is kept in step with the stack's on every boot, so there is
+always something to restore. The **identity** of the network (its Extended PAN
+ID) is in the boot log now (`the Thread network is e22c46678647f540 (channel 26,
+109 bytes of dataset)`) and in the commissioning log on the brain: a network
+that changed from boot to boot is visible at once instead of turning up as a
+mystery a week later. Built, not yet flashed.
+
 ### 4. Data model — Matter endpoints on the C6
 
 Matter controllers talk to endpoints, not to us. Two shapes:

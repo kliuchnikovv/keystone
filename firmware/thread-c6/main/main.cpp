@@ -277,6 +277,44 @@ void thread_print_dataset_ids(const otOperationalDatasetTlvs& tlvs) {
   }
 }
 
+// The identity of the network, as hex: the extended PAN id out of the dataset.
+// It belongs in the boot log, because a change from boot to boot means the
+// network was re-formed — and every device commissioned into the old one is
+// orphaned for good (it stays in a network that no longer exists, and the
+// brain's route to the old OMR prefix points nowhere).
+bool thread_ext_pan_id(const otOperationalDatasetTlvs& tlvs, char* out, std::size_t len,
+                       std::uint8_t* channel = nullptr) {
+  if (out == nullptr || len < 17) return false;
+  out[0] = '\0';
+  constexpr std::uint8_t kTlvExtPanId = 0x02;
+  constexpr std::uint8_t kTlvChannel = 0x00;
+  bool found = false;
+  std::uint8_t i = 0;
+  while (i + 2 <= tlvs.mLength) {
+    const std::uint8_t type = tlvs.mTlvs[i];
+    const std::uint8_t vlen = tlvs.mTlvs[i + 1];
+    if (i + 2 + vlen > tlvs.mLength) break;
+    if (type == kTlvExtPanId && vlen == 8) {
+      static constexpr char kHex[] = "0123456789abcdef";
+      const std::uint8_t* value = &tlvs.mTlvs[i + 2];
+      for (std::size_t k = 0; k < 8; ++k) {
+        out[k * 2] = kHex[value[k] >> 4];
+        out[k * 2 + 1] = kHex[value[k] & 0x0f];
+      }
+      out[16] = '\0';
+      found = true;
+    }
+    // The channel TLV holds three bytes: the channel page (one byte, always 0)
+    // and the channel number (two bytes, big endian) — reading the page gives
+    // 0 for every network, and a network on channel 0 does not exist.
+    if (type == kTlvChannel && vlen >= 3 && channel != nullptr) {
+      *channel = static_cast<std::uint8_t>((tlvs.mTlvs[i + 3] << 8) | tlvs.mTlvs[i + 4]);
+    }
+    i = static_cast<std::uint8_t>(i + 2 + vlen);
+  }
+  return found;
+}
+
 // Every TLV of the dataset, one line each. We hand these bytes to the device
 // during the commissioning (the brain passes them to CHIP verbatim), so what is
 // (and is not) in here decides what the device joins: the mesh-local prefix it
@@ -427,6 +465,9 @@ void thread_bring_up() {
   bool have_network = false;
   if (otDatasetGetActiveTlvs(ot, &tlvs) == OT_ERROR_NONE && tlvs.mLength > 0) {
     ESP_LOGI(kTag, "an active Thread dataset is already there (%u bytes)", tlvs.mLength);
+    // Keep our own copy in step with the stack's: it is the one that survives
+    // a crash-loop wipe (see app_main) and the one we hand to the brain.
+    thread_save_dataset(tlvs);
     have_network = true;
   } else if (thread_load_dataset(tlvs)) {
     if (otDatasetSetActiveTlvs(ot, &tlvs) != OT_ERROR_NONE) {
@@ -460,6 +501,7 @@ void thread_bring_up() {
       } else {
         otOperationalDatasetTlvs moved{};
         if (otDatasetGetActiveTlvs(ot, &moved) == OT_ERROR_NONE) {
+          tlvs = moved;  // the log below has to show the network as it is now
           thread_save_dataset(moved);
         }
       }
@@ -494,6 +536,17 @@ void thread_bring_up() {
   if (otIp6SetEnabled(ot, true) != OT_ERROR_NONE) {
     ESP_LOGE(kTag, "could not enable IPv6");
     return;
+  }
+  // The identity of the network, in the boot log. If this line differs from the
+  // one of the previous boot, the network was re-formed in between — and the
+  // devices commissioned into the old one are gone for good.
+  {
+    char id[17] = {0};
+    std::uint8_t channel = 0;
+    if (thread_ext_pan_id(tlvs, id, sizeof(id), &channel)) {
+      ESP_LOGI(kTag, "the Thread network is %s (channel %u, %u bytes of dataset)", id,
+               static_cast<unsigned>(channel), static_cast<unsigned>(tlvs.mLength));
+    }
   }
   // The Border Router advertises its OMR prefix in the network data with the
   // "slaac" flag; the SLAAC module (compiled in by main/esp_ot_custom_config.h)
@@ -1087,10 +1140,27 @@ extern "C" void app_main() {
   status_led::init();
   g_boot_id = fw::next_boot_id();
   if (g_boot_id > 50) {
-    ESP_LOGW(kTag, "crash loop detected (boot_id=%u > 50): erasing NVS to recover", g_boot_id);
+    // A crash loop used to mean "wipe NVS". But this partition now holds the
+    // Thread network: the PAN id, the network keys and — through the Border
+    // Router — the OMR prefix the brain routes to. Erasing it re-forms the
+    // network with a NEW identity, and every device commissioned into it (the
+    // IKEA TIMMERFLOTTE) is orphaned for good: it never answers again, and
+    // the route the brain holds for the old OMR prefix points nowhere. So the
+    // dataset is read out before the wipe and written back after it — only
+    // the crash-looper's leftovers are lost.
+    otOperationalDatasetTlvs saved{};
+    const bool keep_network = thread_load_dataset(saved);
+    ESP_LOGW(kTag,
+             "crash loop detected (boot_id=%u > 50): erasing NVS to recover%s", g_boot_id,
+             keep_network ? " (the Thread network is kept)" : "");
     nvs_flash_erase();
     nvs_flash_init();
     g_boot_id = fw::next_boot_id();  // restarts at 1
+    if (keep_network) {
+      thread_save_dataset(saved);
+      ESP_LOGI(kTag, "the Thread network survived the wipe (%u bytes of dataset)",
+               static_cast<unsigned>(saved.mLength));
+    }
   }
   start_console();
 

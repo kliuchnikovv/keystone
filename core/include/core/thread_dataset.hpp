@@ -51,8 +51,10 @@ class ThreadDataset {
     len_ = len;
     channel_ = 0;
     name_[0] = '\0';
+    ext_pan_id_[0] = '\0';
     read_channel();
     read_name();
+    read_ext_pan_id();
     return true;
   }
 
@@ -60,6 +62,7 @@ class ThreadDataset {
     len_ = 0;
     channel_ = 0;
     name_[0] = '\0';
+    ext_pan_id_[0] = '\0';
   }
 
   bool valid() const noexcept { return len_ > 0; }
@@ -73,6 +76,14 @@ class ThreadDataset {
 
   /** The network name, if the dataset carries one ("" otherwise). */
   const char* network_name() const noexcept { return name_; }
+
+  /** The extended PAN id, if the dataset carries one ("" otherwise), as hex.
+   *
+   *  This is the identity of the Thread network. When it changes, every device that was
+   *  commissioned into the old network is orphaned for good: it stays in the old network,
+   *  which no longer exists, and the brain's route to the old OMR prefix points nowhere.
+   *  So it belongs in a log line — the commissioning is the moment it matters. */
+  const char* ext_pan_id() const noexcept { return ext_pan_id_; }
 
   /** True when the dataset holds the TLV of that type. */
   bool has(std::uint8_t tlv_type) const noexcept { return tlv_present(buf_, len_, tlv_type); }
@@ -145,10 +156,32 @@ class ThreadDataset {
     }
   }
 
+  // The extended PAN id TLV holds eight bytes; it goes into a log line as hex.
+  void read_ext_pan_id() noexcept {
+    std::size_t i = 0;
+    while (i + 2 <= len_) {
+      const std::uint8_t t = buf_[i];
+      const std::size_t vlen = buf_[i + 1];
+      i += 2;
+      if (i + vlen > len_) return;
+      if (t == kTlvExtPanId && vlen == 8) {
+        static constexpr char kHex[] = "0123456789abcdef";
+        for (std::size_t k = 0; k < 8; ++k) {
+          ext_pan_id_[k * 2] = kHex[buf_[i + k] >> 4];
+          ext_pan_id_[k * 2 + 1] = kHex[buf_[i + k] & 0x0f];
+        }
+        ext_pan_id_[16] = '\0';
+        return;
+      }
+      i += vlen;
+    }
+  }
+
   std::uint8_t buf_[kMaxBytes] = {0};
   std::size_t  len_ = 0;
   std::uint8_t channel_ = 0;
   char         name_[kMaxNameLen + 1] = {0};
+  char         ext_pan_id_[17] = {0};
 };
 
 }  // namespace core
