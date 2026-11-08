@@ -6,6 +6,7 @@
 #include "hubproto/frame.hpp"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
+#include "hubproto/version.hpp"
 
 using namespace hubproto;
 
@@ -60,4 +61,84 @@ TEST_CASE("THREAD_DATASET refuses what it cannot carry") {
 
 TEST_CASE("the Thread dataset fits one frame") {
   CHECK(1 + kThreadDatasetMax <= kMaxPayloadSize);
+}
+
+TEST_CASE("a real-sized Thread dataset survives the frame layer") {
+  // The dataset a Thread leader really has: 109 bytes of TLVs with zero bytes
+  // in them (the network key is mostly zeros) — the case the COBS framing has
+  // to survive. This is the frame the co-processor sends to the brain.
+  std::array<std::uint8_t, 109> tlvs{};
+  for (std::size_t i = 0; i < tlvs.size(); ++i) {
+    tlvs[i] = static_cast<std::uint8_t>((i * 37u + 11u) & 0xFFu);
+  }
+  tlvs[7] = 0x00;
+  tlvs[8] = 0x00;
+
+  std::array<std::uint8_t, 1 + kThreadDatasetMax> payload{};
+  auto enc = encode_thread_dataset(tlvs.data(), tlvs.size(), payload.data(), payload.size());
+  REQUIRE(enc.ok);
+  REQUIRE(enc.len == 1 + tlvs.size());
+
+  Header h{};
+  h.version = kProtocolVersion;
+  h.type = MsgType::ThreadDataset;
+  h.chip_id = 0x02;
+  h.boot_id = 4;
+  h.seq = 17;
+  h.entity_id = 0;
+
+  std::array<std::uint8_t, kMaxFrameSize> frame{};
+  auto fr = encode_frame(h, payload.data(), enc.len, frame.data(), frame.size());
+  REQUIRE(fr.ok);
+  // The frame is big but well inside the limits of the layer.
+  CHECK(fr.len > 100);
+  CHECK(fr.len <= kMaxFrameSize);
+
+  // Byte by byte, the way the UART task hands the bytes over.
+  FrameReader<> reader;
+  bool ready = false;
+  for (std::size_t i = 0; i < fr.len; ++i) {
+    if (reader.push(frame[i])) ready = true;
+  }
+  REQUIRE(ready);
+  CHECK(reader.bad_frames() == 0);
+  CHECK(reader.header().type == MsgType::ThreadDataset);
+  CHECK(reader.header().chip_id == 0x02);
+  CHECK(reader.header().seq == 17);
+  REQUIRE(reader.payload_len() == enc.len);
+
+  ThreadDatasetView view{};
+  REQUIRE(decode_thread_dataset(reader.payload(), reader.payload_len(), view));
+  CHECK(view.len == tlvs.size());
+  for (std::size_t i = 0; i < tlvs.size(); ++i) CHECK(view.bytes[i] == tlvs[i]);
+}
+
+TEST_CASE("a Thread dataset arrives whole when the bytes come in one piece") {
+  // The same frame, but handed over in one chunk (the RX task may read it all
+  // at once). The reader must not care how the bytes were cut up.
+  std::array<std::uint8_t, 109> tlvs{};
+  for (std::size_t i = 0; i < tlvs.size(); ++i) {
+    tlvs[i] = static_cast<std::uint8_t>((i * 91u + 7u) & 0xFFu);
+  }
+  std::array<std::uint8_t, 1 + kThreadDatasetMax> payload{};
+  auto enc = encode_thread_dataset(tlvs.data(), tlvs.size(), payload.data(), payload.size());
+  REQUIRE(enc.ok);
+
+  Header h{};
+  h.version = kProtocolVersion;
+  h.type = MsgType::ThreadDataset;
+  h.chip_id = 0x02;
+  std::array<std::uint8_t, kMaxFrameSize> frame{};
+  auto fr = encode_frame(h, payload.data(), enc.len, frame.data(), frame.size());
+  REQUIRE(fr.ok);
+
+  FrameReader<> reader;
+  bool ready = false;
+  for (std::size_t i = 0; i < fr.len; ++i) {
+    if (reader.push(frame[i])) ready = true;
+  }
+  REQUIRE(ready);
+  ThreadDatasetView view{};
+  REQUIRE(decode_thread_dataset(reader.payload(), reader.payload_len(), view));
+  CHECK(view.len == tlvs.size());
 }

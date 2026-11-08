@@ -507,6 +507,8 @@ void heartbeat_cb(void* /*arg*/) {
     self.tx_frames = static_cast<std::uint32_t>(g_bus->tx_frames());
     self.crc_errors = static_cast<std::uint16_t>(g_bus->bad_frames());
   }
+  // No Thread stack here: the role is "none" and there are no Thread children.
+  self.thread_role = hubproto::chip_attr::kNoThreadRole;
 
   std::uint8_t buf[64];
   auto r = hubproto::encode_chip_self_state(kOwnChipId, self, buf, sizeof(buf));

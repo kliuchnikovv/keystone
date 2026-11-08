@@ -201,6 +201,13 @@ inline constexpr std::uint8_t kBootId    = 0x72;  // u8  reboot counter (NVS)
 inline constexpr std::uint8_t kRxFrames  = 0x73;  // u32 frames received from the brain
 inline constexpr std::uint8_t kTxFrames  = 0x74;  // u32 frames sent to the brain
 inline constexpr std::uint8_t kCrcErrors = 0x75;  // u16 frames dropped (bad CRC/COBS)
+// The Thread role of the chip and the number of devices in our Thread network.
+// Only the Thread co-processor has them; the other chips report kNoThreadRole.
+// The role follows OpenThread's otDeviceRole: 0 disabled, 1 detached, 2 child,
+// 3 router, 4 leader.
+inline constexpr std::uint8_t kThreadRole   = 0x76;  // u8  Thread role (0xff = none)
+inline constexpr std::uint8_t kThreadKids   = 0x77;  // u8  children in our Thread network
+inline constexpr std::uint8_t kNoThreadRole = 0xff;  // "this chip has no Thread stack"
 }  // namespace chip_attr
 
 // Canonical telemetry carried by the self entity.
@@ -211,9 +218,11 @@ struct ChipSelf {
   std::uint32_t rx_frames;
   std::uint32_t tx_frames;
   std::uint16_t crc_errors;
+  std::uint8_t  thread_role;      // chip_attr::kThreadRole
+  std::uint8_t  thread_children;  // chip_attr::kThreadKids
 };
 
-// Encode the self entity's DECLARE (device_type=Chip, six attrs).
+// Encode the self entity's DECLARE (device_type=Chip, eight attrs).
 EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t* out,
                                       std::size_t cap) noexcept;
 

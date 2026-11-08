@@ -23,7 +23,7 @@ TEST_CASE("chip self declare round-trips") {
   REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));
   CHECK(v.entity_id == kSelfEntityId);
   CHECK(v.device_type == DeviceType::Chip);
-  REQUIRE(v.attr_count == 6);
+  REQUIRE(v.attr_count == 8);
 
   auto a0 = hubproto::declare_attr_at(v, 0);
   CHECK(a0.attr_id == attr::kUptimeS);
@@ -32,6 +32,14 @@ TEST_CASE("chip self declare round-trips") {
   auto a5 = hubproto::declare_attr_at(v, 5);
   CHECK(a5.attr_id == attr::kCrcErrors);
   CHECK(a5.value_type == ValueType::U16);
+
+  auto a6 = hubproto::declare_attr_at(v, 6);
+  CHECK(a6.attr_id == attr::kThreadRole);
+  CHECK(a6.value_type == ValueType::U8);
+
+  auto a7 = hubproto::declare_attr_at(v, 7);
+  CHECK(a7.attr_id == attr::kThreadKids);
+  CHECK(a7.value_type == ValueType::U8);
 }
 
 TEST_CASE("chip self state round-trips") {
@@ -42,6 +50,8 @@ TEST_CASE("chip self state round-trips") {
   in.rx_frames = 1000;
   in.tx_frames = 1500;
   in.crc_errors = 3;
+  in.thread_role = 4;     // leader
+  in.thread_children = 2;
 
   std::array<std::uint8_t, 64> buf{};
   auto r = hubproto::encode_chip_self_state(kSelfEntityId, in, buf.data(), buf.size());
@@ -59,6 +69,8 @@ TEST_CASE("chip self state round-trips") {
       case attr::kTxFrames: return ValueType::U32;
       case attr::kBootId:   return ValueType::U8;
       case attr::kCrcErrors:return ValueType::U16;
+      case attr::kThreadRole:
+      case attr::kThreadKids:return ValueType::U8;
       default: return static_cast<ValueType>(0);
     }
   };
@@ -75,6 +87,8 @@ TEST_CASE("chip self state round-trips") {
       case attr::kRxFrames:  out.rx_frames = v.as_u32(); break;
       case attr::kTxFrames:  out.tx_frames = v.as_u32(); break;
       case attr::kCrcErrors: out.crc_errors = v.as_u16(); break;
+      case attr::kThreadRole: out.thread_role = v.as_u8(); break;
+      case attr::kThreadKids: out.thread_children = v.as_u8(); break;
     }
   }
   REQUIRE(rd.valid);
@@ -85,4 +99,6 @@ TEST_CASE("chip self state round-trips") {
   CHECK(out.rx_frames == 1000);
   CHECK(out.tx_frames == 1500);
   CHECK(out.crc_errors == 3);
+  CHECK(out.thread_role == 4);
+  CHECK(out.thread_children == 2);
 }
