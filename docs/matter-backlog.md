@@ -597,6 +597,218 @@ look like depends on the co-processor's own Thread network: if OpenThread runs
 there without an active dataset, the chip says so and the dataset cannot be
 lent out yet.
 
+**R3, second attempt: the co-processor becomes a pure Thread host (06.11.2026).**
+The bridge code is out of the thread-c6 — the Apple Home side of it is what
+took ~190 KB of static DRAM (SPEC §11, «the bridge is heavy»). What is left on
+that chip is what it was always good for: an OpenThread instance with a real
+802.15.4 radio. So the chip is now **the hub's Thread network host**:
+
+- it forms (or keeps) the network `keystone-home` on channel 15 and stays the
+  leader — its own log says `role=leader network=keystone-home`;
+- the operational dataset lives in NVS (`thread_net`/`ds`), so a reflash of the
+  chip does not change the network the devices were commissioned into (a fresh
+  key would leave every device behind);
+- it lends the dataset to the brain over the link (0x62/0x63, the table above),
+  which is exactly what a Matter commissioner needs to hand a device;
+- it answers `MatterPair` with `unsupported`: the CHIP stack is gone from this
+  chip, the commissioner lives in the brain.
+
+Two things about the OpenThread port on the C6 are worth writing down, because
+both cost an afternoon:
+
+1. **`esp_vfs_eventfd_register()` must come before `esp_openthread_init()`**
+   (`max_fds = 3`). Without it the port does not come up at all, and the
+   failure is silent — no OpenThread, no error.
+2. **Every call into OpenThread has to hold the port lock**
+   (`esp_openthread_lock_acquire()` / `_release()`), because the instance belongs
+   to the OpenThread main-loop task: reading the dataset while the main loop is
+   halfway through a dataset update gives you half a dataset.
+
+**The dataset frame does not arrive (open).** The chip answers the request and
+logs it — `sent the Thread dataset (109 bytes) to the brain` — but the brain
+never sees it: `matter_pair_thread` waits out its 15 s and prints «no dataset in
+15000 ms». Everything around it is proven:
+
+- the **protocol** is proven by host tests — a 109-byte dataset through
+  `encode_frame`/`FrameReader` (byte by byte and in one piece) and through the
+  real `UartTransport` over `InMemoryLink` in the chip→brain direction
+  (`libhubproto/test/test_payload_thread_dataset.cpp`,
+  `core/test/test_uart_transport.cpp`; 411/411 host tests green);
+- the **link** is alive in that direction — the brain sees the chip's telemetry
+  (heap, uptime, tx_frames, crc_errors) and the chip's own log shows it
+  answering the request, so the request reached the chip;
+- the **frame** is the only big frame in the system (122 bytes on the wire; the
+  telemetry frames are ~40), which is why it gets its own test.
+
+The frame layer is silent when it drops a block, so "the frame was lost" and
+"the frame never left the chip" look the same from the outside. Two
+diagnostics were added for the next run:
+
+- the chip says whether the frame was really written
+  (`sent the Thread dataset (…) to the brain: written` / `WRITE FAILED`);
+- the brain counts what its own link dropped (`UartTransport::bad_frames()`),
+  logs it when the counter grows («link dropped frames: zigbee N, thread N») and
+  prints it per chip in the `chips` console output (`crc_errors …, dropped …`).
+
+With those two numbers the next run splits the case in two: the counter grows
+→ the frame arrived and was rejected (COBS/CRC); the counter stays → the
+frame never reached the brain's UART.
+
+**One false lead, closed (06.11.2026).** The brain's console showed
+`ROUTE_HOOK: Received RIO` / `prefix FD56:BFEE:8601:: lifetime 1800` every
+minute or so, and the prefix looks exactly like an OpenThread mesh-local
+prefix — as if the brain had joined the hub's Thread network. It has not: the
+string is **lwIP's IPv6 NDP route hook** on the Wi-Fi interface (the tag
+`ROUTE_HOOK` and the neighbouring format strings `Received RIO`,
+`prefix %s lifetime %lu` sit in the brain's own image next to the Wi-Fi
+strings), and the prefix is the ULA prefix the *home router* advertises. The
+S3 has no 802.15.4 radio and no OpenThread at all (`CONFIG_OPENTHREAD_ENABLED`
+is off; only `CONFIG_ESP_MATTER_ENABLE_OPENTHREAD` is on, which is the CHIP
+stack's own knob).
+
+**The probe (06.11.2026).** `scripts/thread-dataset-probe.sh` does the whole
+round in one run: it finds the two boards by their USB MAC (the ports swap
+when a board is re-plugged!), checks each board's console prompt (`home>` /
+`thread>`) so the wrong one cannot be flashed, flashes the two rebuilt images
+(without `erase_flash` — the Thread network and the chip's dataset survive),
+asks the brain for the dataset and prints the lines that answer the question.
+The images are built (thread-c6 623 KB, brain-s3 0x1df3f0 with 3 KB of flash
+to spare) but **not yet flashed** — writing firmware to a board needs the
+person's go-ahead.
+
+**R3, third attempt: the dataset arrives, the device joins the Thread network,
+the operational channel does not (07.11.2026).** Both boards were flashed with
+the rebuilt images (the brain — ESP32-S3 on `/dev/ttyACM0`, MAC
+`10:51:DB:5E:F8:94`; the co-processor — ESP32-C6, MAC `AC:EB:E6:DA:FC:08`;
+the tty numbers swap when a board is re-plugged, so find them by MAC). Both
+came up:
+
+- the brain: `Wi-Fi IPv6 link-local address created` → `controller up (node
+  112233, fabric 1, UDP 5580): heap 93779 B (-12096 B), largest block 31744 B`
+  → **`bus fan-out: 9 subscribers (room for 12)`**. The ninth subscriber is
+  the cross-chip forwarder — which is also what unpacks the Thread dataset —
+  and with the old eight-slot table it was silently dropped. That was the real
+  reason the dataset "never arrived": not the link, not the frame, a full
+  subscriber table (`dropped 0` on both links the whole time);
+- the chip: OpenThread up, `role=leader network=keystone-home`.
+
+`matter_pair_thread 4660 39441506 569` on the brain:
+
+```
+matter: asked chip 0x02 for its Thread dataset, waiting 15000 ms...
+matter: got the Thread dataset (109 bytes, channel 26, name 'keystone-home')
+```
+
+— **the frame from the co-processor reached the commissioner.** The open
+question of 06.11 is closed.
+
+The commissioning then went all the way, further than it ever has:
+
+```
+chip[BLE]: Device Discriminator match. Attempting to connect
+CHIP[DL]: ble_gattc_exchange_mtu failed: 2 (keeping the connection)   ← the NimBLE patch
+pairing_command: PASE session establishment success
+AttestationVerification ✓  AttestationRevocationCheck ✓  ValidateCSR ✓
+GenerateNOCChain ✓  SendNOC ✓
+chip[CTL]: Successfully finished commissioning step 'ThreadNetworkSetup'
+chip[CTL]: Successfully finished commissioning step 'ThreadNetworkEnable'
+```
+
+and the device **joined the Thread network**: the chip reports `0x76=4`
+(leader) and `0x77=1` (one child — the sensor).
+
+**The wall is now the operational channel (CASE).** The commissioner sends the
+first CASE message to the device's Thread address:
+
+```
+chip[EM]: >>> Msg TX ... [UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8]:5540]
+         --- Type 0000:30 (SecureChannel:CASE_Sigma1)
+```
+
+and gets nothing: four retransmissions die, `Session establishment failed for
+<0000000000001234, 2>, error: 32` (timeout), CHIP extends the fail-safe and
+retries. Why: the hub is on Wi-Fi, the device on Thread, and the only path
+between them is the co-processor as a Border Router. The host→Thread direction
+needs the BR to translate the host's address into a Thread address (the
+MeshCoP Address Table — the "NAT" of a Border Router); without that
+translation the Sigma1 has nowhere to go. The hub *does* learn the route for
+the Thread prefix (`ROUTE_HOOK: prefix FD7C:568:D52B:1::`), so the prefix
+advertisement works — what is missing is the address translation on the BR
+side. Open for the next run:
+
+- does this build's Border Router run the TREL/Address Table at all?
+  `CONFIG_OPENTHREAD_BORDER_ROUTER=y` only arms the BR path; the translation
+  is a separate mechanism in the border-router example;
+- the chip's own `ot` CLI answers the question (trel/nat state) — but opening
+  the C6's USB console resets it and the sensor has to rejoin, so read that
+  state *before* a commissioning run, not after.
+
+Side observations from the same run: the Zigbee co-processor is flapping (four
+reboots in five minutes) and the IKEA plug (entity 0x0100) is offline —
+`zigbee-c6: NWK addr lookup failed for entity 0x0100 (offline?)` — which
+matches the plug being unplugged.
+
+**The address translation is *not* the wall (07.11.2026, later the same day).**
+Read in the OpenThread sources of the IDF 5.5 image and measured on the chip
+(`thread` command on the co-processor):
+
+- the network data publishes exactly **one** on-mesh prefix — the Border
+  Router's own OMR prefix `fd7c:568:d52b:1::/64` (`omr prefix:
+  fd7c:568:d52b:1::/64`, `omr in netdata: yes`, and the on-mesh table has only
+  that one entry). The dataset's Mesh-Local prefix `fdc7:d07f:ab6f:6eef::/64` is
+  *not* published as an on-mesh prefix;
+- the sensor's operational address in the fabric is therefore the OMR one:
+  `fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8` = the OMR prefix + the IID of its
+  Mesh-Local address;
+- **OpenThread has no NPT/MLAT** (grepping the OT sources finds only the NAT64
+  translator): it never swaps the OMR and ML prefixes. But it does not have to.
+  `Ip6::IsOnLink()` answers "yes" for any address inside an *on-mesh* prefix,
+  and the OMR prefix is exactly that — so `Ip6::DetermineAction()` sets
+  `aForwardThread` and the packet goes into the mesh. The BR forwards to the
+  OMR address, and the mesh resolves the device's RLOC16 from the IID (address
+  query) as usual;
+- the hub's side of the path works too: the co-processor advertises the OMR
+  prefix upstream as a RIO, and the brain's Matter stack keeps it in its route
+  hook (`ROUTE_HOOK: prefix FD7C:568:D52B:1::`) with the gateway = the
+  co-processor's backbone link-local `fe80::aeb:e6ff:feda:fc08`.
+
+So the "NAT" the previous entry looked for is not needed for the host→Thread
+direction. The missing piece is one hop earlier: **the Sigma1 never reached the
+co-processor's OT stack at all** — `br counters: in_unicast=0 pkt/0 B
+out_unicast=0 pkt/0 B` (the OT border-routing counters: *in* = from the mesh,
+*out* = into the mesh).
+
+Two more measurements from the same day:
+
+- the co-processor's **reset reason** after the previous run is `interrupt
+  watchdog` — a hang, not a brownout. It did **not** repeat when only the
+  dataset was requested (`sent the Thread dataset (109 bytes, 110 byte
+  payload) to the brain: written`, and the chip kept running afterwards), so
+  whatever hung it needs the commissioning traffic, not the dataset;
+- the **partition ID no longer churns**: `0x851f9b0` is the same before and
+  after a reboot (the earlier churn — `0x6076210b → 0x707e2214 → 0x751bb2fe` —
+  was from before the dataset was kept in NVS);
+- the sensor is **detached** (`children=0`) and **no longer advertises BLE** —
+  the commissioning scan of 07.11 sees only other devices' advertisements. A
+  new commissioning therefore needs a **factory reset of the TIMMERFLOTTE**
+  (the physical button), after which it advertises again and can be
+  commissioned into our fabric once more.
+
+**A diagnostic for the hop that failed** (new console command on the brain,
+Matter build only):
+
+```
+ip6                 the Wi-Fi interface's IPv6 addresses
+ip6 <address>       the route lwIP would take (netif + gateway), from the Matter stack's route hook
+ip6 probe <address> [port]
+                    send one UDP datagram and report what lwIP made of it
+```
+
+`ip6 probe` is the cheap way to answer "does a packet reach the mesh?": the
+co-processor counts what enters the mesh (`out_unicast`), so a probe plus a
+`thread` command on the chip settles the question without a device — and
+without touching the sensor.
+
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person
 adds it to Apple Home with the Home app) needs no chip work at all.
@@ -627,6 +839,171 @@ That is why the app's "Add to the hub" must not promise that the device will
 appear in Apple Home — and why the phone's Bluetooth read stays useful even in
 the F4 variant: it identifies the device and carries the payload, and the
 person adds it to Home with the Home app exactly as they would without us.
+
+**The wall was the missing interface, not the address translation (07.11.2026,
+evening).** `br counters: in_unicast=0` means the packet never got into the
+OpenThread stack — and the reason is now read out of the IDF 5.5 sources and
+confirmed on the chip:
+
+- our co-processor started the stack with the **legacy** `esp_openthread_init()`.
+  That call brings up the platform, the instance and the radio — and **no lwIP
+  interface**. The "ot" netif is made by the modern `esp_openthread_start()`:
+  its worker task does `esp_netif_new(&config->netif_config)` and
+  `esp_netif_attach(netif, esp_openthread_netif_glue_init(...))`
+  (`components/openthread/src/esp_openthread.cpp`, `ot_task_worker`). The IDF's
+  own Border Router example (`examples/openthread/ot_br`) uses exactly that
+  call, with `.netif_config = ESP_NETIF_DEFAULT_OPENTHREAD()`;
+- without that netif lwIP has **no interface into the mesh at all**: the next
+  hop for a mesh address cannot be resolved (`nd6_get_next_hop_entry()` →
+  `ERR_RTE`), so every backbone packet to a mesh address dies in lwIP before
+  the OpenThread stack sees it. The chip's own `thread` command said it
+  plainly: `ot netif: none`;
+- the netif also needs an **address** of the prefix the mesh lives in, or lwIP
+  has no on-link route. That address is what the SLAAC module forms out of the
+  OMR prefix the BR publishes (the BR flags it `mSlaac`). The module is **not
+  in the IDF build of the OT core**: `OPENTHREAD_CONFIG_IP6_SLAAC_ENABLE`
+  defaults to 0 in `openthread/src/core/config/ip6.h`, so neither
+  `slaac_address.cpp` nor its notifier hook is compiled in. Upstream's own
+  Border Router config (`openthread/examples/config/ot-core-config-check-size-br.h`)
+  turns it on. Ours does too, through a custom OT config header:
+  `main/esp_ot_custom_config.h` (`#define OPENTHREAD_CONFIG_IP6_SLAAC_ENABLE 1`)
+  plus `CONFIG_OPENTHREAD_HEADER_CUSTOM=y` and the path/file name in
+  `sdkconfig.defaults.esp32c6`.
+
+So the change on the co-processor is: start the stack with
+`esp_openthread_start()` (and let it run the main loop in its own task — our
+own `ot_mainloop_task` is gone), and keep the SLAAC module in. The first boot
+of that image confirms the interface exists: `OPENTHREAD: OpenThread attached
+to netif`.
+
+**Two more traps of that same boot (both fixed).** The image with the netif
+froze right after `the Thread role is enabled`, with the console dead (the
+`thread` command waits on the OT lock) and the Wi-Fi gone at the 27th second
+(`bcn_timeout`):
+
+- the freeze was a call to `esp_openthread_set_backbone_netif()` made **under
+  the OT lock** — the IDF's example calls it in the same place, but there it is
+  a no-op for us: the co-processor had already been given its backbone netif
+  (right after the stack came up), and the second call did nothing good. The
+  backbone netif is now handed over once, outside the lock, right after
+  `esp_openthread_start()`;
+- the Wi-Fi loss was the **coexistence arbiter**: on the C6, Wi-Fi and 802.15.4
+  share one radio, and the 802.15.4 side goes active the moment the Thread
+  role is enabled. The arbiter was armed only *after* the Border Router
+  started — long after the radio had begun to starve the Wi-Fi. It is now
+  armed **before** the role is enabled (in `thread_network_task`, right before
+  `thread_bring_up()`), so the Wi-Fi keeps its access point.
+
+The log lines around mDNS and the BR start were kept (`starting mDNS`,
+`setting the mDNS hostname`, `starting the Border Router`) — the freeze above
+was found by them, and the next freeze should be too.
+
+**The second freeze was a deadlock between the OT lock and mDNS (07.11.2026,
+night).** The image with the netif in it froze again — this time right after
+`starting mDNS` — and the Wi-Fi died 13 s later (`bcn_timeout`,
+`wifi:state: run -> init`). The cause is in the IDF sources, and it is a real
+deadlock, not a slow call:
+
+- `esp_openthread_lock_acquire()` takes **two** recursive mutexes
+  (`components/openthread/src/esp_openthread_lock.c`): `s_openthread_mutex` and
+  `s_openthread_task_mutex` (the task-switching lock). The OpenThread main
+  loop takes the same lock around every iteration
+  (`esp_openthread.cpp`: `esp_openthread_platform_process()` +
+  `otTaskletsProcess()`), so while we hold it, **the OT stack does not run at
+  all**;
+- the tx path of the "ot" netif takes the task-switching lock too
+  (`esp_openthread_netif_glue.c`: `openthread_netif_transmit()`), so with the
+  lock held, any lwIP packet that goes out through that netif blocks;
+- `mdns_init()` is an lwIP thing: it waits for the lwIP thread
+  (`mdns_priv_if_init()` → `tcpip_api_call(pcb_if_init_lwip, ...)`, which joins
+  the ff02::fb multicast group and sends the MLD report).
+
+So: our task holds the OT lock and waits for the lwIP thread; the lwIP thread
+can end up in the "ot" netif's tx path and waits for the task-switching lock we
+are holding. Neither ever gets there — and the Wi-Fi driver, starved of the
+lwIP lock, stops seeing beacons.
+
+The fix is to keep the OpenThread lock away from anything lwIP-ish: the mDNS
+start is now a separate step (`thread_bring_up_mdns()`) that runs **outside**
+the lock, and only the Border Router call itself takes the lock, for its own
+duration. Verified on the chip: `mDNS is up` → `mDNS hostname is 'keystone-br'`
+→ `Border Router is up (SRP server + DNS-SD + border routing)`, the Thread
+role comes up as **leader** on `keystone-home`, the Wi-Fi keeps its access
+point (no `bcn_timeout` any more) and the netif reports `OT_STATE: netif up`.
+
+**And the mDNS step has to come BEFORE the Thread role, not after.** The Border
+Router publishes its Thread network as `_meshcop` the moment the OT state
+changes (`esp_openthread_state.c` → `esp_openthread_publish_meshcop_mdns()`),
+and that publish needs the mDNS **hostname** to be there already — the mDNS
+component keeps every service under the hostname, and a service published
+without one is dropped without a word (`Failed to publish meshcop mdns
+service`). In the boot order above the hostname was set *after* the role was
+enabled, so the publish was lost: a raw mDNS query on the LAN
+(`_meshcop._udp.local`) gets an answer from Apple's Border Router and from
+other Matter devices, but **nothing from our co-processor (192.168.0.201)**.
+The order is now `mDNS + hostname` → Thread role → Border Router.
+**Not yet verified on the hardware** (the image with this order is built; the
+flash needs the go-ahead).
+
+**Not yet re-verified on the hardware**: with the netif in place, the
+Sigma1 has to reach the mesh at all (the BR counters must start moving), and
+the CASE session has to come up. That needs a **factory reset of the
+TIMMERFLOTTE** (the physical button — the sensor is detached and no longer
+advertises BLE) and a fresh `matter_pair_thread <node_id> <pincode>
+<discriminator>` on the brain.
+
+**The CASE destination was the device's OMR address all along (08.11.2026).**
+The raw log of the failing run (not a summary of it) says:
+
+```
+159:I (741173) chip[DIS]: UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8%st1]:5540: new best score: 3 (for B9208C6B9B867EED-0000000000001234)
+162:I (741353) chip[EM]: <<< ... [UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8]:5540] --- Type 0000:30 (SecureChannel:CASE_Sigma1)
+```
+
+and the co-processor's console for *that* network said:
+
+```
+mesh-local prefix: fdc7:d07f:ab6f:6eef::/64
+omr prefix:        fd7c:568:d52b:1::/64
+on-link prefix:    fd5e:986a:bb23:be7e::/64
+```
+
+So `fd7c:568:d52b:1::/64` was that network's **OMR (routable, domain) prefix** —
+its mesh-local prefix was `fdc7:…`. The address only *looks* mesh-local:
+`fd7c:568:d52b:1::/64` is Thread's **default** mesh-local prefix (RFC 6603),
+which is why two readings of the same line disagreed for a week.
+
+⇒ **No address translation is needed — and none could help.** The device was
+addressed correctly; the packet had nowhere to go. Two things were missing that
+day, and both had to be fixed:
+
+- the brain had **no route** to that network's OMR prefix. The BR advertises
+  its own OMR prefix upstream as a RIO, and the brain picks it up with CHIP's
+  route hook (`ROUTE_HOOK: Received RIO / prefix FD3C:1C91:4A38:1:: lifetime
+  1800`) — but only while that network is the current one. The network was
+  reformed in between (old OMR `fd7c:568:d52b:1::/64`, current
+  `fd3c:1c91:4a38:1::/64`), so the RIO the brain held pointed at a prefix the
+  device was not in, and the packet died in the home router;
+- the co-processor had **no lwIP interface into the mesh** (the legacy
+  `esp_openthread_init()`), so even a routed packet would have died on its side
+  with `ERR_RTE` before OpenThread saw it — hence `br counters: in_unicast=0`.
+
+Both are in place now: the "ot" netif exists and holds an address *in* the
+OMR prefix (`fd3c:1c91:4a38:1:788:e3e8:31d2:e757`), which is what lets lwIP
+route into the mesh, and the brain's route to the OMR prefix is the BR's
+link-local (`FE80::AEEB:E6FF:FEDA:FC08`).
+
+**What is left is one physical action.** The sensor is detached
+(`children=0`) and does not advertise BLE any more (the scan of 07.11 saw only
+other people's advertisements), so it has to be **factory-reset** — the button
+on the TIMMERFLOTTE — before it can be commissioned into the current network.
+Then one `matter_pair_thread 4660 39441506 569` should put the Sigma1 out to
+`fd3c:1c91:4a38:1:…`, and the co-processor's `br counters: in_unicast` is the
+check that the packet really entered the mesh (and `out_unicast` on the way
+back). If the counters move but CASE still fails, the next thing to look at is
+the brain's **source** address: the packet has to leave with an address the
+mesh can answer to (the on-link prefix the BR advertises), not with the Wi-Fi
+link-local — that is what the brain's `ip6` command prints.
 
 ### 4. Data model — Matter endpoints on the C6
 
