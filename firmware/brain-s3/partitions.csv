@@ -1,13 +1,19 @@
 # Partition table for the brain (ESP32-S3-Zero, 4 MB flash).
 #
 # The single 1 MB `factory` slot overflowed once the HTTP client (OTA download
-# for the C6s, docs/ota.md) was linked. Two ~1.9 MB OTA slots leave room to grow
+# for the C6s, docs/ota.md) was linked. Two ~2 MB OTA slots leave room to grow
 # and for the brain to update itself later. `nvs` and `phy_init` keep their old
 # offsets so stored names, timers and Wi-Fi settings survive the re-flash.
+#
+# The Matter build (the CHIP controller, the BLE commissioner and the custom
+# attestation trust store) outgrew the old 0x1E0000 slots by 880 bytes in
+# November 2026. The 4 MB flash has 128 KB unused after `ota_1`, so both slots
+# grew to 0x1F0000 (64 KB of headroom each) and `ota_1` moved to 0x210000 —
+# `ota_0` stays at 0x20000, so the USB flash recipe is unchanged.
 #
 # Name,    Type, SubType, Offset,   Size,     Flags
 nvs,       data, nvs,     0x9000,   0x6000,
 phy_init,  data, phy,     0xf000,   0x1000,
 otadata,   data, ota,     0x10000,  0x2000,
-ota_0,     app,  ota_0,   0x20000,  0x1E0000,
-ota_1,     app,  ota_1,   0x200000, 0x1E0000,
+ota_0,     app,  ota_0,   0x20000,  0x1F0000,
+ota_1,     app,  ota_1,   0x210000, 0x1F0000,

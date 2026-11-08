@@ -45,9 +45,10 @@ def main() -> int:
     args = ap.parse_args()
 
     s = serial.Serial(args.port, args.baud, timeout=0.2)
-    # Do not toggle DTR/RTS: on the C6s that would reset the board.
-    s.dtr = False
-    s.rts = False
+    # Do not touch DTR/RTS. Deasserting DTR resets the brain (the S3 wires it
+    # to EN), and a pulse on RTS resets the C6s - either way the command would
+    # be swallowed by the boot log. pyserial's default (both asserted) is what
+    # the boards see on a plain terminal, so leave it alone.
 
     if args.watch or args.interactive:
         stop = threading.Event()

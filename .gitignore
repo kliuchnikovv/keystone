@@ -8,6 +8,7 @@ firmware/*/build/
 firmware/*/build-docker/
 firmware/*/sdkconfig
 firmware/*/sdkconfig.old
+firmware/*/sdkconfig.bak
 firmware/*/managed_components/
 firmware/*/dependencies.lock
 

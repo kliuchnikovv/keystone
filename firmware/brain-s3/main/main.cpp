@@ -107,6 +107,15 @@
 #include <esp_matter.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_pairing_command.h>
+// lwIP for the IPv6 diagnostics of the Matter path (see cmd_ip6). These have to
+// be included here, outside the anonymous namespace: otherwise lwIP's types
+// (struct netif, struct ip6_addr_t) would land in it.
+#include <arpa/inet.h>
+#include "lwip/errno.h"
+#include "lwip/ip6_addr.h"
+#include "lwip/netif.h"
+#include "lwip/sockets.h"
+#include "lwip/tcpip.h"
 #endif
 
 #ifdef KEYSTONE_HAVE_TLS
@@ -208,6 +217,103 @@ static void wifi_creds_erase() {
     nvs_close(h);
 }
 
+// The Matter controller is created only once the Wi-Fi interface is up and
+// has a usable IPv6 link-local address (see matter_controller_start below):
+// CHIP binds its mDNS endpoints when the controller is created, and it can
+// only do that on an interface that has an address.
+#ifdef KEYSTONE_HAVE_MATTER
+static void matter_controller_start();
+static void matter_controller_task(void* arg);
+
+// Woken when the controller task is done: the main loop waits for it, so that
+// the CHIP controller is created while the internal heap is still one big
+// block (see matter_controller_task).
+static SemaphoreHandle_t g_matter_ctrl_done = nullptr;
+
+// True once the CHIP controller exists. It is created only when the Wi-Fi
+// interface has its IPv6 address (see matter_controller_start), so until then
+// there is no commissioner and no mDNS endpoint — a request would be accepted
+// and then silently dropped.
+static bool g_matter_controller_ready = false;
+
+// Why the controller is not up (or that it is). The boot log says it once and
+// then the line scrolls away, while the console stays open for hours — so the
+// reason is kept and shown with the next commissioning request.
+//
+// A pointer, not a copy: the strings are literals that are in flash anyway,
+// and this image has only a few hundred bytes of room in its app partition.
+static const char* g_matter_status = "not started";
+
+static void matter_set_status(const char* what) { g_matter_status = what; }
+#endif
+
+// The IPv6 link-local address of the Wi-Fi interface.
+//
+// lwIP does NOT create it by itself — the application has to ask for it
+// (esp_netif_create_ip6_linklocal). Matter needs one, and it is not a detail:
+// CHIP's own mDNS server binds one UDP endpoint per interface that has an
+// IPv6 address, and it binds them ONCE, when the controller is created. With
+// no IPv6 address on the interface it binds nothing at all, and the DNS-SD
+// query for the device then fails with CHIP_ERROR_NO_ENDPOINT (0x46) — the
+// commissioning died there with "Device connection failed. Error 46".
+//
+// The address is derived from the interface's hardware address, so it can only
+// be made after esp_wifi_init() has given the netif its MAC.
+//
+// Creating it twice would restart lwIP's duplicate address detection, so it is
+// done once and only when the interface is up.
+static bool s_wifi_ipv6_created = false;
+
+static void wifi_ipv6_linklocal() {
+    if (s_wifi_ipv6_created) {
+        return;
+    }
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) {
+        ESP_LOGW(kTag, "no Wi-Fi netif; no IPv6 link-local address");
+        return;
+    }
+    const esp_err_t err = esp_netif_create_ip6_linklocal(netif);
+    if (err != ESP_OK) {
+        // The interface is not up yet — the caller tries again later. Quiet
+        // here on purpose: the wait below polls, and a warning per poll would
+        // bury the boot log.
+        return;
+    }
+    s_wifi_ipv6_created = true;
+    ESP_LOGI(kTag, "Wi-Fi IPv6 link-local address created (waiting for DAD)");
+}
+
+// Wait until the Wi-Fi interface has a *usable* IPv6 link-local address.
+//
+// The address is made here if it is not there yet: the interface comes up with
+// the Wi-Fi driver, and that happens a moment after the Matter stack starts it
+// — so the caller cannot assume the address is there.
+//
+// A fresh lwIP address is "tentative" until the duplicate address detection
+// has finished (about a second), and esp_netif_get_ip6_linklocal() only hands
+// out a "preferred" one. CHIP's mDNS skips a tentative address, so the
+// controller must not be created before this returns true.
+static bool wait_wifi_ipv6_linklocal(std::uint32_t timeout_ms) {
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) {
+        ESP_LOGW(kTag, "no Wi-Fi netif; no IPv6 link-local address");
+        return false;
+    }
+    for (std::uint32_t waited = 0; waited <= timeout_ms; waited += 100) {
+        wifi_ipv6_linklocal();
+        esp_ip6_addr_t ll{};
+        if (esp_netif_get_ip6_linklocal(netif, &ll) == ESP_OK) {
+            ESP_LOGI(kTag, "Wi-Fi IPv6 link-local: " IPV6STR, IPV62STR(ll));
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    ESP_LOGW(kTag, "the Wi-Fi interface has no usable IPv6 link-local address after %u ms",
+             static_cast<unsigned>(timeout_ms));
+    return false;
+}
+
 // Обработчик событий WiFi
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data) {
@@ -218,6 +324,10 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         } else {
             ESP_LOGW(kTag, "WiFi STA Start: no credentials (set them with `wifi_join <ssid> <pass>`)");
         }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        // esp_netif has already brought the interface up (its own handler runs
+        // first), so the IPv6 link-local address can be made now.
+        wifi_ipv6_linklocal();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
         s_wifi_up = false;
@@ -237,6 +347,12 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ++s_wifi_got_ip;
         g_hub_dirty = true;
         sntp_init();
+        // The interface is up now: give it an IPv6 link-local address (Matter
+        // needs one, see wifi_ipv6_linklocal). The task that creates the
+        // controller waits for that address on its own — CHIP binds its DNS-SD
+        // endpoints on the interfaces that are up at the moment the controller
+        // is created, and it needs a *usable* (preferred) IPv6 address there.
+        wifi_ipv6_linklocal();
     }
 }
 
@@ -395,8 +511,27 @@ class ChipRouter final : public core::Bus {
     return ok;  // false for an unknown chip: nowhere to send
   }
 
+  // How many subscribers the fan-out holds right now.
+  int subscriber_count() const noexcept { return n_subs_; }
+
+  // How many subscribers fit. Who subscribes today: the radio coordinator, the
+  // state machine, the dispatcher, the chip monitor, the OTA verifier, the two
+  // OTA senders (they subscribe through the jobs' trampolines), the traffic
+  // counter and the cross-chip forwarder — nine. The table was eight, so the
+  // last one was silently dropped and the Thread dataset never reached the
+  // Matter commissioner.
+  static constexpr int kMaxSubs = 12;
+
   bool subscribe(MessageFn fn, void* ctx) noexcept override {
-    if (n_subs_ >= kMaxSubs) return false;
+    if (n_subs_ >= kMaxSubs) {
+      // Loud on purpose. A subscriber that does not fit is a feature that is
+      // silently broken — that is exactly how the Thread dataset never reached
+      // the Matter commissioner (the forwarder was the ninth subscriber of an
+      // eight-slot table, and nobody looked at the return value).
+      ESP_LOGE(kTag, "the bus fan-out table is full (%d subscribers) — this subscriber is dropped",
+               kMaxSubs);
+      return false;
+    }
     subs_[n_subs_] = {fn, ctx};
     ++n_subs_;
     return true;
@@ -404,7 +539,6 @@ class ChipRouter final : public core::Bus {
 
  private:
   static constexpr int kMaxBinds = 4;
-  static constexpr int kMaxSubs = 8;
 
   struct Bind { std::uint8_t chip_id; core::Bus* bus; };
   struct Sub { MessageFn fn; void* ctx; };
@@ -2262,6 +2396,144 @@ int cmd_wifi_scan(int /*argc*/, char** /*argv*/) {
   return 0;
 }
 
+#ifdef KEYSTONE_HAVE_MATTER
+// IPv6 diagnostics for the Matter path.
+//
+// The commissioner lives on the brain, but the Thread network lives on the C6
+// co-processor, which is a border router. A packet to a Matter device goes:
+// brain -> Wi-Fi -> C6 -> 802.15.4. The brain learns the route to the mesh
+// from the C6's router advertisement (a RIO), which the Matter stack's route
+// hook keeps. Three things decide whether the operational session (CASE) can
+// reach a device, and this command shows all of them: the addresses the hub
+// owns (the source address of that traffic), the route lwIP would take, and
+// whether a datagram actually leaves.
+//
+// From the Matter stack's route hook (platform/ESP32/route_hook/ESP32RouteTable.h):
+// the RIOs from the Thread border router, and how lwIP asks it for the route
+// and the next hop.
+extern "C" struct netif* lwip_hook_ip6_route(const ip6_addr_t* src, const ip6_addr_t* dest);
+extern "C" const ip6_addr_t* lwip_hook_nd6_get_gw(struct netif* netif, const ip6_addr_t* dest);
+
+static void ip6_print_addrs() {
+  esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (netif == nullptr) {
+    printf("no Wi-Fi netif\n");
+    return;
+  }
+  esp_ip6_addr_t addrs[6]{};
+  const int n = esp_netif_get_all_ip6(netif, addrs);
+  printf("Wi-Fi IPv6: %d address(es)\n", n);
+  for (int i = 0; i < n && i < 6; i++) {
+    ip6_addr_t a{};
+    memcpy(a.addr, addrs[i].addr, 16);
+    printf("  %s%s\n", ip6addr_ntoa(&a), ip6_addr_islinklocal(&a) ? " (link-local)" : "");
+  }
+  esp_ip6_addr_t global{};
+  if (esp_netif_get_ip6_global(netif, &global) == ESP_OK) {
+    ip6_addr_t a{};
+    memcpy(a.addr, global.addr, 16);
+    printf("  global: %s\n", ip6addr_ntoa(&a));
+  }
+}
+
+static void ip6_print_route(const char* text) {
+  ip6_addr_t dest{};
+  if (!ip6addr_aton(text, &dest)) {
+    printf("not an IPv6 address: %s\n", text);
+    return;
+  }
+  struct netif* nif = nullptr;
+  ip6_addr_t gw{};
+  bool have_gw = false;
+  // The route table is touched by the router-advertisement callback, which runs
+  // in the TCP/IP thread; the core lock keeps the two apart.
+  LOCK_TCPIP_CORE();
+  nif = lwip_hook_ip6_route(nullptr, &dest);
+  if (nif != nullptr) {
+    const ip6_addr_t* g = lwip_hook_nd6_get_gw(nif, &dest);
+    if (g != nullptr) {
+      gw = *g;
+      have_gw = true;
+    }
+  }
+  UNLOCK_TCPIP_CORE();
+  // ip6addr_ntoa() hands out one static buffer, so each address needs its own copy.
+  char dest_text[INET6_ADDRSTRLEN], gw_text[INET6_ADDRSTRLEN];
+  strncpy(dest_text, ip6addr_ntoa(&dest), sizeof(dest_text) - 1);
+  dest_text[sizeof(dest_text) - 1] = '\0';
+  if (nif == nullptr) {
+    printf("route to %s: none\n", dest_text);
+    return;
+  }
+  printf("route to %s: netif %c%c", dest_text, nif->name[0], nif->name[1]);
+  if (have_gw) {
+    strncpy(gw_text, ip6addr_ntoa(&gw), sizeof(gw_text) - 1);
+    gw_text[sizeof(gw_text) - 1] = '\0';
+    printf(" via %s", gw_text);
+  }
+  printf("\n");
+}
+
+// Send one datagram at the address and report what lwIP made of it. The reply
+// is not expected (nothing answers there): what matters is whether the packet
+// leaves the hub at all — the C6 counts what enters the mesh.
+static int ip6_probe(const char* text, int port) {
+  ip6_addr_t dest{};
+  if (!ip6addr_aton(text, &dest)) {
+    printf("not an IPv6 address: %s\n", text);
+    return 1;
+  }
+  const int fd = lwip_socket(AF_INET6, SOCK_DGRAM, 0);
+  if (fd < 0) {
+    printf("socket failed: errno=%d\n", errno);
+    return 1;
+  }
+  struct sockaddr_in6 sa{};
+  sa.sin6_family = AF_INET6;
+  sa.sin6_port = htons(static_cast<std::uint16_t>(port));
+  // The raw bytes of an IPv6 address are the same in lwIP and in the socket API.
+  memcpy(&sa.sin6_addr, dest.addr, 16);
+  const char payload[] = "keystone";
+  const int sent = lwip_sendto(fd, payload, sizeof(payload) - 1, 0,
+                               reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa));
+  if (sent < 0) {
+    printf("sendto %s failed: errno=%d (-4 no route, -6 no source address)\n", text, errno);
+  } else {
+    // lwIP binds the socket on the first send, so this is the source address
+    // it chose for the traffic — the one the device would have to answer.
+    struct sockaddr_in6 local{};
+    socklen_t local_len = sizeof(local);
+    if (lwip_getsockname(fd, reinterpret_cast<struct sockaddr*>(&local), &local_len) == 0) {
+      ip6_addr_t from{};
+      memcpy(from.addr, &local.sin6_addr, 16);
+      printf("sent %d bytes to [%s]:%d from %s\n", sent, text, port, ip6addr_ntoa(&from));
+    } else {
+      printf("sent %d bytes to [%s]:%d\n", sent, text, port);
+    }
+  }
+  lwip_close(fd);
+  return sent < 0 ? 1 : 0;
+}
+
+int cmd_ip6(int argc, char** argv) {
+  if (argc >= 2 && strcmp(argv[1], "probe") == 0) {
+    if (argc < 3) {
+      printf("usage: ip6 probe <address> [port]\n");
+      return 1;
+    }
+    const int port = argc >= 4 ? atoi(argv[3]) : 5540;
+    return ip6_probe(argv[2], port);
+  }
+  ip6_print_addrs();
+  if (argc >= 2) {
+    ip6_print_route(argv[1]);
+  } else {
+    printf("usage: ip6 [<address> | probe <address> [port]]\n");
+  }
+  return 0;
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 int cmd_time(int /*argc*/, char** /*argv*/) {
   char buf[160];
   Req r{};
@@ -2603,6 +2875,18 @@ static chip::NodeId g_matter_pair_node = chip::kUndefinedNodeId;
 // happens on this task, which has a stack of its own.
 static constexpr std::uint32_t kMatterTaskStackBytes = 12288;
 
+// The stack of the task that creates the CHIP controller. The controller's own
+// init (client.init + setup_commissioner) runs the CHIP stack's bring-up,
+// which is a deep call chain — the same reason the commissioning has a task
+// of its own.
+static constexpr std::uint32_t kMatterCtrlTaskStackBytes = 8192;
+
+// How long the controller task waits for the Wi-Fi interface to have a usable
+// IPv6 link-local address. The interface comes up with the Wi-Fi driver (the
+// Matter stack starts it on its own event loop), and the address needs the
+// duplicate address detection to finish — about a second in total.
+static constexpr std::uint32_t kMatterIpv6WaitMs = 10000;
+
 // How long the console waits for the co-processor's answer.
 static constexpr std::uint32_t kThreadDatasetWaitMs = 15000;
 
@@ -2709,6 +2993,10 @@ static void matter_worker_task(void* arg) {
 static bool matter_enqueue(const MatterRequest& req) {
   if (g_matter_req_sem == nullptr) {
     printf("matter: the commissioner is not running\n");
+    return false;
+  }
+  if (!g_matter_controller_ready) {
+    printf("matter: the controller is not up yet: %s\n", g_matter_status);
     return false;
   }
   g_matter_req = req;
@@ -2935,6 +3223,8 @@ void start_console() {
   reg_cmd("matter_pair_thread",
           "matter_pair_thread <node_id> <pincode> <discriminator> - commission a Matter device with the Thread dataset of the co-processor",
           &cmd_matter_pair_thread);
+  reg_cmd("ip6", "ip6 [<address> | probe <address> [port]] - the hub's IPv6 addresses, the route to the Thread mesh, a probe datagram",
+          &cmd_ip6);
 #endif
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
@@ -4230,9 +4520,12 @@ static void matter_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event,
   (void)event;
 }
 
-// Bring up the Matter stack and the controller/commissioner. Called once from
-// app_main() after WiFi/NVS are ready. The controller's own BLE + CHIP tasks
-// start here; UDP listen port 5580 is Matter's default secure-session port.
+// Bring up the Matter stack. Called once from app_main() before the Wi-Fi
+// driver is started.
+//
+// Only the CHIP *stack* comes up here. The controller/commissioner is created
+// later, when the Wi-Fi link is up — see matter_controller_start().
+//
 // Fabric 1 / node 112233 are placeholder admin credentials (test DAC); the
 // production path will mint per-hub credentials later, see docs/matter-backlog.md §6.
 static void matter_bringup() {
@@ -4254,15 +4547,6 @@ static void matter_bringup() {
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-  {
-    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-    auto &client = esp_matter::controller::matter_controller_client::get_instance();
-    client.init(/*node_id=*/112233, /*fabric_id=*/1, /*udp_port=*/5580);
-    // The trust store for the accessory's attestation chain — esp-matter reads
-    // it inside setup_commissioner(), so it has to be in place before that.
-    matter_install_paa_trust_store();
-    client.setup_commissioner();
-  }
 
   // The task that runs the commissioning calls. It is created here, while the
   // internal heap is still one big block — the CHIP stack needs a large
@@ -4281,6 +4565,19 @@ static void matter_bringup() {
              static_cast<unsigned>(kMatterTaskStackBytes));
   }
 
+  // The task that creates the controller. It waits for the Wi-Fi interface and
+  // for a usable IPv6 address on it — see matter_controller_task.
+  g_matter_ctrl_done = xSemaphoreCreateBinary();
+  if (g_matter_ctrl_done == nullptr) {
+    ESP_LOGE("matter", "no memory for the controller queue");
+  } else if (xTaskCreate(matter_controller_task, "matter_ctrl",
+                         kMatterCtrlTaskStackBytes / sizeof(StackType_t), nullptr,
+                         5, nullptr) != pdPASS) {
+    ESP_LOGE("matter", "could not create the controller task");
+    vSemaphoreDelete(g_matter_ctrl_done);
+    g_matter_ctrl_done = nullptr;
+  }
+
   // The queue the co-processor's Thread dataset arrives on. The brain has no
   // 802.15.4 radio, so the dataset has to come from the chip that has one.
   g_thread_dataset_sem = xSemaphoreCreateBinary();
@@ -4291,11 +4588,94 @@ static void matter_bringup() {
   const std::size_t heap_after =
       heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   ESP_LOGI("matter",
-           "controller up: heap %u B (-%d B), largest block %u B, psram free %u B",
+           "stack up: heap %u B (-%d B), largest block %u B, psram free %u B",
            static_cast<unsigned>(heap_after),
            static_cast<int>(heap_before) - static_cast<int>(heap_after),
            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+}
+
+// Create the CHIP controller/commissioner.
+//
+// This is deliberately NOT done at the very beginning of the boot: it happens
+// when the Wi-Fi interface comes up and has a usable IPv6 link-local address
+// (matter_controller_task takes care of that) — but it happens BEFORE the
+// hub's own tables are allocated, because the controller wants one contiguous
+// block of internal RAM.
+//
+// The reason for the address is CHIP's own mDNS (DNS-SD) server. It binds one
+// UDP endpoint per interface that is up AND has an IPv6 address, and it binds
+// them ONCE — when the controller is created. Created before Wi-Fi, it binds
+// nothing at all, and the operational discovery of the accessory then fails
+// with CHIP_ERROR_NO_ENDPOINT (0x46): "Device connection failed. Error 46".
+//
+// The commissioning itself (BLE, PASE, the crypto) does not care about the
+// network, but the last step — finding the accessory's IPv6 address over
+// DNS-SD — does, and that step is the one that has to work.
+//
+// UDP listen port 5580 is Matter's default secure-session port.
+static void matter_controller_start() {
+  if (g_matter_controller_ready) {
+    return;
+  }
+  matter_set_status("creating the controller");
+  const std::size_t heap_before =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    auto &client = esp_matter::controller::matter_controller_client::get_instance();
+    const esp_err_t err = client.init(/*node_id=*/112233, /*fabric_id=*/1, /*udp_port=*/5580);
+    if (err != ESP_OK) {
+      ESP_LOGE("matter", "client.init failed: %d", err);
+      matter_set_status("client.init failed");
+      return;
+    }
+    // The trust store for the accessory's attestation chain — esp-matter reads
+    // it inside setup_commissioner(), so it has to be in place before that.
+    matter_install_paa_trust_store();
+    const esp_err_t comm_err = client.setup_commissioner();
+    if (comm_err != ESP_OK) {
+      ESP_LOGE("matter", "setup_commissioner failed: %d", comm_err);
+      matter_set_status("setup_commissioner failed");
+      return;
+    }
+  }
+  g_matter_controller_ready = true;
+  matter_set_status("up");
+  ESP_LOGI("matter",
+           "controller up (node 112233, fabric 1, UDP 5580): heap %u B (-%d B), "
+           "largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<int>(heap_before) -
+               static_cast<int>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
+
+// The task that creates the controller.
+//
+// It waits for the Wi-Fi interface to be up and to have a *usable* IPv6
+// link-local address on it: a fresh lwIP address is tentative until the
+// duplicate address detection has finished, and CHIP's mDNS skips a tentative
+// address — it would bind no endpoint again, which is exactly the failure
+// this whole dance is about ("Device connection failed. Error 46").
+//
+// It runs on a task of its own (the CHIP init is a deep call chain, and
+// app_main's stack is small) and it is started right after the Matter stack —
+// the Wi-Fi driver, and with it the interface, comes up a moment later. The
+// hub's own tables are allocated only after this task is done, because the
+// controller wants one contiguous block of internal RAM and the tables would
+// fragment it away.
+static void matter_controller_task(void* arg) {
+  (void)arg;
+  matter_set_status("waiting for IPv6");
+  if (!wait_wifi_ipv6_linklocal(kMatterIpv6WaitMs)) {
+    ESP_LOGE("matter", "no usable IPv6 on the Wi-Fi interface; the commissioner stays down");
+    matter_set_status("no usable IPv6");
+  } else {
+    matter_controller_start();
+  }
+  if (g_matter_ctrl_done != nullptr) xSemaphoreGive(g_matter_ctrl_done);
+  vTaskDelete(nullptr);
 }
 #endif  // KEYSTONE_HAVE_MATTER
 
@@ -4330,6 +4710,27 @@ extern "C" void app_main(void) {
 
   // Heavy Wi-Fi driver init + config + start.
   wifi_start_driver();
+
+#ifdef KEYSTONE_HAVE_MATTER
+  // The CHIP controller is created HERE — between the Matter stack and the
+  // hub's own tables, and that is the whole point of the ordering:
+  //
+  //   * it wants one contiguous block of internal RAM (the CHIP stack's
+  //     bring-up asks for tens of KB at once), and the hub's own tables —
+  //     the UART links, the NVS buffers, the app server — would fragment the
+  //     heap away before it runs. That is exactly how the controller died
+  //     with "client.init failed" when it was created at the end of the boot;
+  //   * and it binds CHIP's DNS-SD endpoints on the interfaces that have an
+  //     IPv6 address, so the Wi-Fi interface has to be up with a link-local
+  //     address first — the Wi-Fi driver above is what brings it up.
+  //
+  // The task does the work (its own stack: the CHIP init is a deep call
+  // chain); app_main waits for it, so the heap is still one big block when it
+  // runs.
+  if (g_matter_ctrl_done != nullptr) {
+    xSemaphoreTake(g_matter_ctrl_done, portMAX_DELAY);
+  }
+#endif
 
   // Event history first: everything below may emit.
   g_ev_mu = xSemaphoreCreateMutex();
@@ -4381,8 +4782,14 @@ extern "C" void app_main(void) {
   static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
   static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
-  bus.bind(kZigbeeChipId, bus_zb);                  // publish(chip=0x01) -> UART1
-  bus.bind(kThreadChipId, bus_th);                  // publish(chip=0x02) -> UART2
+  // publish(chip=0x01) -> UART1, publish(chip=0x02) -> UART2. A refused bind
+  // means the brain is deaf on that link — say so.
+  if (!bus.bind(kZigbeeChipId, bus_zb)) {
+    ESP_LOGE(kTag, "no room for the Zigbee link");
+  }
+  if (!bus.bind(kThreadChipId, bus_th)) {
+    ESP_LOGE(kTag, "no room for the Thread link");
+  }
   g_bus = &bus;
 
   static EXT_RAM_BSS_ATTR core::RadioCoordinator<Registry> coord(bus, reg);
@@ -4405,8 +4812,17 @@ extern "C" void app_main(void) {
   ota_job.on_accepted(&on_ota_accepted, nullptr);
 
   disp.on_result(&on_cmd_result, nullptr);
-  bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
-  bus.subscribe(&on_bus_forward, &bus);     // Matter <-> Zigbee cross-chip mirror
+  // Check the result: a refused subscription is a feature that silently does
+  // nothing (see ChipRouter::subscribe).
+  if (!bus.subscribe(&on_bus_traffic, nullptr)) {
+    ESP_LOGE(kTag, "no room for the per-chip rx counter");
+  }
+  if (!bus.subscribe(&on_bus_forward, &bus)) {
+    ESP_LOGE(kTag, "no room for the cross-chip forwarder — Matter <-> Zigbee and the "
+                   "Thread dataset will not work");
+  }
+  ESP_LOGI(kTag, "bus fan-out: %d subscribers (room for %d)",
+           bus.subscriber_count(), ChipRouter::kMaxSubs);
 
   restore_rules(rules);  // user rules from NVS (`rule add ...`)
   // Rule constraints: local minute of day (-1 until SNTP has synced) and the
@@ -4504,9 +4920,24 @@ extern "C" void app_main(void) {
   // the co-processor re-sends DECLARE + DECLARE_END; a ready chip is skipped.
   const std::uint32_t kSelfHealMs = 5000;
   std::uint32_t last_query_ms = 0;
+  std::size_t s_bad_zb = bus_zb.bad_frames();
+  std::size_t s_bad_th = bus_th.bad_frames();
   const std::uint8_t kBoundChips[] = {kZigbeeChipId, kThreadChipId};
   while (true) {
     const std::uint32_t t = now_ms(nullptr);
+    // The frame layer drops a block without a word (bad COBS, bad CRC, a type we
+    // do not know). That silence is why a lost frame is hard to see: count it.
+    {
+      const std::size_t bad_zb = bus_zb.bad_frames();
+      const std::size_t bad_th = bus_th.bad_frames();
+      if (bad_zb != s_bad_zb || bad_th != s_bad_th) {
+        ESP_LOGW(kTag, "link dropped frames: zigbee %u, thread %u (bad COBS/CRC or unknown type)",
+                 static_cast<unsigned>(bad_zb - s_bad_zb),
+                 static_cast<unsigned>(bad_th - s_bad_th));
+        s_bad_zb = bad_zb;
+        s_bad_th = bad_th;
+      }
+    }
     disp.poll(t);
     monitor.poll(t);
     if (g_verify_req.pending) {
@@ -5105,12 +5536,18 @@ extern "C" void app_main(void) {
                   r->out + off, r->out_cap - off, "tx_frames %lu, ",
                   static_cast<unsigned long>(v.as_u32())));
             }
+            // What THIS side dropped: the frame layer is silent about it, so it is
+            // counted here. A frame the chip sent and we never saw is here.
+            const std::size_t dropped =
+                id == kThreadChipId ? bus_th.bad_frames() : bus_zb.bad_frames();
             if (reg.get_value(id, hubproto::chip_attr::kCrcErrors, v)) {
               off += static_cast<std::size_t>(std::snprintf(
-                  r->out + off, r->out_cap - off, "crc_errors %u\n",
-                  static_cast<unsigned>(v.as_u16())));
-            } else if (reg.find(id) != nullptr) {
-              off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, "\n"));
+                  r->out + off, r->out_cap - off, "crc_errors %u, dropped %u\n",
+                  static_cast<unsigned>(v.as_u16()), static_cast<unsigned>(dropped)));
+            } else {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "dropped %u\n",
+                  static_cast<unsigned>(dropped)));
             }
           }
           if (off == 0) std::snprintf(r->out, r->out_cap, "no chips seen yet\n");
