@@ -7,6 +7,7 @@
 #include "core/in_memory_link.hpp"
 #include "core/uart_transport.hpp"
 #include "hubproto/message.hpp"
+#include "hubproto/payload.hpp"
 #include "hubproto/version.hpp"
 
 using core::InMemoryLink;
@@ -173,4 +174,47 @@ TEST_CASE("publish rejects an oversized payload") {
   std::vector<std::uint8_t> big(hubproto::kMaxPayloadSize + 1, 0xAB);
   Header h = hello(0x03, 0x01);
   CHECK_FALSE(chip.publish(h, big.data(), big.size()));
+}
+
+TEST_CASE("a real-sized Thread dataset crosses the bus chip -> brain") {
+  // The co-processor lends its Thread network to the brain (docs/matter-backlog.md
+  // §3): the dataset is 109 bytes of TLVs and it travels in one frame. This is
+  // the only frame in the system this big, so it gets its own test.
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+
+  Capture at_brain;
+  REQUIRE(brain.subscribe(&Capture::on_msg, &at_brain));
+
+  std::vector<std::uint8_t> tlvs(109);
+  for (std::size_t i = 0; i < tlvs.size(); ++i) {
+    tlvs[i] = static_cast<std::uint8_t>((i * 37u + 11u) & 0xFFu);
+  }
+  std::vector<std::uint8_t> payload(1 + tlvs.size());
+  auto enc = hubproto::encode_thread_dataset(tlvs.data(), tlvs.size(), payload.data(),
+                                              payload.size());
+  REQUIRE(enc.ok);
+
+  Header h = hello(0x02, 0x04);
+  h.type = MsgType::ThreadDataset;
+  h.seq = 12;
+  REQUIRE(chip.publish(h, payload.data(), enc.len));
+
+  REQUIRE(at_brain.count == 1);
+  CHECK(at_brain.last.type == MsgType::ThreadDataset);
+  CHECK(at_brain.last.chip_id == 0x02);
+  CHECK(at_brain.last.seq == 12);
+  REQUIRE(at_brain.payload.size() == enc.len);
+
+  hubproto::ThreadDatasetView view{};
+  REQUIRE(hubproto::decode_thread_dataset(at_brain.payload.data(), at_brain.payload.size(), view));
+  CHECK(view.len == tlvs.size());
+  for (std::size_t i = 0; i < tlvs.size(); ++i) CHECK(view.bytes[i] == tlvs[i]);
+
+  // The brain's link sees it as one clean frame, not as a broken one.
+  CHECK(brain.bad_frames() == 0);
+  CHECK(chip.tx_frames() == 1);
+  CHECK(brain.rx_frames() == 1);
 }

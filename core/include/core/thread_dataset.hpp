@@ -19,16 +19,19 @@
 
 namespace core {
 
-// The Thread TLV types of an operational dataset (Thread spec 5.4). The MeshCoP types (which OT
-// also names) are a different numbering — do not mix them up.
-inline constexpr std::uint8_t kTlvActiveTimestamp = 0x01;
-inline constexpr std::uint8_t kTlvChannel         = 0x02;
-inline constexpr std::uint8_t kTlvPanId           = 0x03;
-inline constexpr std::uint8_t kTlvExtPanId        = 0x04;
-inline constexpr std::uint8_t kTlvMeshLocalPrefix = 0x05;
-inline constexpr std::uint8_t kTlvNetworkKey      = 0x07;
+// The Thread TLV types of an operational dataset. This is the MeshCoP numbering, the
+// one OpenThread writes (otOperationalDataset / otDatasetGetActiveTlvs) and the one
+// CHIP reads (chip::Thread::OperationalDatasetView) — the two must agree byte for
+// byte, because these very bytes are what the device is handed over BLE.
+inline constexpr std::uint8_t kTlvChannel         = 0x00;
+inline constexpr std::uint8_t kTlvPanId           = 0x01;
+inline constexpr std::uint8_t kTlvExtPanId        = 0x02;
+inline constexpr std::uint8_t kTlvNetworkName     = 0x03;
+inline constexpr std::uint8_t kTlvPskc            = 0x04;
+inline constexpr std::uint8_t kTlvMasterKey       = 0x05;
+inline constexpr std::uint8_t kTlvMeshLocalPrefix = 0x07;
 inline constexpr std::uint8_t kTlvSecurityPolicy  = 0x0C;
-inline constexpr std::uint8_t kTlvNetworkName     = 0x0E;
+inline constexpr std::uint8_t kTlvActiveTimestamp = 0x0E;
 
 class ThreadDataset {
  public:
@@ -43,7 +46,7 @@ class ThreadDataset {
     if (!tlvs_walkable(bytes, len)) return false;
     if (!tlv_present(bytes, len, kTlvChannel)) return false;
     if (!tlv_present(bytes, len, kTlvPanId)) return false;
-    if (!tlv_present(bytes, len, kTlvNetworkKey)) return false;
+    if (!tlv_present(bytes, len, kTlvMasterKey)) return false;
     std::memcpy(buf_, bytes, len);
     len_ = len;
     channel_ = 0;
@@ -101,7 +104,9 @@ class ThreadDataset {
     return false;
   }
 
-  // The channel TLV holds three bytes: the channel, the page and the offset.
+  // The channel TLV holds three bytes: the channel page (one byte, always 0) and the
+  // channel number (two bytes, big endian) — the same layout CHIP insists on
+  // (OperationalDatasetView::GetChannel). Read the number, not the page.
   void read_channel() noexcept {
     std::size_t i = 0;
     while (i + 2 <= len_) {
@@ -109,15 +114,17 @@ class ThreadDataset {
       const std::size_t vlen = buf_[i + 1];
       i += 2;
       if (i + vlen > len_) return;
-      if (t == kTlvChannel && vlen >= 1) {
-        channel_ = buf_[i];
+      if (t == kTlvChannel && vlen >= 3) {
+        channel_ = static_cast<std::uint8_t>((buf_[i + 1] << 8) | buf_[i + 2]);
         return;
       }
       i += vlen;
     }
   }
 
-  // The network name TLV holds the name as UTF-8, up to 16 bytes.
+  // The network name TLV holds the name as UTF-8, up to 16 bytes. The name goes
+  // into a log line, so only printable characters are copied — a name that is
+  // not a name at all must not scribble over the console.
   void read_name() noexcept {
     std::size_t i = 0;
     while (i + 2 <= len_) {
@@ -126,8 +133,11 @@ class ThreadDataset {
       i += 2;
       if (i + vlen > len_) return;
       if (t == kTlvNetworkName) {
-        const std::size_t n = vlen < kMaxNameLen ? vlen : kMaxNameLen;
-        std::memcpy(name_, buf_ + i, n);
+        std::size_t n = 0;
+        for (std::size_t k = 0; k < vlen && n < kMaxNameLen; ++k) {
+          const std::uint8_t c = buf_[i + k];
+          if (c >= 0x20 && c < 0x7f) name_[n++] = static_cast<char>(c);
+        }
         name_[n] = '\0';
         return;
       }
