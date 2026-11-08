@@ -40,7 +40,10 @@ BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
   BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
 elif [[ "${APP}" == "thread-c6" ]]; then
-  BUILD_CMD="python3 /project/scripts/matter-patches.py --app thread-c6 && idf.py build"
+  # The thread chip does not build the CHIP stack any more (the Matter Bridge
+  # is gone), so it needs none of the esp-matter patches — it only needs IDF
+  # 5.5, which the image has.
+  BUILD_CMD="idf.py build"
 fi
 
 echo "==> Building ${APP} in ${IMAGE}"

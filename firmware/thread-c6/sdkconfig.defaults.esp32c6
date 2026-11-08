@@ -1,35 +1,74 @@
-# ESP32-C6 target overlay: Thread on the native 802.15.4 radio, BLE for
-# Matter commissioning, and libsodium tuning. Matches
-# esp-matter/examples/light/sdkconfig.defaults.c6_thread with the shell
-# disabled (we drive the co-processor over our own UART bus).
+# ESP32-C6 target overlay: Thread on the native 802.15.4 radio.
+#
+# Matches esp-matter/examples/light/sdkconfig.defaults.c6_thread, but the
+# Matter bits (BLE commissioning, mDNS, libsodium) are gone: the CHIP stack is
+# not on this chip any more (docs/matter-backlog.md §3).
 CONFIG_IDF_TARGET="esp32c6"
 
-# libsodium: share mbedTLS SHA.
-CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y
-
-# NimBLE tuning for BLE commissioning.
-CONFIG_BT_NIMBLE_EXT_ADV=n
-CONFIG_BT_NIMBLE_HCI_EVT_BUF_SIZE=70
-CONFIG_USE_BLE_ONLY_FOR_COMMISSIONING=n
-
 # OpenThread as a Full Thread Device on the on-chip 802.15.4 radio.
+# BORDER_ROUTER=y turns on border routing, NAT64, SRP server and DNS-SD server
+# in one flag (private_include/openthread-core-esp32x-ftd-config.h). The device
+# the brain commissions registers its _matter._tcp service with our SRP server;
+# the DNS-SD server reflects it onto the backbone (Wi-Fi) so the CHIP
+# commissioner finds it via plain mDNS and CASE can reach the device over the
+# routed Thread prefix. Without the BR, commissioning dies at operational
+# discovery.
 CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_BORDER_ROUTER=y
 CONFIG_OPENTHREAD_SRP_CLIENT=y
 CONFIG_OPENTHREAD_DNS_CLIENT=y
 CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC=n
 CONFIG_OPENTHREAD_LOG_LEVEL_NOTE=y
 CONFIG_OPENTHREAD_CLI=n
 
-# lwIP tuning OpenThread needs.
-CONFIG_LWIP_IPV6_AUTOCONFIG=n
+# The BR needs an address of the OMR prefix on its "ot" netif, otherwise lwIP
+# has no on-link route into the mesh and every backbone packet to a mesh
+# address dies with ERR_RTE before it reaches the OpenThread stack. The only
+# mechanism that creates such an address is the SLAAC module, which the IDF
+# build of the core leaves out — our own config header turns it on.
+CONFIG_OPENTHREAD_HEADER_CUSTOM=y
+CONFIG_OPENTHREAD_CUSTOM_HEADER_PATH="main"
+CONFIG_OPENTHREAD_CUSTOM_HEADER_FILE_NAME="esp_ot_custom_config.h"
+
+# BR needs a backbone netif (Wi-Fi here). The infrastructure interface is a
+# regular Wi-Fi STA that joins the home network, same SSID as the brain; the
+# credentials live in main/wifi_secrets.h (gitignored).
+CONFIG_ESP_WIFI_ENABLED=y
+# lwIP: the BR advertises an IPv6 prefix for Thread onto Wi-Fi via RAs and
+# learns the backbone's own prefix from the router — both need autoconfig on
+# the backbone side (OT handles the Thread side itself).
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
 CONFIG_LWIP_MULTICAST_PING=y
+# BR needs headroom for IPv6 addresses (link-local, routable Thread prefix,
+# the device's RLOC, ULA...); esp_openthread_lwip_netif refuses to build
+# unless this is 12.
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=12
+# BR routes between Wi-Fi and Thread: forward enabled, and the lwIP hooks the
+# OT BR glue needs to pick the right source address and override the default
+# gateway for destinations behind the BR. Same list as esp-idf/examples/
+# openthread/ot_br/sdkconfig.defaults.
+CONFIG_LWIP_IPV6_FORWARD=y
+CONFIG_LWIP_NETIF_STATUS_CALLBACK=y
+CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
+CONFIG_LWIP_HOOK_ND6_GET_GW_DEFAULT=y
+CONFIG_LWIP_HOOK_IP6_INPUT_CUSTOM=y
+CONFIG_LWIP_HOOK_IP6_SELECT_SRC_ADDR_CUSTOM=y
 
-# mDNS: use the full stack (Matter needs extended discovery).
-CONFIG_USE_MINIMAL_MDNS=n
-CONFIG_ENABLE_EXTENDED_DISCOVERY=y
+# mbedTLS features MeshCoP (Mesh Commissioning Protocol) needs; without these
+# the BR's DTLS joiner/commissioner path does not compile.
+CONFIG_MBEDTLS_CMAC_C=y
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECJPAKE=y
+CONFIG_MBEDTLS_ECJPAKE_C=y
 
-# No WiFi station on the C6 — the S3 brain hosts WiFi separately.
-CONFIG_ENABLE_WIFI_STATION=n
+# mDNS on the backbone: the BR publishes the SRP services reflected from
+# Thread so the CHIP commissioner on the brain can find them. Multiple instance
+# support: the OT BR registers its own records alongside anything else we add.
+CONFIG_MDNS_MAX_INTERFACES=2
+CONFIG_MDNS_MULTIPLE_INSTANCE=y
+
+# System event loop task needs more stack: Wi-Fi + lwIP + OT events share it.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584
 
 # App rollback: an OTA'd image must be confirmed (OtaConfirmGate: brain link OK +
 # 30 s uptime) or the bootloader reverts to the previous slot. See docs/ota.md.
