@@ -1,4 +1,4 @@
-# Host build for keystone-esp.
+# Host build for keystone.
 #
 # Builds and unit-tests the portable, radio-free parts of the project on a
 # normal desktop toolchain (no ESP-IDF, no hardware):
@@ -14,7 +14,7 @@
 #   ctest --test-dir build --output-on-failure
 cmake_minimum_required(VERSION 3.16)
 
-project(keystone-esp
+project(keystone
   VERSION 0.1.0
   DESCRIPTION "Multi-chip ESP32 smart-home hub — host build (libhubproto + core)"
   LANGUAGES CXX)

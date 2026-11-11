@@ -1,6 +1,6 @@
 [Unit]
 Description=Keystone relay server (remote access to the hub)
-Documentation=https://github.com/kliuchnikovv/keystone-esp/blob/main/docs/relay-deploy.md
+Documentation=https://github.com/kliuchnikovv/keystone/blob/main/docs/relay-deploy.md
 After=network-online.target
 Wants=network-online.target
 

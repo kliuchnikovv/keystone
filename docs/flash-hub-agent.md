@@ -55,8 +55,8 @@ Docker на macOS **не пробрасывает USB** — образ толь�
 ## 2. Промпт для агента (копипаста)
 
 ```text
-Ты прошиваешь хаб keystone-esp и проверяешь, что он ожил. Репозиторий:
-/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone-esp (на Linux-хосте —
+Ты прошиваешь хаб keystone и проверяешь, что он ожил. Репозиторий:
+/Users/kliuchnikovv/go/src/github.com/kliuchnikovv/keystone (на Linux-хосте —
 путь, который даст человек). Общаемся на русском.
 
 ЖЕЛЕЗО (три платы, у каждой свой USB-C):

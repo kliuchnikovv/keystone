@@ -1,4 +1,4 @@
-# CLAUDE.md — keystone-esp
+# CLAUDE.md — keystone
 
 Multi-chip ESP32 smart-home hub. **[SPEC.md](SPEC.md) is the source of truth** —
 read it before writing code, and never violate the Design Invariants (SPEC §3).
