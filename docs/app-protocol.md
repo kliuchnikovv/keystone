@@ -264,6 +264,11 @@ The phone never interprets the bytes beyond that: the hub checks only that they 
 the shape the kind promises (`bad_args` otherwise — odd length, a character that is
 not a hex digit, the wrong length for the kind) and passes them on unchanged.
 
+Kind 2 comes from the code printed on the device: the "Find devices" screen reads it with the
+camera and hands the bytes over. That path needs no Bluetooth, so it works even where the radio
+is off — and it carries more than the radio does (the QR code holds the setup PIN code as well
+as the discriminator).
+
 The answer is fire-and-forget, like `pair`: `ok` means the bytes reached the Matter
 chip, not that the device was added. How the attempt goes is reported by the `matter`
 event, which every client receives:

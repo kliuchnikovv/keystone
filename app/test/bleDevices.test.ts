@@ -5,6 +5,7 @@ import {
   addAdvertisement,
   byProximity,
   expireDevices,
+  matterDevices,
   medianRssi,
   type BleAdvertisement,
 } from '../src/model/bleDevices';
@@ -83,5 +84,35 @@ describe('the devices around the phone', () => {
     const devices = addAdvertisement([], advertisement({ rssi: 127 }), 1000);
     expect(devices[0]?.median).toBeNull();
     expect(devices[0]?.proximity).toBe('unknown');
+  });
+});
+
+describe('the devices worth showing', () => {
+  it('keeps the ones that speak Matter and drops the rest', () => {
+    // A device that says nothing Matter-ish cannot be added by the hub, so there is
+    // no sense in putting it in front of the person.
+    let devices = addAdvertisement(
+      [],
+      advertisement({ id: 'matter', serviceData: { fff6: [0x00, 0x00, 0x0f, 0x01, 0x02, 0x03, 0x04] } }),
+      1000,
+    );
+    devices = addAdvertisement(devices, advertisement({ id: 'beacon' }), 1000);
+    expect(matterDevices(devices).map((d) => d.id)).toEqual(['matter']);
+  });
+
+  it('keeps a device that advertised Matter once', () => {
+    // The advertisement comes and goes; the device does not stop being a Matter device.
+    let devices = addAdvertisement(
+      [],
+      advertisement({ id: 'matter', manufacturerData: { '65521': [0x00, 0x01, 0xf1, 0xff, 0x00, 0x80, 0x00, 0x0f, 0xa1, 0xb2, 0xc3, 0xd4] } }),
+      1000,
+    );
+    devices = addAdvertisement(devices, advertisement({ id: 'matter', manufacturerData: {} }), 2000);
+    expect(matterDevices(devices).map((d) => d.id)).toEqual(['matter']);
+  });
+
+  it('has nothing to show when nothing nearby speaks Matter', () => {
+    const devices = addAdvertisement([], advertisement({ id: 'beacon' }), 1000);
+    expect(matterDevices(devices)).toEqual([]);
   });
 });

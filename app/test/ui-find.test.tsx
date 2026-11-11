@@ -9,12 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
 import { byProximity, type BleDevice } from '../src/model/bleDevices';
-import { MATTER_PAYLOAD_MANUFACTURER, MATTER_PAYLOAD_SERVICE, type MatterIdentity } from '../src/model/matter';
+import { MATTER_PAYLOAD_MANUFACTURER, MATTER_PAYLOAD_QR, MATTER_PAYLOAD_SERVICE, type MatterIdentity } from '../src/model/matter';
 import { proximityFromRssi } from '../src/model/proximity';
 import type { BleSnapshot, BleSource } from '../src/native/ble';
 import type { NativeBleStatus } from '../src/native/types';
 import { Home } from '../src/ui/Home';
 import { MockHub } from '../tools/mock-hub/hub';
+import { queueQr } from './stubs/expo-camera';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
 
@@ -224,7 +225,26 @@ describe('Find devices', () => {
     await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0200)?.name).toBe('shelf_plug'));
   });
 
-  it('says plainly that a device without Bluetooth cannot be added here', async () => {
+  it('shows only the devices that speak Matter', async () => {
+    // A device that says nothing Matter-ish cannot be added by the hub, so there is
+    // no sense in putting it in front of the person.
+    radio.push({
+      id: 'other',
+      name: 'Some speaker',
+      rssi: -60,
+      median: -60,
+      proximity: 'close',
+      lastSeen: Date.now(),
+      samples: [-60],
+      matter: null,
+    });
+    radio.push(matterDevice('close', -50, 2222, 'manufacturer'));
+    await openSearch();
+    expect(await screen.findAllByText(/Matter device · disc/)).toHaveLength(1);
+    expect(screen.queryByText('Some speaker')).toBeNull();
+  });
+
+  it('says what it is waiting for when nothing nearby speaks Matter', async () => {
     radio.push({
       id: 'other',
       name: 'Some speaker',
@@ -236,8 +256,8 @@ describe('Find devices', () => {
       matter: null,
     });
     await openSearch();
-    expect(await screen.findByText('Some speaker')).toBeTruthy();
-    expect(screen.getByText(/Only Matter devices can be added over Bluetooth/)).toBeTruthy();
+    expect(await screen.findByText(/Only devices that speak Matter can be added/)).toBeTruthy();
+    expect(screen.queryByText('Some speaker')).toBeNull();
   });
 
   it('goes back to the devices', async () => {
@@ -245,5 +265,40 @@ describe('Find devices', () => {
     fireEvent.click(screen.getByLabelText('Back'));
     await waitFor(() => expect(screen.queryByText('Find devices')).toBeNull());
     expect(screen.getByLabelText('Add a device')).toBeTruthy();
+  });
+});
+
+// The QR code printed on the device — the example from the Matter specification.
+const QR_CODE = 'MT:Y.K9042C00KA0648G00';
+// What that code says: 11 bytes, vendor 0xfff1, product 0x8000, discriminator 3840.
+const QR_PAYLOAD = '88ff07004400e04b846802';
+
+describe('Find devices — the QR code on the device', () => {
+  it('reads the code and offers to add the device', async () => {
+    queueQr(QR_CODE);
+    await openSearch();
+    fireEvent.click(screen.getByLabelText('Scan a QR code'));
+    // The code is read, and the device it names is shown.
+    expect(await screen.findByText(/From the QR code/)).toBeTruthy();
+    expect(screen.getByText(/disc 3840/)).toBeTruthy();
+    // The bytes go to the hub, whole and untouched.
+    fireEvent.click(screen.getByLabelText('Add to the hub'));
+    await waitFor(() => expect(hub.matterCalls).toEqual([{ kind: MATTER_PAYLOAD_QR, payload: QR_PAYLOAD }]));
+  });
+
+  it('says plainly that a code that is not a Matter code cannot be used', async () => {
+    queueQr('https://example.com/not-a-matter-code');
+    await openSearch();
+    fireEvent.click(screen.getByLabelText('Scan a QR code'));
+    expect(await screen.findByText(/not a Matter code/)).toBeTruthy();
+    expect(screen.queryByLabelText('Add to the hub')).toBeNull();
+  });
+
+  it('can be reached even when there is nothing to hear around', async () => {
+    // The code does not need Bluetooth: it is printed on the device.
+    await openSearch();
+    expect(await screen.findByText(/Nothing nearby yet/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Scan a QR code'));
+    expect(await screen.findByTestId('camera')).toBeTruthy();
   });
 });

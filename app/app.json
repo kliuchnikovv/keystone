@@ -15,7 +15,8 @@
       "bundleIdentifier": "com.kliuchnikovv.keystone",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Keystone talks to your hub on your home network.",
-        "NSBluetoothWhileInUseUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
+        "NSBluetoothAlwaysUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
+        "NSCameraUsageDescription": "Keystone reads the QR code printed on a device so it can add that device to your hub.",
         "NSBonjourServices": [
           "_keystone._tcp"
         ],
@@ -58,6 +59,13 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Keystone uses your approximate position only to tell the hub where it is, so that sunrise and sunset are right."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ]

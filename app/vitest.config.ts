@@ -13,6 +13,8 @@ export default defineConfig({
       'react-native-svg': fileURLToPath(new URL('./test/stubs/react-native-svg.tsx', import.meta.url)),
       'expo-modules-core': fileURLToPath(new URL('./test/stubs/expo-modules-core.ts', import.meta.url)),
       'expo-file-system': fileURLToPath(new URL('./test/stubs/expo-file-system.ts', import.meta.url)),
+      // The camera needs a real device; the stub reads the code the test queued.
+      'expo-camera': fileURLToPath(new URL('./test/stubs/expo-camera.tsx', import.meta.url)),
     },
   },
   test: { include: ['test/**/*.test.{ts,tsx}'], environment: 'node' },

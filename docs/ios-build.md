@@ -1,8 +1,11 @@
 # Building the app for an iPhone
 
-**Status: the native project builds up to the archive step; the archive itself was not produced on this
-machine.** The Xcode build service (an XPC service outside the agent's sandbox) is refused write access
-here, so the last mile — `xcodebuild archive` — has to run on your Mac. Everything before it works:
+**Status: the native project builds; a full Release build for the Simulator was produced on this
+machine** (`xcodebuild -workspace Keystone.xcworkspace -scheme Keystone -configuration Release
+-destination 'generic/platform=iOS Simulator' build` → BUILD SUCCEEDED, and the resulting
+`Keystone.app` was inspected for its privacy keys). **The device archive was not**: the Xcode build
+service (an XPC service outside the agent's sandbox) is refused write access here, so the last mile —
+`xcodebuild archive` — has to run on your Mac. Everything before it works:
 `expo prebuild --platform ios` generates a valid project, `pod install` resolves all pods **including the
 local `KeystoneNet` module**, and the workspace opens in Xcode. What *was* checked on the Linux dev box:
 `expo-doctor` (21/21), the JavaScript bundle for iOS (`expo export --platform ios`, Metro
@@ -37,10 +40,47 @@ The Expo template's `AppDelegate` is window-based — `ExpoAppDelegate` conforms
 2. an AppDelegate that adopts scenes — `plugins/withSceneLifecycle.cjs` writes
    `plugins/AppDelegate.swift.tmpl` over `ios/Keystone/AppDelegate.swift` on every prebuild.
 
-Note that `expo prebuild` **without `--clean` does not touch an existing `Info.plist`**, so a change
-made only in `app.json` will not reach the project until `ios/` is deleted or `--clean` is passed.
+Note that `expo prebuild` **regenerates the whole `ios/` directory** — it prints "Clearing ios code"
+and writes a fresh project, so a change made only in `app.json` reaches the project on the next
+prebuild (and the pods have to be installed again afterwards, which `scripts/ios-release.sh` does).
 Declaring the manifest alone is not enough and makes things worse: pointing
 `UISceneDelegateClassName` at an AppDelegate that cannot handle `willConnectTo` yields a black screen.
+
+## The Bluetooth key (the second launch-time kill)
+
+The Find Devices screen opens a `CBCentralManager`, and iOS kills an app that touches the radio
+without a privacy string — not a refusal, a crash:
+
+```
+This app has crashed because it attempted to access privacy-sensitive data without a usage
+description. The app's Info.plist must contain an `NSBluetoothAlwaysUsageDescription` key ...
+```
+
+iOS knows exactly **two** Bluetooth privacy keys, and only one of them is current:
+
+| Key | Since | Meaning |
+|---|---|---|
+| `NSBluetoothAlwaysUsageDescription` | iOS 13 | the one the system reads today |
+| `NSBluetoothPeripheralUsageDescription` | iOS 6 | deprecated, for iOS 12 and older |
+
+There is **no "while in use" Bluetooth key** — that idea belongs to CoreLocation
+(`kCLAuthorizationStatusAuthorizedWhenInUse`). Bluetooth has no such state: `CBManagerAuthorization`
+has exactly four cases — NotDetermined, Restricted, Denied, AllowedAlways — and the "always" in the
+key name only means *not time-limited*, not *background access* (background scanning would need the
+`bluetooth-central` background mode on top). The deployment target here is 16.4, so the deprecated
+key buys nothing.
+
+A key iOS does not know grants nothing, and the app dies on the Find Devices screen. `app.json`
+carries the right key, and `app/test/ios-info-plist.test.ts` guards its name (the wording is not
+guarded — Apple shows it to the person). If the crash comes back, check the **built** app, not the
+sources: `PlistBuddy -c "Print" <app>/Info.plist | grep -A2 Bluetooth`.
+
+The same rule applies to the camera: reading the QR code on a device needs
+`NSCameraUsageDescription`, otherwise iOS kills the app the moment the lens opens. `app.json` carries
+it, and the same test guards it — together with a whitelist of the privacy keys iOS actually knows,
+so an invented key cannot slip in again. The camera plugin is told not to ask for the microphone
+(`microphonePermission: false`, `recordAudioAndroid: false`): the app reads codes, it records nothing.
+
 
 ## Why a development build, not Expo Go
 
@@ -52,7 +92,8 @@ JavaScript from your computer), or later as a release build.
 ## What is already configured (`app/`)
 
 - `app.json`: bundle id `dev.keystone.app` (**change it to your own**, see below), version 0.1.0, build 1,
-  iOS keys `NSLocalNetworkUsageDescription`, `NSBonjourServices` (`_keystone._tcp`),
+  iOS keys `NSLocalNetworkUsageDescription`, `NSBluetoothAlwaysUsageDescription`,
+  `NSCameraUsageDescription`, `NSBonjourServices` (`_keystone._tcp`),
   `NSAppTransportSecurity/NSAllowsLocalNetworking` (plain `ws://` to an IP or `.local` name works),
   `ITSAppUsesNonExemptEncryption = false` (the app only uses the system's standard TLS), a placeholder icon.
 - `expo-dev-client` is a dependency; `eas.json` has profiles `development` (device), `development-simulator`
@@ -203,3 +244,27 @@ permission is off, the phone is on another network than the hub, or the hub's se
 Push notifications, background connections (the app disconnects when iOS suspends it, by design), App
 Store review, Android (the Kotlin module is equally unverified; `eas build --profile development
 --platform android` is the equivalent route).
+
+## If Xcode fails with "pcm is not a valid module file"
+
+A build can fail with an error like
+
+```
+file '.../ModuleCache.noindex/.../CoreTransferable-....pcm' is not a valid module file:
+file too small to contain precompiled file magic
+cannot load underlying module for 'CoreTransferable'
+```
+
+This is not a code error: the precompiled Clang module cache on disk is corrupt (truncated),
+usually after an interrupted build or after switching between the simulator and a device target.
+The Swift source is fine — the same project builds once the cache is cleared.
+
+Fix:
+
+```bash
+rm -rf ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+rm -rf ~/Library/Developer/Xcode/DerivedData/Keystone-*
+```
+
+then rebuild. `scripts/ios-release.sh` keeps its own DerivedData under `build/ios-release/DerivedData`,
+so it is unaffected; pass `CLEAN=1` to also wipe the global module cache before it runs.
