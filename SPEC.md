@@ -5,7 +5,6 @@
 > **Design Invariants** (section 3) — they are the reason the architecture
 > survives future hardware changes.
 
-общаемся на русском
 ---
 
 ## 1. What we are building

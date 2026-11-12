@@ -34,12 +34,18 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `src/ui/FindDevicesScreen.tsx` — "Add a device" opens a **full screen**, not a sheet:
   **"NEAR YOU"** is what the phone sees over Bluetooth (sorted by closeness, with a
   "too far — move closer" guard) and **"ON YOUR HUB"** is the Zigbee join window with a
-  countdown and the list of what joined. Matter devices found nearby can be handed to
-  the hub to commission (the phone only reads the bytes; the hub's Matter chip does the
-  work — docs/app-protocol.md §5.3). `src/hooks/useJoinWindow.ts` — the join window
-  (countdown, diff of what joined); `src/hooks/useBleScan.ts` + `src/model/bleDevices.ts` —
-  the scan and the last five RSSI samples per device (the median, so the list does not
-  flicker between "close" and "far"); `src/model/proximity.ts` — RSSI to a band
+  countdown and the list of what joined. Only the devices that speak Matter are listed:
+  the hub cannot add the others, so there is nothing the person could do with them
+  (`matterDevices()` in `src/model/bleDevices.ts`). Matter devices found nearby can be
+  handed to the hub to commission (the phone only reads the bytes; the hub's Matter chip
+  does the work — docs/app-protocol.md §5.3). `src/ui/ScanQrScreen.tsx` — the other way
+  in: the code printed on the device is read with the camera (`expo-camera`), decoded by
+  `src/model/matter.ts` and handed to the hub the same way; it needs no Bluetooth at all,
+  so the button is there even when the radio is off. `src/hooks/useJoinWindow.ts` — the
+  join window (countdown, diff of what joined); `src/hooks/useBleScan.ts` +
+  `src/model/bleDevices.ts` — the scan and the last five RSSI samples per device (the
+  median, so the list does not flicker between "close" and "far");
+  `src/model/proximity.ts` — RSSI to a band
   (`veryClose`/`close`/`near`/`far`), **not** to metres: BLE RSSI is ±50 % and depends on
   how the phone is held; `src/model/matter.ts` — what a Matter device says about itself
   (the commissioning service data 0xFFF6, the enhanced advertisement 0xFFF1, the `MT:…`

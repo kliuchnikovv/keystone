@@ -9,14 +9,16 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import type { Commands } from '../hooks/useCommands';
 import { useBleScan } from '../hooks/useBleScan';
 import { useJoinWindow } from '../hooks/useJoinWindow';
-import type { BleDevice } from '../model/bleDevices';
+import type { BleDevice, MatterDevice } from '../model/bleDevices';
+import { matterDevices } from '../model/bleDevices';
 import { deviceTitle } from '../model/devices';
-import { matterBusy, matterWords } from '../model/matter';
+import { matterBusy, matterWords, type MatterIdentity } from '../model/matter';
 import { proximityLabel, tooFar } from '../model/proximity';
 import type { Entity, MatterEvent } from '../protocol/messages';
 import type { HomeState } from '../protocol/store';
 import { Button, Input, Note } from './controls';
 import { Glyph } from './Glyph';
+import { ScanQrScreen } from './ScanQrScreen';
 import { ScreenHeader } from './ScreenHeader';
 import { radius, useTheme } from './theme';
 
@@ -60,16 +62,29 @@ export function FindDevicesScreen({
     };
   }, []);
   const hubCannot = refused || (attempt !== null && attempt.code === 'unsupported');
+  // The code printed on the device, and the camera that reads it.
+  const [scanning, setScanning] = useState(false);
+  const [scanned, setScanned] = useState<MatterIdentity | null>(null);
 
-  const addMatter = async (device: BleDevice) => {
-    const matter = device.matter;
-    if (!matter) return;
+  const addMatter = async (matter: MatterIdentity) => {
     const ok = await commands.request('matter.commission', {
       kind: matter.kind,
       payload: matter.payloadHex,
     });
     if (ok) commands.notify('The hub is adding the device');
   };
+
+  if (scanning) {
+    return (
+      <ScanQrScreen
+        onScanned={(matter) => {
+          setScanned(matter);
+          setScanning(false);
+        }}
+        onClose={() => setScanning(false)}
+      />
+    );
+  }
 
   return (
     <View style={[styles.screen, { backgroundColor: t.bg }]}>
@@ -91,7 +106,14 @@ export function FindDevicesScreen({
         {attempt ? <AttemptNote attempt={attempt} /> : null}
 
         <Text style={[styles.section, { color: t.muted }]}>NEAR YOU</Text>
-        <NearbySection scan={scan} onAdd={addMatter} busy={busy} hubCannot={hubCannot} />
+        <NearbySection
+          scan={scan}
+          onAdd={addMatter}
+          busy={busy}
+          hubCannot={hubCannot}
+          onScanQr={() => setScanning(true)}
+          scanned={scanned}
+        />
 
         <Text style={[styles.section, { color: t.muted }]}>ON YOUR HUB</Text>
         <HubSection join={join} commands={commands} />
@@ -115,15 +137,89 @@ function AttemptNote({ attempt }: { attempt: MatterEvent }) {
   );
 }
 
-/** What the phone hears around it. */
+/** What the phone hears around it — and the code printed on the device. */
 function NearbySection({
+  scan,
+  onAdd,
+  busy,
+  hubCannot,
+  onScanQr,
+  scanned,
+}: {
+  scan: ReturnType<typeof useBleScan>;
+  onAdd(matter: MatterIdentity): Promise<void>;
+  busy: boolean;
+  hubCannot: boolean;
+  onScanQr(): void;
+  scanned: MatterIdentity | null;
+}) {
+  return (
+    <View style={styles.gap}>
+      {/* The code is printed on the device, so this works without any radio at all. */}
+      <Button kind="secondary" size="compact" label="Scan a QR code" onPress={onScanQr} />
+      {scanned ? (
+        <ScannedRow matter={scanned} busy={busy} hubCannot={hubCannot} onAdd={() => void onAdd(scanned)} />
+      ) : null}
+      <NearbyList scan={scan} onAdd={onAdd} busy={busy} hubCannot={hubCannot} />
+    </View>
+  );
+}
+
+/**
+ * A device the person read off its own QR code. It is right in front of them, so
+ * there is no signal to judge — the code says what the device is.
+ */
+function ScannedRow({
+  matter,
+  busy,
+  hubCannot,
+  onAdd,
+}: {
+  matter: MatterIdentity;
+  busy: boolean;
+  hubCannot: boolean;
+  onAdd(): void;
+}) {
+  const t = useTheme();
+  return (
+    <View style={[styles.row, { borderColor: t.border, backgroundColor: t.card }]}>
+      <View style={styles.rowHead}>
+        <Glyph name="chip" size={16} color={t.accent} />
+        <View style={styles.rowText}>
+          <Text style={{ color: t.text, fontSize: 15, fontWeight: '600' }} numberOfLines={1}>
+            Matter device
+          </Text>
+          <Text style={{ color: t.muted, fontSize: 12 }} numberOfLines={1}>
+            From the QR code{matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}
+          </Text>
+        </View>
+      </View>
+      {hubCannot ? (
+        <Text style={{ color: t.warn, fontSize: 12.5, marginTop: 6 }}>
+          This hub&apos;s Matter chip cannot add devices yet. To put the device in Apple Home, open Home → Add
+          Accessory and scan the QR code on the device.
+        </Text>
+      ) : (
+        <View style={styles.actions}>
+          <Button size="mini" label="Add to the hub" disabled={busy} onPress={onAdd} />
+          <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
+            The hub adds the device — it has to reach it over the network.
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** The devices the radio hears, as far as the hub could do something with them. */
+function NearbyList({
   scan,
   onAdd,
   busy,
   hubCannot,
 }: {
   scan: ReturnType<typeof useBleScan>;
-  onAdd(device: BleDevice): Promise<void>;
+  onAdd(matter: MatterIdentity): Promise<void>;
   busy: boolean;
   hubCannot: boolean;
 }) {
@@ -155,12 +251,15 @@ function NearbySection({
   if (scan.status.state !== 'ready') {
     return <Note tone="quiet" text="Getting the radio ready…" />;
   }
-  if (scan.devices.length === 0) {
+  // Only the devices that speak Matter: the hub cannot add the others, so there is
+  // nothing the person could do with them.
+  const devices = matterDevices(scan.devices);
+  if (devices.length === 0) {
     return (
       <Note
         tone="quiet"
         title="Nothing nearby yet."
-        text="Wake the device up (press its button) and it will show up here. Only devices that speak Bluetooth can be found this way."
+        text="Wake the device up (press its button) and it will show up here. Only devices that speak Matter can be added."
       />
     );
   }
@@ -169,8 +268,14 @@ function NearbySection({
       <Text style={{ color: t.muted, fontSize: 12.5, lineHeight: 18 }}>
         A Matter device is added by the hub — the hub has to reach the device over the network.
       </Text>
-      {scan.devices.map((device) => (
-        <NearbyRow key={device.id} device={device} busy={busy} hubCannot={hubCannot} onAdd={() => void onAdd(device)} />
+      {devices.map((device) => (
+        <NearbyRow
+          key={device.id}
+          device={device}
+          busy={busy}
+          hubCannot={hubCannot}
+          onAdd={() => void onAdd(device.matter)}
+        />
       ))}
     </View>
   );
@@ -183,7 +288,7 @@ function NearbyRow({
   hubCannot,
   onAdd,
 }: {
-  device: BleDevice;
+  device: MatterDevice;
   busy: boolean;
   hubCannot: boolean;
   onAdd(): void;
@@ -191,15 +296,13 @@ function NearbyRow({
   const t = useTheme();
   const matter = device.matter;
   const far = tooFar(device.proximity);
-  const title = device.name ?? (matter ? 'Matter device' : 'Unknown device');
-  const subtitle = matter
-    ? `Matter device${matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}`
-    : 'Not a Matter device';
+  const title = device.name ?? 'Matter device';
+  const subtitle = `Matter device${matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}`;
 
   return (
     <View style={[styles.row, { borderColor: t.border, backgroundColor: t.card }]}>
       <View style={styles.rowHead}>
-        <Glyph name={matter ? 'chip' : 'signal'} size={16} color={matter ? t.accent : t.muted} />
+        <Glyph name="chip" size={16} color={t.accent} />
         <View style={styles.rowText}>
           <Text style={{ color: t.text, fontSize: 15, fontWeight: '600' }} numberOfLines={1}>
             {title}
@@ -210,33 +313,27 @@ function NearbyRow({
         </View>
         <Text style={[styles.band, { color: bandColor(t, device.proximity) }]}>{proximityLabel(device.proximity)}</Text>
       </View>
-      {matter ? (
-        far ? (
-          <Text style={{ color: t.warn, fontSize: 12.5, marginTop: 6 }}>
-            Too far from the device — move closer and try again.
-          </Text>
-        ) : hubCannot ? (
-          <Text style={{ color: t.warn, fontSize: 12.5, marginTop: 6 }}>
-            This hub&apos;s Matter chip cannot add devices yet. To put the device in Apple Home, open Home → Add
-            Accessory and scan the QR code on the device.
-          </Text>
-        ) : (
-          <View style={styles.actions}>
-            <Button size="mini" label="Add to the hub" disabled={busy} onPress={onAdd} />
-            {matter.source === 'service' ? (
-              <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
-                Only the discriminator was read from the air — if the hub cannot add it, use the QR code on the device.
-              </Text>
-            ) : null}
-            <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
-              To put the device in Apple Home, open Home → Add Accessory and scan the QR code on the device.
-            </Text>
-          </View>
-        )
-      ) : (
-        <Text style={{ color: t.muted, fontSize: 12.5, marginTop: 6 }}>
-          Only Matter devices can be added over Bluetooth. A Zigbee device joins through the hub below.
+      {far ? (
+        <Text style={{ color: t.warn, fontSize: 12.5, marginTop: 6 }}>
+          Too far from the device — move closer and try again.
         </Text>
+      ) : hubCannot ? (
+        <Text style={{ color: t.warn, fontSize: 12.5, marginTop: 6 }}>
+          This hub&apos;s Matter chip cannot add devices yet. To put the device in Apple Home, open Home → Add
+          Accessory and scan the QR code on the device.
+        </Text>
+      ) : (
+        <View style={styles.actions}>
+          <Button size="mini" label="Add to the hub" disabled={busy} onPress={onAdd} />
+          {matter.source === 'service' ? (
+            <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
+              Only the discriminator was read from the air — if the hub cannot add it, use the QR code on the device.
+            </Text>
+          ) : null}
+          <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
+            To put the device in Apple Home, open Home → Add Accessory and scan the QR code on the device.
+          </Text>
+        </View>
       )}
     </View>
   );

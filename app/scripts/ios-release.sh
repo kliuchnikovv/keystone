@@ -18,6 +18,12 @@
 
 set -euo pipefail
 
+# Optional: wipe the global Clang module cache first. Use when a build fails with
+# "pcm is not a valid module file: file too small to contain precompiled file magic".
+if [ "${CLEAN:-0}" = "1" ]; then
+  rm -rf "$HOME/Library/Developer/Xcode/DerivedData/ModuleCache.noindex"
+fi
+
 DESTINATION_KIND="${1:-device}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="$(cd "$APP_DIR/.." && pwd)"

@@ -1,4 +1,4 @@
-# AGENTS.md — keystone-esp
+# AGENTS.md — keystone
 
 Guidance for AI coding agents working in this repo (tool-agnostic). Claude Code
 also reads [CLAUDE.md](CLAUDE.md); this file holds the stable essentials, while

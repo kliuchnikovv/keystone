@@ -89,9 +89,23 @@ export function expireDevices(devices: BleDevice[], now: number): BleDevice[] {
   return devices.filter((d) => now - d.lastSeen <= BLE_EXPIRY_MS);
 }
 
+/** A device around the phone that says something Matter-ish — so the hub can add it. */
+export type MatterDevice = BleDevice & { matter: MatterIdentity };
+
 /** The devices to show: the closest first, the ones we cannot place last. */
 export function byProximity(devices: BleDevice[]): BleDevice[] {
   return rankByProximity(devices, (d) => d.median);
+}
+
+/**
+ * The devices the app can do something with: the ones that speak Matter.
+ *
+ * A device that says nothing Matter-ish cannot be added by the hub, so putting it in
+ * front of the person only makes them read a row they cannot act on. The radio still
+ * hears everything — this only decides what is worth showing.
+ */
+export function matterDevices(devices: BleDevice[]): MatterDevice[] {
+  return devices.filter((d): d is MatterDevice => d.matter !== null);
 }
 
 export type { MatterIdentity };

@@ -1,4 +1,4 @@
-module github.com/kliuchnikovv/keystone-esp/relay
+module github.com/kliuchnikovv/keystone/relay
 
 go 1.24
 

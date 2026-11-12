@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'Pins the hub certificate by SHA-256 fingerprint before a WebSocket opens, and browses _keystone._tcp.'
   s.license        = { :type => 'MIT' }
   s.author         = 'keystone'
-  s.homepage       = 'https://github.com/kliuchnikovv/keystone-esp'
+  s.homepage       = 'https://github.com/kliuchnikovv/keystone'
   s.platforms      = { :ios => '16.4' }
   s.swift_version  = '5.9'
   s.source         = { git: '' }
