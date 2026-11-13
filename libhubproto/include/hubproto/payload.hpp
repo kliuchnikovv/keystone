@@ -201,6 +201,13 @@ inline constexpr std::uint8_t kBootId    = 0x72;  // u8  reboot counter (NVS)
 inline constexpr std::uint8_t kRxFrames  = 0x73;  // u32 frames received from the brain
 inline constexpr std::uint8_t kTxFrames  = 0x74;  // u32 frames sent to the brain
 inline constexpr std::uint8_t kCrcErrors = 0x75;  // u16 frames dropped (bad CRC/COBS)
+// The Thread role of the chip and the number of devices in our Thread network.
+// Only the Thread co-processor has them; the other chips report kNoThreadRole.
+// The role follows OpenThread's otDeviceRole: 0 disabled, 1 detached, 2 child,
+// 3 router, 4 leader.
+inline constexpr std::uint8_t kThreadRole   = 0x76;  // u8  Thread role (0xff = none)
+inline constexpr std::uint8_t kThreadKids   = 0x77;  // u8  children in our Thread network
+inline constexpr std::uint8_t kNoThreadRole = 0xff;  // "this chip has no Thread stack"
 }  // namespace chip_attr
 
 // Canonical telemetry carried by the self entity.
@@ -211,9 +218,11 @@ struct ChipSelf {
   std::uint32_t rx_frames;
   std::uint32_t tx_frames;
   std::uint16_t crc_errors;
+  std::uint8_t  thread_role;      // chip_attr::kThreadRole
+  std::uint8_t  thread_children;  // chip_attr::kThreadKids
 };
 
-// Encode the self entity's DECLARE (device_type=Chip, six attrs).
+// Encode the self entity's DECLARE (device_type=Chip, eight attrs).
 EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t* out,
                                       std::size_t cap) noexcept;
 
@@ -425,5 +434,23 @@ EncodeResult encode_matter_result(const MatterResult& in, std::uint8_t* out,
                                   std::size_t cap) noexcept;
 bool decode_matter_result(const std::uint8_t* in, std::size_t len,
                            MatterResult& out) noexcept;
+
+// ---- The Thread operational dataset -----------------------------------------
+// The brain has no 802.15.4 radio, so the Matter commissioner has no Thread
+// network of its own to hand to a device. The co-processor does have a radio
+// and a formed network, so it sends its active operational dataset (Thread
+// TLVs, the same bytes CHIP's SetThreadOperationalDataset expects) over the
+// hub link. 254 bytes is the Thread maximum for a dataset and the size of
+// CHIP's own buffer.
+inline constexpr std::size_t kThreadDatasetMax = 254;
+
+struct ThreadDatasetView {
+  const std::uint8_t* bytes;
+  std::size_t         len;
+};
+EncodeResult encode_thread_dataset(const std::uint8_t* bytes, std::size_t len,
+                                    std::uint8_t* out, std::size_t cap) noexcept;
+bool decode_thread_dataset(const std::uint8_t* in, std::size_t len,
+                           ThreadDatasetView& out) noexcept;
 
 }  // namespace hubproto

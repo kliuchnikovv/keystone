@@ -1,12 +1,14 @@
-## IDF Component Manager manifest for the Matter co-processor.
-## Matter (esp_matter) itself is pulled in from ESP_MATTER_PATH via
-## EXTRA_COMPONENT_DIRS in the root CMakeLists — not through the registry —
-## so this manifest stays intentionally small.
+## IDF Component Manager manifest for the Thread co-processor / Border Router.
+## The chip runs OpenThread as an FTD with BORDER_ROUTER enabled; the backbone
+## is Wi-Fi (STA). mDNS reflects SRP services from the Thread side onto Wi-Fi
+## so the CHIP commissioner on the brain finds the device by DNS-SD.
 dependencies:
   idf:
     version: ">=5.2"
   espressif/led_strip:
     version: ">=2.5.0"
+  espressif/mdns:
+    version: "^1.5"
   espressif/cmake_utilities:
     version: "^1"
     rules:

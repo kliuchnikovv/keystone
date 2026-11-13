@@ -8,6 +8,14 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # 4 MB flash (this board).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
+# Custom partition table — two OTA slots of 1.92 MB each.
+# PlatformIO picks the table from `board_build.partitions = partitions.csv` in
+# platformio.ini; plain idf.py (Docker build via scripts/matter-build.sh) needs
+# the CUSTOM switch explicitly.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
 # Compile in DEBUG log statements so the console `log on` command can enable
 # them at runtime. Default log level stays at INFO (quiet by default).
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
@@ -33,3 +41,22 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4608
 # task sits in a blocking read. Without a separate TX lock both want client->lock, and a send
 # either loses the race or waits for the read to return — frames were silently dropped.
 CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
+
+# PSRAM (experiment commissioner-on-s3): the ESP32-S3-Zero (Waveshare) uses the
+# ESP32-S3FH4R2 chip — 4 MB flash + 2 MB quad PSRAM embedded in the module. Enable
+# PSRAM so Matter controller BSS can migrate to external memory, which is what
+# the vendor's RAM-optimised build does (esp-matter examples/controller sets
+# CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y for exactly this reason). Without
+# PSRAM the ~250 KB Matter controller footprint does not fit next to the current
+# brain image. SPIRAM_IGNORE_NOTFOUND=y keeps the image bootable if a different
+# S3 variant (without PSRAM) is ever flashed with it.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y

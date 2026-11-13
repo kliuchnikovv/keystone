@@ -19,6 +19,8 @@ add_executable(core_tests
   test_sun.cpp
   test_zcl_profile.cpp
   test_matter_plan.cpp
+  test_matter_entity.cpp
+  test_matter_onboarding.cpp
   test_wifi_policy.cpp
   test_setup_mode.cpp
   test_json.cpp
@@ -28,7 +30,8 @@ add_executable(core_tests
   test_sha256.cpp
   test_ota.cpp
   test_zigbee_ota.cpp
-  test_device_ota.cpp)
+  test_device_ota.cpp
+  test_thread_dataset.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 

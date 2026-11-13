@@ -162,6 +162,13 @@ offset size field       meaning
                                pushes the vendor .ota file to the coordinator,
                                which serves it over the OTA Upgrade cluster
                                (BEGIN/CHUNK/END + STATUS); see docs/ota.md
+0x60 MATTER_PAIR brain→chip   commission a Matter device: kind(u8) + bytes[]
+0x61 MATTER_RESULT chip→brain the result of a commissioning attempt
+0x62 THREAD_DATASET_REQ brain→chip "give me your active Thread dataset"
+0x63 THREAD_DATASET chip→brain the dataset, as Thread operational TLVs
+                               (the brain has no 802.15.4 radio, so the
+                               commissioner borrows the co-processor's
+                               network); see docs/matter-backlog.md §3
 ```
 
 ### 4.4 Lifecycle
@@ -249,7 +256,7 @@ exposed as a Matter accessory with no second modeling pass.
 | occupancy   | 0x07  | Occupancy Sensor   | occupied(0x50) |
 | contact     | 0x08  | Contact Sensor     | contact(0x51) |
 | button      | 0x09  | Generic Switch     | event(0x60) |
-| chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16) |
+| chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16), thread_role(0x76, u8), thread_children(0x77, u8) |
 
 **How a Zigbee endpoint becomes one of these** (`core/zcl_profile.hpp`): the clusters decide,
 and so does the metering. An endpoint that reports its **own** power draw (Electrical
@@ -298,6 +305,13 @@ whose `entity_id` equals the chip's own `chip_id` (0x01, 0x02, … — the regis
 is global, so ids must be unique; header `entity_id 0x0000` stays "about the
 chip" for OTA/meta messages); its health reaches the brain as ordinary STATE (no extra
 message type). The Matter bridge skips it.
+
+`thread_role` (0x76) and `thread_children` (0x77) describe the Thread network
+of the co-processor that runs one: the role follows OpenThread's `otDeviceRole`
+(0 disabled, 1 detached, 2 child, 3 router, 4 leader) and the children are the
+devices attached to us in that network. A chip without a Thread stack reports
+`0xff` ("no role"). They are what makes the Thread network visible from the
+brain — the brain has no radio of its own.
 
 > Keep this table in sync with Matter Device Types. When adding a device_type or
 > attr_id, check the Matter cluster it maps to first — this is the most tedious

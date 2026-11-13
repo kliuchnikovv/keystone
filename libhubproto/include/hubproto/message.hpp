@@ -37,6 +37,11 @@ enum class MsgType : std::uint8_t {
   DevOtaStatus = 0x5C,  // chip→brain   acks the transfer, then reports the device session
   MatterPair   = 0x60,  // brain→chip   the bytes the phone read over Bluetooth
   MatterResult = 0x61,  // chip→brain   how far the commissioning got
+  // The Thread operational dataset. The brain has no 802.15.4 radio, so the
+  // Matter commissioner borrows the one the co-processor has: it asks for the
+  // dataset and hands it to the device over BLE (docs/matter-backlog.md §3).
+  ThreadDatasetReq = 0x62,  // brain→chip   "give me your active Thread dataset"
+  ThreadDataset    = 0x63,  // chip→brain   the dataset, as Thread TLVs
 };
 
 // Reserved identities (SPEC §4.2).

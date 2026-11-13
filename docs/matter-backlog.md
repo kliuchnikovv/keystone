@@ -194,6 +194,621 @@ to a bridge that already takes 190 KB. Two ways to change that verdict:
 - **F2 — a second C6 as a controller-only node**: the ~250 KB is then not
   shared with the bridge, but that node needs its own Thread path.
 
+**Measured on the Linux dev box 04.11.2026 (branch `experiment/commissioner-on-s3`
+commit `a11c223`).** The static DRAM was measurable on this machine because
+Docker + the esp-matter image are here, so the same gate that could not be run
+on the Mac was run and gives real numbers for the **S3** path (F5 — commissioner
+on brain-s3, not on the C6):
+
+| what | bytes | note |
+|---|---|---|
+| S3 internal DRAM (`dram0_0_seg`) | 341 760 (334 KB) | after the boot ROM reservations |
+| brain (pre-Matter) static DRAM | 165 723 | `.bss` 57 312 + `.text` 78 519 + `.data` 29 892 (commit `63bf9c1`) |
+| with the controller called | 336 451 | `.bss` 209 584 + `.text` 101 991 + `.data` 24 876 |
+| controller's own static cost | **+170 728** | almost all of it `.bss`: fabric table, session manager, DNS-SD caches, ACL |
+| DRAM left after the call | 5 309 B | the slack for DMA / ISR / things that must be internal |
+| flash image | 1 945 880 (1.86 MB) | 20 KB free in the 1.92 MB OTA slot |
+| flash cost of the controller | +685 KB | `.text` 856 → 1407 KB (+551), `.rodata` 279 → 395 KB (+115) |
+
+What this means for F5 (commissioner on brain-s3 — the one the F-list above
+does not have a name for):
+
+- **RAM gate: cleared, barely.** The controller's ~170 KB static BSS does
+  fit, but only after `EXT_RAM_BSS_ATTR` on `g_ev_ring` moved 6 KB of our own
+  BSS to PSRAM — that is what turned a 992-byte overflow into 5 309 B of
+  slack. Heap during a live CASE session is still not measured (no device
+  connected). The ~250 KB "controller heap budget" the F-list mentioned now
+  lives in PSRAM via `CONFIG_ESP_MATTER_MEM_ALLOC_MODE_EXTERNAL` +
+  `MBEDTLS_EXTERNAL_MEM_ALLOC` + `BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL`; the 5 KB
+  internal slack is only for allocations that refuse PSRAM.
+- **Flash gate: tight.** 20 KB free in a 1.92 MB OTA slot. Adding the real
+  pairing path (QR decode, the Rendezvous state machine, UDC, Zigbee→Matter
+  mirroring on this chip) will not fit the current slot. Choices then are
+  **F1'** — shrink the brain image (some application state can move to PSRAM
+  the same way `g_ev_ring` did, and the status LED / relay client / websocket
+  console paths each carry their own tables) — or **F5' — go to an 8 MB flash
+  variant of the S3-Zero** (the Waveshare S3FH4R2 is 4 MB; a plain S3 module
+  with 8 MB keeps the same pinout and PSRAM).
+
+**Flashed and booted on the real brain-s3 04.11.2026 (commit `2ca3ab7`, with
+the console command `matter_pair`).** The *runtime* RAM picture turned out to
+be worse than the linker map said — the static gate had slack, but the live
+heap did not:
+
+```
+I (660) heap_init: At 3FCDA330 len 0000F3E0 (60 KiB): RAM
+I (661) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (661) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (799) matter: heap before bringup: 39135 B internal
+I (829) BLE_INIT: Malloc failed
+E (829) BLE_INIT: esp_bt_controller_init -4
+E (829) chip[DL]: Disabling CHIPoBLE service due to error: b
+I (1949) matter: controller up: heap 1939 B (-37196 B), psram free 2045172 B
+Guru Meditation Error: Core 0 panic'ed (LoadProhibited).  → crash-loop
+```
+
+What that says:
+
+- internal RAM is handed out as **three non-contiguous pools** (60 + 21 + 32 KB),
+  not one. The BLE controller (`libbtdm_app.a`) asks for its ~30 KB of HCI/LLCP
+  buffers as a **single contiguous block from internal RAM**, and no pool is
+  big enough once the brain's own startup has run. `BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL`
+  only moves the NimBLE **host**; there is a separate knob for the controller
+  (`CONFIG_BT_CTRL_HCI_...`, undocumented in esp-matter) that we did not set.
+- `esp_matter::start()` itself consumes 37 KB of what little internal heap
+  remained (nvs opens, mDNS tables, Operational-Credentials storage, test DAC,
+  CASE server setup) and leaves **1939 B of internal RAM live** before
+  anything else wakes up. Matter does bring up (fabric 0x2 is retrieved, CASE
+  server enables, operational node is advertised on mDNS), but there is
+  nothing left for the first scheduled task that wants internal memory, so
+  the brain panics in under a second.
+
+**Verdict of that run: option A did not cross even the PASE step on this
+hardware** — the BLE radio never came up. The brain reverted cleanly to its
+PlatformIO image (1.37 MB, no Matter) and runs normally; nothing in NVS or
+Zigbee state was affected.
+
+**But the radio does come up — three fixes (05.11.2026, working tree of
+`experiment/commissioner-on-s3`).** All three causes above are gone, and the
+BLE stack is provably alive on the real board:
+
+| fix | what | why |
+|---|---|---|
+| the controller singleton → PSRAM | `matter_controller_client::s_instance` tagged `EXT_RAM_BSS_ATTR` (patched in the container, `scripts/matter-build.sh`) | the singleton embeds a whole `CHIPDeviceController` — ~130 KB of internal `.bss`, more than half of what the radio needs in one block |
+| the brain's own tables → PSRAM | `bus`, `reg`, `coord`, `sm`, `disp`, `monitor`, `rules`, the NVS/scene/timer buffers, the relay RX buffer … all `EXT_RAM_BSS_ATTR` | the brain's own `.bss` sat on top of the three small internal pools |
+| BLE slimming + a different `app_main` order | one connection, no ISO / privacy / extended / periodic advertising, minimum buffer counts, and the Matter bring-up **before** the Wi-Fi driver starts | the BLE controller wants one contiguous ~30 KB block of internal RAM, and the Wi-Fi driver, started first, was fragmenting the big pool |
+
+The last one is the subtle one: the S3-Zero hands out its internal RAM as
+**three non-contiguous pools** (60 + 21 + 32 KB), the radio asks for its
+HCI/LLCP buffers as *one* contiguous block, and the Wi-Fi driver split what
+was left. Bringing Matter up first — and only then starting the Wi-Fi driver
+— gives the radio its block. The boot now reaches:
+
+```
+matter: app_main entry: heap 269391 B internal, largest block 204800 B
+matter: heap before bringup: heap 253903 B internal, largest block 196608 B
+matter: after esp_matter::start: heap 141583 B internal, largest block 81920 B, psram free 1838396 B
+matter: controller up: heap 115847 B (-138056 B), largest block 55296 B, psram free 1773896 B
+chip[FP]: Fabric index 0x2 was retrieved from storage … NodeId 0x000000000001B669
+chip[IN]: CASE Server enabling CASE session setups
+NimBLE: GAP procedure initiated: discovery
+NimBLE: duration=60000ms
+BLE Scanner: 02 01 1a 02 0a 0c 0b ff 4c 00 10 06 …
+```
+
+Compare that with the first attempt, where the controller came up with **1939 B**
+of internal heap and the radio had **no** block at all: the radio now gets a
+55 KB contiguous block and **115 KB** of internal heap is still live afterwards
+(the case session's own peak is still unmeasured — that needs a device).
+
+**The scan ran — and the device was in range the whole time.** The 60 s
+window catches live advertisements from the neighbourhood, and among them the
+**TIMMERFLOTTE itself**: Matter commissioning service data (0xFFF6) with
+vendor 0x117C (IKEA) and product 0x8005 — which *is* the TIMMERFLOTTE
+(matter-survey: "IKEA of Sweden TIMMERFLOTTE temp/hmd sensor", vendor
+0x117C, product 0x8005). Its advertising discriminator is **0x0239**.
+
+Why CHIP never connected to it: the discriminator and the PIN were read off
+the manual pairing code **as if it were "discriminator then PIN"** — it is
+not. The Matter manual code is bit-packed (CHIP `ManualSetupPayloadParser`:
+chunk1 = 1 digit, chunk2 = 5, chunk3 = 4, the last character is a Verhoeff
+check digit), and it carries only a **4-bit short discriminator** (the top
+nibble of the 12-bit one) plus a 27-bit PIN. Decoding the device's code the
+way CHIP does gives short discriminator 2 — and the sensor advertises
+0x0239, whose top nibble is 2. The device matched all along; our parameters
+were wrong, and CHIP only ever logged `chip[BLE]: Discriminator did not
+match`.
+
+**The earlier "not a single Matter service-data AD" was our own parsing bug.**
+`ESP_LOG_BUFFER_HEX` prints a multi-line hex dump, so concatenating the dump
+line by line and re-syncing the AD structures desynchronised them. A
+self-synchronising AD walker over the same log finds 15 (resp. 9) Matter
+commissioning advertisements — exactly the number of CHIP's own
+"Discriminator did not match" messages in the same log. The radio, NimBLE
+and CHIP's scanner all work.
+
+So the option-A verdict is **"the stack is alive, our parameters were
+wrong"**, not "the BLE radio never comes up". The proof line to wait for is
+`pairing_command: PASE session establishment success` — the controller prints
+it when SPAKE2+ has finished against a real device. Until the sensor
+answers, the CASE-session heap is still unmeasured.
+
+**Four traps worth writing down.**
+
+1. **The GCC/NOLOAD trap.** `EXT_RAM_BSS_ATTR` puts an object into
+   `.ext_ram.bss`, which is a **NOBITS** section: zeroed at boot, never
+   loaded from flash. A namespace-scope object with a constant-initialisable
+   constructor is **constant-initialised** by GCC, and its vtable pointer is a
+   *constant* emitted into the object's own section — which NOLOAD never
+   loads. The vptr stays 0 and the first virtual call faults
+   (`LoadProhibited`, EXCVADDR 0x8). `core::EventRing` (`g_ev_ring`) hit
+   exactly that. The rule: **only plain data arrays and objects whose
+   constructor runs at runtime may carry the attribute** — a function-local
+   `static` with a non-trivial constructor is initialised at run time and is
+   fine.
+2. **A failed scan leaves the commissioner "busy".** CHIP reports
+   `OnPairingComplete` only once a device has actually connected
+   (`RendezvousCleanup` returns early while `mDeviceInPASEEstablishment` is
+   null), so after a scan that found nothing the pairing delegate stays
+   registered and the next attempt is refused with "There is already a
+   pairing process" (esp_err 259). The firmware now calls `StopPairing()`
+   (resets the pairer) and `RegisterPairingDelegate(nullptr)` before every new
+   attempt, and has a `matter_pair_cancel` console command to abort a running
+   attempt — both verified on the board: after a cancel the next
+   `matter_pair_ble` starts again instead of answering 259.
+3. **A cancel does not stop the radio.** CHIP's NimBLE layer implements
+   `BLEManagerImpl::CancelConnection()` as `CHIP_ERROR_NOT_IMPLEMENTED`, so
+   `StopPairing()` resets the pairer but leaves the GAP scan running until its
+   60 s window expires. An attempt started right after a cancel therefore
+   fails with `Failed to start a BLE scan: 3` →
+   `PASE session establishment failure: Matter-Error CHIP:0x00000003` — the
+   error is CHIP_ERROR_INVALID_STATE, not a device problem. Either let the
+   old scan expire or reboot the brain (`DTR=False` on the console port gives
+   `rst:0x15`, and the console stays alive through the boot).
+4. **A Matter manual pairing code is bit-packed, not "discriminator then
+   PIN".** The 11-digit code (`DDDD-DDD-DDDD`) packs a version bit, a
+   vid/pid-present bit, a **4-bit** discriminator, the PIN split 14 + 13
+   bits, and a Verhoeff check digit — so the digits you can read carry the
+   discriminator and the PIN in an unreadable form. Decode the code with
+   CHIP's `ManualSetupPayloadParser` (the python reference `SetupPayload.py`
+   does the same) and check the Verhoeff digit before touching hardware. The
+   control case is the esp-matter test DAC code `3497-0112-332` → it must
+   decode to discriminator 3840 and PIN 20202021.
+
+**A hard limit of the S3's Bluetooth controller: no LE Extended Advertising.**
+The ESP32-S3 uses the original ESP32 controller (`lib_esp32`), which has no
+extended-advertising support at all — no ext-adv symbols in the controller
+archive, no `ble_ext_adv_max_size` in the SoC capability struct, and
+`CONFIG_BT_NIMBLE_EXT_ADV` off by default (it depends on
+`BT_NIMBLE_50_FEATURE_SUPPORT`). CHIP's ESP32 commissioner scans with the
+legacy `ble_gap_disc` only, so it can never see a device that advertises
+*exclusively* via extended advertising (Matter 1.4 enhanced commissioning,
+service data 0xFFF1). The TIMMERFLOTTE uses legacy 0xFFF6 and is therefore
+commissionable from the brain — but a commissioner on this silicon has that
+ceiling: for R3 it means "the brain's radio only ever sees legacy
+advertisers".
+
+**The flash gate needed -Os.** The controller does not fit the 1.875 MB app
+partition at IDF's default optimisation (`-Og`): the image was 0x1e0650 —
+1616 B over the slot, so the board did not boot at all.
+`CONFIG_COMPILER_OPTIMIZATION_SIZE=y` (the vendor's own release setting)
+brings it to **0x1de350** — 7344 B free. The switch lives in the Matter-only
+overlay (`sdkconfig.defaults.matter`), so the normal PlatformIO build of the
+brain stays untouched.
+
+**PASE reached — two more traps in CHIP's ESP32 NimBLE backend (05.11.2026,
+hardware-verified).** The radio was alive and the parameters were right, yet
+every attempt still died before PASE — and the brain rebooted on the way out.
+Both causes are in CHIP's ESP32 BLE backend, and both are fatal only because
+CHIP treats a *recoverable* condition as fatal:
+
+| trap | what actually happens | fix (`scripts/matter-patches.py`) |
+|---|---|---|
+| the ATT MTU exchange "fails" | `HandleGAPConnect()` calls `ble_gattc_exchange_mtu()`; on the S3 it returns **2** = `BLE_HS_EALREADY` ("already in progress" — *not* a link failure), and CHIP maps that to `CHIP_ERROR_INTERNAL` → *"Disabling CHIPoBLE service due to error: ac"* → the BLE layer is deinitialised → the freshly established connection is **torn down by CHIP itself**, before the commissioner ever gets to PASE | keep the connection and log the reason: a smaller MTU is survivable, a dead connection is not |
+| the connect timeout cancels a dead link | 30 s later `HandleConnectTimeout()` → `CancelConnect()` → `ble_gap_conn_cancel()` → `ble_hs_is_enabled()` reads the **deinitialised** NimBLE host context → `LoadProhibited` → the brain **panic-reboots** (reproducible every round) | skip `ble_gap_conn_cancel()` — the connection we would cancel is gone anyway |
+
+The patches live in `scripts/matter-patches.py` and are applied inside the
+container by `scripts/matter-build.sh` (each patch verifies the exact source
+text it replaces and hard-errors if the upstream text is gone, so a future
+esp-matter release cannot silently skip one). With them the brain talks to the
+real TIMMERFLOTTE:
+
+```
+I (67421) chip[CTL]: Commission called for node ID 0x000000000001B66A
+I (67541) chip[BLE]: Device Discriminator match. Attempting to connect
+W (67741) CHIP[DL]: ble_gattc_exchange_mtu failed: 2 (keeping the connection)
+I (67741) chip[DL]: BLE GAP connection established (con 1)
+I (69191) chip[BLE]: GATT discovery complete status:0 conn_handle:1
+I (70081) chip[EM]: <<< … Type 0000:22 (SecureChannel:PASE_Pake1)
+I (70191) chip[EM]: >>> … Type 0000:23 (SecureChannel:PASE_Pake2)
+I (70881) chip[EM]: <<< … Type 0000:24 (SecureChannel:PASE_Pake3)
+I (71051) pairing_command: PASE session establishment success
+```
+
+That is the proof line of option A, reached twice in a row. The BLE stack, the
+CHIP commissioner and the sensor's GATT server all work on the S3-Zero; the hub
+itself keeps running on that image (Wi-Fi up, SNTP synced, 48 KB internal heap
++ 1.75 MB PSRAM free after the attempt). With the trust store of the next
+paragraph the run goes much further — through attestation and the NOC, all the
+way to the Thread step, which is where R3 picks up.
+
+**Attestation is the next wall (05.11.2026 — passed).** The commissioning ran
+past PASE and died in the certificate step:
+
+```
+I chip[CTL]: Received certificate chain from the device
+I chip[CTL]: Successfully finished commissioning step 'SendAttestationRequest'
+E chip[-]: Unable to find PAA, err: 4a, PAI's AKID: 6B:31:8C:FC:E9:99:…
+E chip[CTL]: Error on commissioning step 'AttestationVerification': 'Error CHIP:0x00000020'
+I chip[CTL]: Failsafe disarmed
+I chip[CTL]: Commissioning complete for node ID 0x000000000001B66A: Error CHIP:0x00000020
+```
+
+The device's DAC is signed by a real PAA, and the commissioner's trust store
+holds only the **two hardcoded Chip-Test PAA certificates**
+(`CONFIG_ESP_MATTER_COMMISSIONER_ATTESTATION_TRUST_STORE` defaults to
+`TEST_ATTESTATION_TRUST_STORE`). esp-matter offers three more:
+`DCL_ATTESTATION_TRUST_STORE` (fetch the PAA from the CSA's Device
+Certification List over HTTPS — `…/dcl/pki/certificates?subjectKeyId=…`),
+`SPIFFS_ATTESTATION_TRUST_STORE` (the PAA in a `paa_cert` partition) and
+`CUSTOM_ATTESTATION_TRUST_STORE` (our own implementation). The sensor is left
+clean — the failsafe is disarmed, so it stays in commissioning mode and the
+attempt can be repeated.
+
+**Our own PAA trust store (05.11.2026, hardware-verified).** We took the custom
+route: `firmware/brain-s3/main/matter_paa.{hpp,cpp}` implements
+`chip::Credentials::AttestationTrustStore` with the **IKEA production PAA**
+("IKEA of Sweden Matter PAA G1", 487 bytes of DER, taken from the CSA
+certification list) compiled in and looked up by the key id the PAI's AKID names
+— that is the PAA's own SKID. Three details cost a build each:
+
+- the store has to be installed **before** `setup_commissioner()` — esp-matter
+  reads `get_attestation_trust_store()` inside it
+  (`firmware/brain-s3/main/main.cpp::matter_bringup`);
+- `CONFIG_CUSTOM_ATTESTATION_TRUST_STORE=y` in `sdkconfig.defaults.matter` is
+  **not enough**: kconfgen does not override a value that already exists in
+  `sdkconfig`, and the choice had already been resolved to the test store — the
+  resolved `sdkconfig` has to be switched as well;
+- the declaration of `set_custom_attestation_trust_store()` sits behind
+  `#ifdef CONFIG_CUSTOM_ATTESTATION_TRUST_STORE`, so with the wrong choice the
+  call does not even compile ("is not a member of 'chip::Credentials'").
+
+With the store in place the commissioning runs the **whole chain** — from PASE
+through the certificate exchange to an operational credential — and stops only
+where it has to, at the Thread step:
+
+```
+I chip[CTL]: Successfully finished commissioning step 'SendAttestationRequest'
+I chip[CTL]: Performing next commissioning step 'AttestationVerification'
+I chip[CTL]: Successfully finished commissioning step 'AttestationVerification'
+I chip[CTL]: Successfully validated 'Attestation Information' command received from the device.
+I chip[CTL]: Successfully finished commissioning step 'SendNOC'
+I chip[CTL]: Performing next commissioning step 'ThreadNetworkSetup'
+I chip[DMG]: Received NetworkConfig response, networkingStatus=1
+E chip[CTL]: Error on commissioning step 'ThreadNetworkSetup': 'Error CHIP:0x000000AC'
+I chip[CTL]: Successfully finished commissioning step 'Cleanup'
+```
+
+`ThreadNetworkSetup` fails because we deliberately hand over an **empty
+dataset**: the brain has no 802.15.4 radio and no Thread network of its own, and
+`networkingStatus=1` is the device refusing that empty dataset. This is the R3
+wall, not a bug — it needs the dataset from the C6 (as a pure OTBR) over a new
+hubproto message, and `pairing_ble_thread` with a real dataset in hand.
+
+The device stays usable: the failsafe was armed for 60 s
+(`ArmFailSafe response errorCode=0`) and the aborted run left it to expire on
+its own, so the sensor reboots itself, forgets the operational credential it
+was given and returns to commissioning mode.
+
+**Flash is the constraint for the DCL route.** The image now ends at
+`0x1deac0` — **0x1540 (5.4 KB) free** in the 1.875 MB slot — while the DCL client
+pulls in the HTTP client, TLS and cJSON. The 4 MB flash has 128 KB unused
+after `ota_1` (`0x3E0000…0x400000`), but that is not an app slot. So the DCL
+route means F1' (shrink the image) or F5' (an 8 MB S3). The custom trust store
+costs ~2 KB and fits today — but it is **vendor-specific**: every vendor we
+want to commission needs its PAA added (or the DCL route, or the SPIFFS
+partition with a folder of PAAs, once there is flash for it).
+
+**A third trap: the console REPL's stack is too small for a commissioning call
+(05.11.2026).** With the trust store in place the *next* attempt died
+differently — the brain panic-rebooted with
+
+```
+***ERROR*** A stack overflow in task console_repl has been detected.
+```
+
+The console command called `esp_matter::controller::pairing_ble_thread()`
+directly, so the whole CHIP call chain — the PAKE setup, the BLE bring-up, the
+crypto — ran on the console REPL task's 8 KB stack, on top of the REPL's own
+frames. The fix: the console command only checks the arguments and hands the
+request to a dedicated task (`matter_cmd`, 12 KB of stack), which is created
+while the internal heap is still one big block — the CHIP stack wants a large
+contiguous chunk later on. The call itself needs **~3.7 KB** (the worker task
+reports its own high-water mark), so the stack is comfortable now:
+
+```
+I matter: commissioning task up (12288 B of stack)
+I matter: worker done (ESP_OK), 8588 B of its stack left
+```
+
+Verified on the board: with the task in place the commissioning runs the same
+chain as before (PASE → attestation → NOC → `ThreadNetworkSetup`) and the hub
+survives it — no stack overflow, no reboot, 34.5 KB of internal heap left
+afterwards.
+
+The price is 12 KB of internal RAM: the hub has **35.7 KB free** (was 48.8 KB)
+and its largest free block is 25.6 KB (was 31.7 KB).
+
+**R3: the Thread dataset comes over the link (05.11.2026 — written, not yet on
+hardware).** `ThreadNetworkSetup` wants the **operational dataset TLVs** — the
+bytes of the Thread network the device is supposed to join. The brain has no
+802.15.4 radio and therefore no dataset of its own; the co-processor does (it
+runs OpenThread and forms the network). So the dataset travels over the link:
+
+| step | where | what |
+|---|---|---|
+| `THREAD_DATASET_REQ` (0x62) | brain → chip 0x02 | "give me your active dataset" |
+| `THREAD_DATASET` (0x63) | chip 0x02 → brain | `len(u8) bytes[]` — the Thread TLVs as they are |
+
+The chip side hands them over straight out of OpenThread
+(`otDatasetGetActiveTlvs()`; 254 bytes — the Thread maximum *and* the size of
+CHIP's own buffer, so one frame carries it). The brain checks them before
+trusting them (`core::ThreadDataset`, portable and host-tested): the TLVs have
+to parse exactly, and the three things a device cannot do without — the
+channel, the PAN id and the network key — have to be in there. A truncated or
+key-less dataset would otherwise make the device attach to nothing and fail
+with a message that says nothing about the cause.
+
+The commissioning then runs the same BLE path as before, but with a real
+dataset in hand: `pairing_ble_thread(node_id, pin, disc, dataset, len)`. The
+console command is `matter_pair_thread <node_id> <pincode> <discriminator>`: it
+asks the co-processor, waits up to 15 s for the answer, prints the channel and
+the network name, and only then hands the request to the `matter_cmd` worker.
+The dataset lives in a static object, not on a stack: CHIP keeps the pointer
+for the whole multi-minute commissioning.
+
+**Two build fixes and one move, on the way to the image.** The thread-c6 image
+did not build for two reasons, both in the container's CHIP sources: the ESP32
+platform event header uses `chip::System::PacketBuffer` without including the
+header that declares it (the file does not compile at all once esp-matter's BLE
+controller is enabled — the fifth patch in `scripts/matter-patches.py`, now
+applied for both apps), and CHIP's own sources are not portable enough for this
+toolchain's format warnings (a `uint32_t` printed with `%u`) while the build
+runs with `-Werror=all` — so the thread-c6 turns the format family off, like
+the brain-s3 does.
+
+And the console moved: in ESP-IDF 5.5 the C6's console *is* the USB-Serial-JTAG
+peripheral by default, and `esp_console_new_repl_uart()` is declared only under
+`CONFIG_ESP_CONSOLE_UART_DEFAULT` — the old REPL call did not compile at all.
+The REPL (`thread>` with `factoryreset` and `reboot`) and the log output now go
+to the same USB connector we flash through, which is exactly what the R3 test
+needs: the thread-c6's answer has to be readable.
+
+**Not yet on hardware.** The thread-c6 has to be connected and flashed with
+this firmware — the board plugged in here is the zigbee-c6, and the C6s are
+untouched under the standing rule «Пока не трогать C6». The brain's Matter
+image ends at **0x1df2c0** — 0xd40 (3.3 KB) free in the 1.875 MB slot, so the
+dataset path cost ~2 KB of the 5.4 KB that were free. The thread-c6 image now
+builds again and fits with room to spare: **0x1b6110** (1.75 MB) in the 1.92 MB
+slot, **0x29ef0 (168 KB, 9 %) free** — 175 KB smaller than the November build,
+because the CHIP *controller* is not linked into the bridge image (the
+commissioner lives in the brain; the bridge is a server). What the answer will
+look like depends on the co-processor's own Thread network: if OpenThread runs
+there without an active dataset, the chip says so and the dataset cannot be
+lent out yet.
+
+**R3, second attempt: the co-processor becomes a pure Thread host (06.11.2026).**
+The bridge code is out of the thread-c6 — the Apple Home side of it is what
+took ~190 KB of static DRAM (SPEC §11, «the bridge is heavy»). What is left on
+that chip is what it was always good for: an OpenThread instance with a real
+802.15.4 radio. So the chip is now **the hub's Thread network host**:
+
+- it forms (or keeps) the network `keystone-home` on channel 15 and stays the
+  leader — its own log says `role=leader network=keystone-home`;
+- the operational dataset lives in NVS (`thread_net`/`ds`), so a reflash of the
+  chip does not change the network the devices were commissioned into (a fresh
+  key would leave every device behind);
+- it lends the dataset to the brain over the link (0x62/0x63, the table above),
+  which is exactly what a Matter commissioner needs to hand a device;
+- it answers `MatterPair` with `unsupported`: the CHIP stack is gone from this
+  chip, the commissioner lives in the brain.
+
+Two things about the OpenThread port on the C6 are worth writing down, because
+both cost an afternoon:
+
+1. **`esp_vfs_eventfd_register()` must come before `esp_openthread_init()`**
+   (`max_fds = 3`). Without it the port does not come up at all, and the
+   failure is silent — no OpenThread, no error.
+2. **Every call into OpenThread has to hold the port lock**
+   (`esp_openthread_lock_acquire()` / `_release()`), because the instance belongs
+   to the OpenThread main-loop task: reading the dataset while the main loop is
+   halfway through a dataset update gives you half a dataset.
+
+**The dataset frame does not arrive (open).** The chip answers the request and
+logs it — `sent the Thread dataset (109 bytes) to the brain` — but the brain
+never sees it: `matter_pair_thread` waits out its 15 s and prints «no dataset in
+15000 ms». Everything around it is proven:
+
+- the **protocol** is proven by host tests — a 109-byte dataset through
+  `encode_frame`/`FrameReader` (byte by byte and in one piece) and through the
+  real `UartTransport` over `InMemoryLink` in the chip→brain direction
+  (`libhubproto/test/test_payload_thread_dataset.cpp`,
+  `core/test/test_uart_transport.cpp`; 411/411 host tests green);
+- the **link** is alive in that direction — the brain sees the chip's telemetry
+  (heap, uptime, tx_frames, crc_errors) and the chip's own log shows it
+  answering the request, so the request reached the chip;
+- the **frame** is the only big frame in the system (122 bytes on the wire; the
+  telemetry frames are ~40), which is why it gets its own test.
+
+The frame layer is silent when it drops a block, so "the frame was lost" and
+"the frame never left the chip" look the same from the outside. Two
+diagnostics were added for the next run:
+
+- the chip says whether the frame was really written
+  (`sent the Thread dataset (…) to the brain: written` / `WRITE FAILED`);
+- the brain counts what its own link dropped (`UartTransport::bad_frames()`),
+  logs it when the counter grows («link dropped frames: zigbee N, thread N») and
+  prints it per chip in the `chips` console output (`crc_errors …, dropped …`).
+
+With those two numbers the next run splits the case in two: the counter grows
+→ the frame arrived and was rejected (COBS/CRC); the counter stays → the
+frame never reached the brain's UART.
+
+**One false lead, closed (06.11.2026).** The brain's console showed
+`ROUTE_HOOK: Received RIO` / `prefix FD56:BFEE:8601:: lifetime 1800` every
+minute or so, and the prefix looks exactly like an OpenThread mesh-local
+prefix — as if the brain had joined the hub's Thread network. It has not: the
+string is **lwIP's IPv6 NDP route hook** on the Wi-Fi interface (the tag
+`ROUTE_HOOK` and the neighbouring format strings `Received RIO`,
+`prefix %s lifetime %lu` sit in the brain's own image next to the Wi-Fi
+strings), and the prefix is the ULA prefix the *home router* advertises. The
+S3 has no 802.15.4 radio and no OpenThread at all (`CONFIG_OPENTHREAD_ENABLED`
+is off; only `CONFIG_ESP_MATTER_ENABLE_OPENTHREAD` is on, which is the CHIP
+stack's own knob).
+
+**The probe (06.11.2026).** `scripts/thread-dataset-probe.sh` does the whole
+round in one run: it finds the two boards by their USB MAC (the ports swap
+when a board is re-plugged!), checks each board's console prompt (`home>` /
+`thread>`) so the wrong one cannot be flashed, flashes the two rebuilt images
+(without `erase_flash` — the Thread network and the chip's dataset survive),
+asks the brain for the dataset and prints the lines that answer the question.
+The images are built (thread-c6 623 KB, brain-s3 0x1df3f0 with 3 KB of flash
+to spare) but **not yet flashed** — writing firmware to a board needs the
+person's go-ahead.
+
+**R3, third attempt: the dataset arrives, the device joins the Thread network,
+the operational channel does not (07.11.2026).** Both boards were flashed with
+the rebuilt images (the brain — ESP32-S3 on `/dev/ttyACM0`, MAC
+`10:51:DB:5E:F8:94`; the co-processor — ESP32-C6, MAC `AC:EB:E6:DA:FC:08`;
+the tty numbers swap when a board is re-plugged, so find them by MAC). Both
+came up:
+
+- the brain: `Wi-Fi IPv6 link-local address created` → `controller up (node
+  112233, fabric 1, UDP 5580): heap 93779 B (-12096 B), largest block 31744 B`
+  → **`bus fan-out: 9 subscribers (room for 12)`**. The ninth subscriber is
+  the cross-chip forwarder — which is also what unpacks the Thread dataset —
+  and with the old eight-slot table it was silently dropped. That was the real
+  reason the dataset "never arrived": not the link, not the frame, a full
+  subscriber table (`dropped 0` on both links the whole time);
+- the chip: OpenThread up, `role=leader network=keystone-home`.
+
+`matter_pair_thread 4660 39441506 569` on the brain:
+
+```
+matter: asked chip 0x02 for its Thread dataset, waiting 15000 ms...
+matter: got the Thread dataset (109 bytes, channel 26, name 'keystone-home')
+```
+
+— **the frame from the co-processor reached the commissioner.** The open
+question of 06.11 is closed.
+
+The commissioning then went all the way, further than it ever has:
+
+```
+chip[BLE]: Device Discriminator match. Attempting to connect
+CHIP[DL]: ble_gattc_exchange_mtu failed: 2 (keeping the connection)   ← the NimBLE patch
+pairing_command: PASE session establishment success
+AttestationVerification ✓  AttestationRevocationCheck ✓  ValidateCSR ✓
+GenerateNOCChain ✓  SendNOC ✓
+chip[CTL]: Successfully finished commissioning step 'ThreadNetworkSetup'
+chip[CTL]: Successfully finished commissioning step 'ThreadNetworkEnable'
+```
+
+and the device **joined the Thread network**: the chip reports `0x76=4`
+(leader) and `0x77=1` (one child — the sensor).
+
+**The wall is now the operational channel (CASE).** The commissioner sends the
+first CASE message to the device's Thread address:
+
+```
+chip[EM]: >>> Msg TX ... [UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8]:5540]
+         --- Type 0000:30 (SecureChannel:CASE_Sigma1)
+```
+
+and gets nothing: four retransmissions die, `Session establishment failed for
+<0000000000001234, 2>, error: 32` (timeout), CHIP extends the fail-safe and
+retries. Why: the hub is on Wi-Fi, the device on Thread, and the only path
+between them is the co-processor as a Border Router. The host→Thread direction
+needs the BR to translate the host's address into a Thread address (the
+MeshCoP Address Table — the "NAT" of a Border Router); without that
+translation the Sigma1 has nowhere to go. The hub *does* learn the route for
+the Thread prefix (`ROUTE_HOOK: prefix FD7C:568:D52B:1::`), so the prefix
+advertisement works — what is missing is the address translation on the BR
+side. Open for the next run:
+
+- does this build's Border Router run the TREL/Address Table at all?
+  `CONFIG_OPENTHREAD_BORDER_ROUTER=y` only arms the BR path; the translation
+  is a separate mechanism in the border-router example;
+- the chip's own `ot` CLI answers the question (trel/nat state) — but opening
+  the C6's USB console resets it and the sensor has to rejoin, so read that
+  state *before* a commissioning run, not after.
+
+Side observations from the same run: the Zigbee co-processor is flapping (four
+reboots in five minutes) and the IKEA plug (entity 0x0100) is offline —
+`zigbee-c6: NWK addr lookup failed for entity 0x0100 (offline?)` — which
+matches the plug being unplugged.
+
+**The address translation is *not* the wall (07.11.2026, later the same day).**
+Read in the OpenThread sources of the IDF 5.5 image and measured on the chip
+(`thread` command on the co-processor):
+
+- the network data publishes exactly **one** on-mesh prefix — the Border
+  Router's own OMR prefix `fd7c:568:d52b:1::/64` (`omr prefix:
+  fd7c:568:d52b:1::/64`, `omr in netdata: yes`, and the on-mesh table has only
+  that one entry). The dataset's Mesh-Local prefix `fdc7:d07f:ab6f:6eef::/64` is
+  *not* published as an on-mesh prefix;
+- the sensor's operational address in the fabric is therefore the OMR one:
+  `fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8` = the OMR prefix + the IID of its
+  Mesh-Local address;
+- **OpenThread has no NPT/MLAT** (grepping the OT sources finds only the NAT64
+  translator): it never swaps the OMR and ML prefixes. But it does not have to.
+  `Ip6::IsOnLink()` answers "yes" for any address inside an *on-mesh* prefix,
+  and the OMR prefix is exactly that — so `Ip6::DetermineAction()` sets
+  `aForwardThread` and the packet goes into the mesh. The BR forwards to the
+  OMR address, and the mesh resolves the device's RLOC16 from the IID (address
+  query) as usual;
+- the hub's side of the path works too: the co-processor advertises the OMR
+  prefix upstream as a RIO, and the brain's Matter stack keeps it in its route
+  hook (`ROUTE_HOOK: prefix FD7C:568:D52B:1::`) with the gateway = the
+  co-processor's backbone link-local `fe80::aeb:e6ff:feda:fc08`.
+
+So the "NAT" the previous entry looked for is not needed for the host→Thread
+direction. The missing piece is one hop earlier: **the Sigma1 never reached the
+co-processor's OT stack at all** — `br counters: in_unicast=0 pkt/0 B
+out_unicast=0 pkt/0 B` (the OT border-routing counters: *in* = from the mesh,
+*out* = into the mesh).
+
+Two more measurements from the same day:
+
+- the co-processor's **reset reason** after the previous run is `interrupt
+  watchdog` — a hang, not a brownout. It did **not** repeat when only the
+  dataset was requested (`sent the Thread dataset (109 bytes, 110 byte
+  payload) to the brain: written`, and the chip kept running afterwards), so
+  whatever hung it needs the commissioning traffic, not the dataset;
+- the **partition ID no longer churns**: `0x851f9b0` is the same before and
+  after a reboot (the earlier churn — `0x6076210b → 0x707e2214 → 0x751bb2fe` —
+  was from before the dataset was kept in NVS);
+- the sensor is **detached** (`children=0`) and **no longer advertises BLE** —
+  the commissioning scan of 07.11 sees only other devices' advertisements. A
+  new commissioning therefore needs a **factory reset of the TIMMERFLOTTE**
+  (the physical button), after which it advertises again and can be
+  commissioned into our fabric once more.
+
+**A diagnostic for the hop that failed** (new console command on the brain,
+Matter build only):
+
+```
+ip6                 the Wi-Fi interface's IPv6 addresses
+ip6 <address>       the route lwIP would take (netif + gateway), from the Matter stack's route hook
+ip6 probe <address> [port]
+                    send one UDP datagram and report what lwIP made of it
+```
+
+`ip6 probe` is the cheap way to answer "does a packet reach the mesh?": the
+co-processor counts what enters the mesh (`out_unicast`), so a probe plus a
+`thread` command on the chip settles the question without a device — and
+without touching the sensor.
+
 **F3 (the Linux brain, SPEC §11) stays the fallback that needs no new
 hardware**, and F4 (the app shows the device and its QR payload; the person
 adds it to Apple Home with the Home app) needs no chip work at all.
@@ -224,6 +839,189 @@ That is why the app's "Add to the hub" must not promise that the device will
 appear in Apple Home — and why the phone's Bluetooth read stays useful even in
 the F4 variant: it identifies the device and carries the payload, and the
 person adds it to Home with the Home app exactly as they would without us.
+
+**The wall was the missing interface, not the address translation (07.11.2026,
+evening).** `br counters: in_unicast=0` means the packet never got into the
+OpenThread stack — and the reason is now read out of the IDF 5.5 sources and
+confirmed on the chip:
+
+- our co-processor started the stack with the **legacy** `esp_openthread_init()`.
+  That call brings up the platform, the instance and the radio — and **no lwIP
+  interface**. The "ot" netif is made by the modern `esp_openthread_start()`:
+  its worker task does `esp_netif_new(&config->netif_config)` and
+  `esp_netif_attach(netif, esp_openthread_netif_glue_init(...))`
+  (`components/openthread/src/esp_openthread.cpp`, `ot_task_worker`). The IDF's
+  own Border Router example (`examples/openthread/ot_br`) uses exactly that
+  call, with `.netif_config = ESP_NETIF_DEFAULT_OPENTHREAD()`;
+- without that netif lwIP has **no interface into the mesh at all**: the next
+  hop for a mesh address cannot be resolved (`nd6_get_next_hop_entry()` →
+  `ERR_RTE`), so every backbone packet to a mesh address dies in lwIP before
+  the OpenThread stack sees it. The chip's own `thread` command said it
+  plainly: `ot netif: none`;
+- the netif also needs an **address** of the prefix the mesh lives in, or lwIP
+  has no on-link route. That address is what the SLAAC module forms out of the
+  OMR prefix the BR publishes (the BR flags it `mSlaac`). The module is **not
+  in the IDF build of the OT core**: `OPENTHREAD_CONFIG_IP6_SLAAC_ENABLE`
+  defaults to 0 in `openthread/src/core/config/ip6.h`, so neither
+  `slaac_address.cpp` nor its notifier hook is compiled in. Upstream's own
+  Border Router config (`openthread/examples/config/ot-core-config-check-size-br.h`)
+  turns it on. Ours does too, through a custom OT config header:
+  `main/esp_ot_custom_config.h` (`#define OPENTHREAD_CONFIG_IP6_SLAAC_ENABLE 1`)
+  plus `CONFIG_OPENTHREAD_HEADER_CUSTOM=y` and the path/file name in
+  `sdkconfig.defaults.esp32c6`.
+
+So the change on the co-processor is: start the stack with
+`esp_openthread_start()` (and let it run the main loop in its own task — our
+own `ot_mainloop_task` is gone), and keep the SLAAC module in. The first boot
+of that image confirms the interface exists: `OPENTHREAD: OpenThread attached
+to netif`.
+
+**Two more traps of that same boot (both fixed).** The image with the netif
+froze right after `the Thread role is enabled`, with the console dead (the
+`thread` command waits on the OT lock) and the Wi-Fi gone at the 27th second
+(`bcn_timeout`):
+
+- the freeze was a call to `esp_openthread_set_backbone_netif()` made **under
+  the OT lock** — the IDF's example calls it in the same place, but there it is
+  a no-op for us: the co-processor had already been given its backbone netif
+  (right after the stack came up), and the second call did nothing good. The
+  backbone netif is now handed over once, outside the lock, right after
+  `esp_openthread_start()`;
+- the Wi-Fi loss was the **coexistence arbiter**: on the C6, Wi-Fi and 802.15.4
+  share one radio, and the 802.15.4 side goes active the moment the Thread
+  role is enabled. The arbiter was armed only *after* the Border Router
+  started — long after the radio had begun to starve the Wi-Fi. It is now
+  armed **before** the role is enabled (in `thread_network_task`, right before
+  `thread_bring_up()`), so the Wi-Fi keeps its access point.
+
+The log lines around mDNS and the BR start were kept (`starting mDNS`,
+`setting the mDNS hostname`, `starting the Border Router`) — the freeze above
+was found by them, and the next freeze should be too.
+
+**The second freeze was a deadlock between the OT lock and mDNS (07.11.2026,
+night).** The image with the netif in it froze again — this time right after
+`starting mDNS` — and the Wi-Fi died 13 s later (`bcn_timeout`,
+`wifi:state: run -> init`). The cause is in the IDF sources, and it is a real
+deadlock, not a slow call:
+
+- `esp_openthread_lock_acquire()` takes **two** recursive mutexes
+  (`components/openthread/src/esp_openthread_lock.c`): `s_openthread_mutex` and
+  `s_openthread_task_mutex` (the task-switching lock). The OpenThread main
+  loop takes the same lock around every iteration
+  (`esp_openthread.cpp`: `esp_openthread_platform_process()` +
+  `otTaskletsProcess()`), so while we hold it, **the OT stack does not run at
+  all**;
+- the tx path of the "ot" netif takes the task-switching lock too
+  (`esp_openthread_netif_glue.c`: `openthread_netif_transmit()`), so with the
+  lock held, any lwIP packet that goes out through that netif blocks;
+- `mdns_init()` is an lwIP thing: it waits for the lwIP thread
+  (`mdns_priv_if_init()` → `tcpip_api_call(pcb_if_init_lwip, ...)`, which joins
+  the ff02::fb multicast group and sends the MLD report).
+
+So: our task holds the OT lock and waits for the lwIP thread; the lwIP thread
+can end up in the "ot" netif's tx path and waits for the task-switching lock we
+are holding. Neither ever gets there — and the Wi-Fi driver, starved of the
+lwIP lock, stops seeing beacons.
+
+The fix is to keep the OpenThread lock away from anything lwIP-ish: the mDNS
+start is now a separate step (`thread_bring_up_mdns()`) that runs **outside**
+the lock, and only the Border Router call itself takes the lock, for its own
+duration. Verified on the chip: `mDNS is up` → `mDNS hostname is 'keystone-br'`
+→ `Border Router is up (SRP server + DNS-SD + border routing)`, the Thread
+role comes up as **leader** on `keystone-home`, the Wi-Fi keeps its access
+point (no `bcn_timeout` any more) and the netif reports `OT_STATE: netif up`.
+
+**And the mDNS step has to come BEFORE the Thread role, not after.** The Border
+Router publishes its Thread network as `_meshcop` the moment the OT state
+changes (`esp_openthread_state.c` → `esp_openthread_publish_meshcop_mdns()`),
+and that publish needs the mDNS **hostname** to be there already — the mDNS
+component keeps every service under the hostname, and a service published
+without one is dropped without a word (`Failed to publish meshcop mdns
+service`). In the boot order above the hostname was set *after* the role was
+enabled, so the publish was lost: a raw mDNS query on the LAN
+(`_meshcop._udp.local`) gets an answer from Apple's Border Router and from
+other Matter devices, but **nothing from our co-processor (192.168.0.201)**.
+The order is now `mDNS + hostname` → Thread role → Border Router.
+**Not yet verified on the hardware** (the image with this order is built; the
+flash needs the go-ahead).
+
+**Not yet re-verified on the hardware**: with the netif in place, the
+Sigma1 has to reach the mesh at all (the BR counters must start moving), and
+the CASE session has to come up. That needs a **factory reset of the
+TIMMERFLOTTE** (the physical button — the sensor is detached and no longer
+advertises BLE) and a fresh `matter_pair_thread <node_id> <pincode>
+<discriminator>` on the brain.
+
+**The CASE destination was the device's OMR address all along (08.11.2026).**
+The raw log of the failing run (not a summary of it) says:
+
+```
+159:I (741173) chip[DIS]: UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8%st1]:5540: new best score: 3 (for B9208C6B9B867EED-0000000000001234)
+162:I (741353) chip[EM]: <<< ... [UDP:[fd7c:568:d52b:1:ff4d:c458:f9f4:f3c8]:5540] --- Type 0000:30 (SecureChannel:CASE_Sigma1)
+```
+
+and the co-processor's console for *that* network said:
+
+```
+mesh-local prefix: fdc7:d07f:ab6f:6eef::/64
+omr prefix:        fd7c:568:d52b:1::/64
+on-link prefix:    fd5e:986a:bb23:be7e::/64
+```
+
+So `fd7c:568:d52b:1::/64` was that network's **OMR (routable, domain) prefix** —
+its mesh-local prefix was `fdc7:…`. The address only *looks* mesh-local:
+`fd7c:568:d52b:1::/64` is Thread's **default** mesh-local prefix (RFC 6603),
+which is why two readings of the same line disagreed for a week.
+
+⇒ **No address translation is needed — and none could help.** The device was
+addressed correctly; the packet had nowhere to go. Two things were missing that
+day, and both had to be fixed:
+
+- the brain had **no route** to that network's OMR prefix. The BR advertises
+  its own OMR prefix upstream as a RIO, and the brain picks it up with CHIP's
+  route hook (`ROUTE_HOOK: Received RIO / prefix FD3C:1C91:4A38:1:: lifetime
+  1800`) — but only while that network is the current one. The network was
+  reformed in between (old OMR `fd7c:568:d52b:1::/64`, current
+  `fd3c:1c91:4a38:1::/64`), so the RIO the brain held pointed at a prefix the
+  device was not in, and the packet died in the home router;
+- the co-processor had **no lwIP interface into the mesh** (the legacy
+  `esp_openthread_init()`), so even a routed packet would have died on its side
+  with `ERR_RTE` before OpenThread saw it — hence `br counters: in_unicast=0`.
+
+Both are in place now: the "ot" netif exists and holds an address *in* the
+OMR prefix (`fd3c:1c91:4a38:1:788:e3e8:31d2:e757`), which is what lets lwIP
+route into the mesh, and the brain's route to the OMR prefix is the BR's
+link-local (`FE80::AEEB:E6FF:FEDA:FC08`).
+
+**What is left is one physical action.** The sensor is detached
+(`children=0`) and does not advertise BLE any more (the scan of 07.11 saw only
+other people's advertisements), so it has to be **factory-reset** — the button
+on the TIMMERFLOTTE — before it can be commissioned into the current network.
+Then one `matter_pair_thread 4660 39441506 569` should put the Sigma1 out to
+`fd3c:1c91:4a38:1:…`, and the co-processor's `br counters: in_unicast` is the
+check that the packet really entered the mesh (and `out_unicast` on the way
+back). If the counters move but CASE still fails, the next thing to look at is
+the brain's **source** address: the packet has to leave with an address the
+mesh can answer to (the on-link prefix the BR advertises), not with the Wi-Fi
+link-local — that is what the brain's `ip6` command prints.
+
+**The crash-loop recovery was re-forming the network behind our backs (08.11.2026).**
+The co-processor keeps the Thread dataset in NVS, and NVS is also what the
+crash-loop rule erases (`boot_id > 50` ⇒ `nvs_flash_erase()`): a wiped dataset
+means a **new network** — a new PAN id, new keys, a new mesh-local prefix and a
+new **OMR prefix** — and every device commissioned into the old one is orphaned
+for good. It stays in a network that no longer exists, and the brain's route to
+that network's OMR prefix points nowhere. The network was re-formed three times
+in two days, each time with a different Ext PAN ID.
+
+So the dataset is now read out **before** the wipe and written back **after** it
+— only the crash-looper's leftovers are lost — and our own copy of the dataset
+(`thread_net`/`ds`) is kept in step with the stack's on every boot, so there is
+always something to restore. The **identity** of the network (its Extended PAN
+ID) is in the boot log now (`the Thread network is e22c46678647f540 (channel 26,
+109 bytes of dataset)`) and in the commissioning log on the brain: a network
+that changed from boot to boot is visible at once instead of turning up as a
+mystery a week later. Built, not yet flashed.
 
 ### 4. Data model — Matter endpoints on the C6
 

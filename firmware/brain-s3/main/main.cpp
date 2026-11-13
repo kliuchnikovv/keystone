@@ -52,6 +52,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_console.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -73,9 +74,13 @@
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
 #include "core/setup_mode.hpp"
+#include "core/thread_dataset.hpp"
 #include "core/wifi_policy.hpp"
+#include "matter_paa.hpp"
+#include "matter_bridge.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "app_server.hpp"
 #include "core/app_protocol.hpp"
 #include "core/zcl_profile.hpp"
@@ -95,6 +100,24 @@
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
 #include "hubproto/version.hpp"
+
+// experiment/commissioner-on-s3: when the Docker build links esp_matter in,
+// brain-s3 also runs the Matter controller (CASE/PASE + BLE commissioner).
+// PlatformIO builds without KEYSTONE_HAVE_MATTER and skips all of this.
+#ifdef KEYSTONE_HAVE_MATTER
+#include <esp_matter.h>
+#include <esp_matter_controller_client.h>
+#include <esp_matter_controller_pairing_command.h>
+// lwIP for the IPv6 diagnostics of the Matter path (see cmd_ip6). These have to
+// be included here, outside the anonymous namespace: otherwise lwIP's types
+// (struct netif, struct ip6_addr_t) would land in it.
+#include <arpa/inet.h>
+#include "lwip/errno.h"
+#include "lwip/ip6_addr.h"
+#include "lwip/netif.h"
+#include "lwip/sockets.h"
+#include "lwip/tcpip.h"
+#endif
 
 #ifdef KEYSTONE_HAVE_TLS
 // The setup code lives in the generated hub_identity.cpp (scripts/gen-hub-cert.sh). An identity made before
@@ -195,6 +218,103 @@ static void wifi_creds_erase() {
     nvs_close(h);
 }
 
+// The Matter controller is created only once the Wi-Fi interface is up and
+// has a usable IPv6 link-local address (see matter_controller_start below):
+// CHIP binds its mDNS endpoints when the controller is created, and it can
+// only do that on an interface that has an address.
+#ifdef KEYSTONE_HAVE_MATTER
+static void matter_controller_start();
+static void matter_controller_task(void* arg);
+
+// Woken when the controller task is done: the main loop waits for it, so that
+// the CHIP controller is created while the internal heap is still one big
+// block (see matter_controller_task).
+static SemaphoreHandle_t g_matter_ctrl_done = nullptr;
+
+// True once the CHIP controller exists. It is created only when the Wi-Fi
+// interface has its IPv6 address (see matter_controller_start), so until then
+// there is no commissioner and no mDNS endpoint — a request would be accepted
+// and then silently dropped.
+static bool g_matter_controller_ready = false;
+
+// Why the controller is not up (or that it is). The boot log says it once and
+// then the line scrolls away, while the console stays open for hours — so the
+// reason is kept and shown with the next commissioning request.
+//
+// A pointer, not a copy: the strings are literals that are in flash anyway,
+// and this image has only a few hundred bytes of room in its app partition.
+static const char* g_matter_status = "not started";
+
+static void matter_set_status(const char* what) { g_matter_status = what; }
+#endif
+
+// The IPv6 link-local address of the Wi-Fi interface.
+//
+// lwIP does NOT create it by itself — the application has to ask for it
+// (esp_netif_create_ip6_linklocal). Matter needs one, and it is not a detail:
+// CHIP's own mDNS server binds one UDP endpoint per interface that has an
+// IPv6 address, and it binds them ONCE, when the controller is created. With
+// no IPv6 address on the interface it binds nothing at all, and the DNS-SD
+// query for the device then fails with CHIP_ERROR_NO_ENDPOINT (0x46) — the
+// commissioning died there with "Device connection failed. Error 46".
+//
+// The address is derived from the interface's hardware address, so it can only
+// be made after esp_wifi_init() has given the netif its MAC.
+//
+// Creating it twice would restart lwIP's duplicate address detection, so it is
+// done once and only when the interface is up.
+static bool s_wifi_ipv6_created = false;
+
+static void wifi_ipv6_linklocal() {
+    if (s_wifi_ipv6_created) {
+        return;
+    }
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) {
+        ESP_LOGW(kTag, "no Wi-Fi netif; no IPv6 link-local address");
+        return;
+    }
+    const esp_err_t err = esp_netif_create_ip6_linklocal(netif);
+    if (err != ESP_OK) {
+        // The interface is not up yet — the caller tries again later. Quiet
+        // here on purpose: the wait below polls, and a warning per poll would
+        // bury the boot log.
+        return;
+    }
+    s_wifi_ipv6_created = true;
+    ESP_LOGI(kTag, "Wi-Fi IPv6 link-local address created (waiting for DAD)");
+}
+
+// Wait until the Wi-Fi interface has a *usable* IPv6 link-local address.
+//
+// The address is made here if it is not there yet: the interface comes up with
+// the Wi-Fi driver, and that happens a moment after the Matter stack starts it
+// — so the caller cannot assume the address is there.
+//
+// A fresh lwIP address is "tentative" until the duplicate address detection
+// has finished (about a second), and esp_netif_get_ip6_linklocal() only hands
+// out a "preferred" one. CHIP's mDNS skips a tentative address, so the
+// controller must not be created before this returns true.
+static bool wait_wifi_ipv6_linklocal(std::uint32_t timeout_ms) {
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) {
+        ESP_LOGW(kTag, "no Wi-Fi netif; no IPv6 link-local address");
+        return false;
+    }
+    for (std::uint32_t waited = 0; waited <= timeout_ms; waited += 100) {
+        wifi_ipv6_linklocal();
+        esp_ip6_addr_t ll{};
+        if (esp_netif_get_ip6_linklocal(netif, &ll) == ESP_OK) {
+            ESP_LOGI(kTag, "Wi-Fi IPv6 link-local: " IPV6STR, IPV62STR(ll));
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    ESP_LOGW(kTag, "the Wi-Fi interface has no usable IPv6 link-local address after %u ms",
+             static_cast<unsigned>(timeout_ms));
+    return false;
+}
+
 // Обработчик событий WiFi
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data) {
@@ -205,6 +325,10 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         } else {
             ESP_LOGW(kTag, "WiFi STA Start: no credentials (set them with `wifi_join <ssid> <pass>`)");
         }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        // esp_netif has already brought the interface up (its own handler runs
+        // first), so the IPv6 link-local address can be made now.
+        wifi_ipv6_linklocal();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
         s_wifi_up = false;
@@ -224,6 +348,12 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         ++s_wifi_got_ip;
         g_hub_dirty = true;
         sntp_init();
+        // The interface is up now: give it an IPv6 link-local address (Matter
+        // needs one, see wifi_ipv6_linklocal). The task that creates the
+        // controller waits for that address on its own — CHIP binds its DNS-SD
+        // endpoints on the interfaces that are up at the moment the controller
+        // is created, and it needs a *usable* (preferred) IPv6 address there.
+        wifi_ipv6_linklocal();
     }
 }
 
@@ -256,9 +386,12 @@ static bool wifi_current(char* ssid, std::size_t ssid_cap, int& rssi, char* ip, 
     return true;
 }
 
-// Функция для инициализации WiFi
-static void wifi_init(void) {
-    // Инициализация NVS Flash
+// Phase 1: NVS + netif + default event loop + default STA/AP netifs. Cheap
+// — none of this allocates the big Wi-Fi driver buffers. Split out of
+// wifi_init() so matter_bringup() can run between the two phases: that way
+// the BLE controller's ~30 KB contiguous allocation competes with Wi-Fi only
+// once, not twice (docs/matter-backlog.md §3, step 1a of the R3 path).
+static void wifi_bootstrap(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -266,19 +399,23 @@ static void wifi_init(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    // Инициализация TCP/IP стека
     ESP_ERROR_CHECK(esp_netif_init());
-    // Создание default event loop
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Создание default Wi-Fi station
     esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
     esp_netif_set_hostname(sta_netif, kHubHostname);
     esp_netif_create_default_wifi_ap();  // only used while the setup access point is up
+}
 
-    // Конфигурация Wi-Fi
+// Phase 2: Wi-Fi driver init/config/start. On the Matter build, esp_matter::start()
+// already called esp_wifi_init() and esp_wifi_start() internally; we skip both
+// and only apply our own credentials + event handlers on top. On PlatformIO
+// (no Matter) this phase does the full init itself.
+static void wifi_start_driver(void) {
+#ifndef KEYSTONE_HAVE_MATTER
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+#endif
     // Our own NVS key is the single source of truth, not the driver's copy (a trial must not stick).
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
@@ -287,7 +424,6 @@ static void wifi_init(void) {
                                         .skip_unhandled_events = true};
     ESP_ERROR_CHECK(esp_timer_create(&ta, &s_wifi_retry));
 
-    // Регистрация обработчика событий WiFi
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
@@ -300,7 +436,10 @@ static void wifi_init(void) {
         std::strncpy(creds.pass, KEYSTONE_WIFI_PASSWORD, sizeof(creds.pass) - 1);
         source = "built-in default";
     }
+#ifndef KEYSTONE_HAVE_MATTER
+    // Matter sets STA mode itself when it starts the Wi-Fi stack.
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#endif
     if (creds.ssid[0] != '\0') {
         wifi_config_t wc = {};
         std::strncpy(reinterpret_cast<char*>(wc.sta.ssid), creds.ssid, sizeof(wc.sta.ssid) - 1);
@@ -313,7 +452,15 @@ static void wifi_init(void) {
     } else {
         ESP_LOGW(kTag, "Wi-Fi: no credentials yet; use `wifi_join <ssid> <password>`");
     }
+#ifdef KEYSTONE_HAVE_MATTER
+    // Matter already called esp_wifi_start() during esp_matter::start(); calling
+    // it again returns ESP_ERR_WIFI_NOT_INIT or similar. Just connect with our creds.
+    if (creds.ssid[0] != '\0') {
+      (void)esp_wifi_connect();  // first attempt; event handler will retry on failure
+    }
+#else
     ESP_ERROR_CHECK(esp_wifi_start());
+#endif
 }
 
 // UART1 = Zigbee coordinator (chip 0x01).
@@ -340,6 +487,36 @@ using Reconciler = core::Reconciler<Dispatcher>;
 // matches header.chip_id, and fans every inbound message from any underlying
 // transport out to all subscribers. Kept private to this app for now; if a
 // second app ever needs it we'll move it into core with host tests.
+
+#ifdef KEYSTONE_HAVE_MATTER
+// The Matter pseudo-chip (0x03) has no UART: its messages come from matter_bridge, and the
+// router injects them straight into the fan-out. This bus exists only so that the core can
+// publish to 0x03 like it publishes to any other chip: a COMMAND becomes a CHIP invoke/write,
+// and the core's QUERY (it does this for a chip it has just (re)discovered) becomes a
+// re-declaration of every Matter entity.
+class MatterLink final : public core::Bus {
+ public:
+  bool subscribe(MessageFn fn, void* ctx) noexcept override {
+    (void)fn;
+    (void)ctx;
+    return true;
+  }
+
+  bool publish(const hubproto::Header& h, const std::uint8_t* payload,
+               std::size_t len) noexcept override {
+    if (h.chip_id != matter_bridge::kChipId) return false;
+    if (h.type == hubproto::MsgType::Query) {
+      matter_bridge::republish();
+      return true;
+    }
+    if (h.type != hubproto::MsgType::Command) return false;
+    // The COMMAND body is entity_id(u16), attr_id(u8), value; the bridge answers with a
+    // CMD_ACK for `seq` once CHIP accepted the invoke/write, so the dispatcher's bookkeeping
+    // stays the same as for a real co-processor.
+    return matter_bridge::command(h.seq, payload, len);
+  }
+};
+#endif
 class ChipRouter final : public core::Bus {
  public:
   // Bind an underlying bus to a chip_id. Subscribes internally so its inbound
@@ -365,8 +542,36 @@ class ChipRouter final : public core::Bus {
     return ok;  // false for an unknown chip: nowhere to send
   }
 
+  // How many subscribers the fan-out holds right now.
+  int subscriber_count() const noexcept { return n_subs_; }
+
+  // Deliver a message as if it had arrived from a bound chip. The Matter bridge is the
+  // first user: chip 0x03 has no UART, so its DECLARE/STATE/CMD_ACK are produced in this
+  // process but must take exactly the same path (registry, state machine, app) as a
+  // co-processor's.
+  void inject_inbound(const hubproto::Header& h, const std::uint8_t* p,
+                      std::size_t len) noexcept {
+    fan_out(h, p, len);
+  }
+
+  // How many subscribers fit. Who subscribes today: the radio coordinator, the
+  // state machine, the dispatcher, the chip monitor, the OTA verifier, the two
+  // OTA senders (they subscribe through the jobs' trampolines), the traffic
+  // counter and the cross-chip forwarder — nine. The table was eight, so the
+  // last one was silently dropped and the Thread dataset never reached the
+  // Matter commissioner.
+  static constexpr int kMaxSubs = 12;
+
   bool subscribe(MessageFn fn, void* ctx) noexcept override {
-    if (n_subs_ >= kMaxSubs) return false;
+    if (n_subs_ >= kMaxSubs) {
+      // Loud on purpose. A subscriber that does not fit is a feature that is
+      // silently broken — that is exactly how the Thread dataset never reached
+      // the Matter commissioner (the forwarder was the ninth subscriber of an
+      // eight-slot table, and nobody looked at the return value).
+      ESP_LOGE(kTag, "the bus fan-out table is full (%d subscribers) — this subscriber is dropped",
+               kMaxSubs);
+      return false;
+    }
     subs_[n_subs_] = {fn, ctx};
     ++n_subs_;
     return true;
@@ -374,7 +579,6 @@ class ChipRouter final : public core::Bus {
 
  private:
   static constexpr int kMaxBinds = 4;
-  static constexpr int kMaxSubs = 8;
 
   struct Bind { std::uint8_t chip_id; core::Bus* bus; };
   struct Sub { MessageFn fn; void* ctx; };
@@ -407,6 +611,17 @@ std::uint32_t now_ms(void* /*ctx*/) {
 // Event here. The ring answers the app's `history` and the console's `events`; another sink (a flash
 // file, the SD recorder) would join the fanout. Producers run in the UART RX tasks and the main loop,
 // readers in the main loop and the console task, hence the mutex.
+// The ring is ~6 KB of `Event buf_[256]` — plain POD under a virtual-table
+// pointer. It deliberately stays in internal DRAM instead of
+// `EXT_RAM_BSS_ATTR` (.ext_ram.bss = PSRAM): `EventRing` is polymorphic, and
+// a namespace-scope object whose constructor is constexpr-able is
+// *constant-initialised* by GCC — the vtable pointer is written into the
+// object's own section. .ext_ram.bss is a NOLOAD section (zeroed at boot, no
+// image), so that constant never reaches RAM: the vptr stays 0 and the first
+// virtual call faults (LoadProhibited at 0x8). That is why only plain data
+// arrays and function-local statics carry the attribute below: an array is
+// all-zero either way, and a function-local static runs its constructor at
+// runtime (under a guard), which writes the vptr properly.
 core::EventRing<256> g_ev_ring;
 core::EventFanout<4> g_ev_out;
 core::StateDedup<64> g_ev_state_seen;  // a restarted chip re-reports what has not changed: not news
@@ -502,6 +717,10 @@ struct ChipStats {
 ChipStats g_chip_stats[16] = {};
 
 core::ChipMonitor* g_monitor = nullptr;  // set in app_main
+// The hub's bus, so a console command can talk to a chip without going through
+// the main loop (the Matter commissioner needs to ask the co-processor for its
+// Thread dataset and wait for the answer).
+core::Bus* g_bus = nullptr;  // set in app_main
 
 const char* chip_label(std::uint8_t id) {
   return id == 1 ? "zigbee" : id == 2 ? "thread" : "?";
@@ -615,18 +834,71 @@ void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
 }
 
 // ---- Matter commissioning ---------------------------------------------------------------------
-// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read; the Matter
-// chip (the only one with a stack that can commission anything) does the work and says how far it
-// got. That answer arrives in the UART RX task, so here it is only queued — the main loop owns the
-// cache and the clients.
+// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read; the brain's
+// own commissioner (matter_bridge) does the work and says how far it got. Its progress reports
+// arrive on the bridge's worker task, so here they are only queued — the main loop owns the cache
+// and the clients.
 struct MatterUpdate {
   hubproto::MatterState state = hubproto::MatterState::Idle;
   hubproto::MatterCode code = hubproto::MatterCode::Ok;
   std::uint16_t entity = 0;
 };
 QueueHandle_t g_matter_q = nullptr;
-// Has the Matter chip ever said anything? Without it there is nothing to commission with.
-std::atomic<bool> g_thread_seen{false};
+
+#ifdef KEYSTONE_HAVE_MATTER
+// The Thread operational dataset the commissioner hands to the device over BLE.
+// The brain has no 802.15.4 radio, so the dataset comes from the co-processor
+// that has one (hubproto ThreadDatasetReq/ThreadDataset). It lives in a
+// static, not on a stack: CHIP keeps a pointer to the bytes for the whole
+// commissioning, and that takes minutes.
+static core::ThreadDataset g_thread_dataset;
+static SemaphoreHandle_t g_thread_dataset_sem = nullptr;
+
+// matter_bridge's three hooks into the hub. They are called on the bridge's worker task,
+// which is why the sink goes through ChipRouter's fan-out (thread-safe by construction:
+// every subscriber is) and the progress only queues.
+//
+// The sink uses g_bus rather than a captured router pointer because the bridge is started
+// before app_main builds the router (the CHIP controller must be created while the internal
+// heap is still one block); anything published before then is dropped by the check.
+static void bridge_sink(void* ctx, const hubproto::Header& h, const std::uint8_t* p,
+                        std::size_t len) {
+  (void)ctx;
+  if (g_bus != nullptr) static_cast<ChipRouter*>(g_bus)->inject_inbound(h, p, len);
+}
+
+// Ask the co-processor that owns the 802.15.4 radio for its Thread network. Called on the
+// bridge's worker task, so it may block; the answer comes back through on_bus_forward below.
+static bool bridge_dataset(void* ctx, std::uint8_t* out, std::size_t cap, std::size_t& len,
+                           std::uint32_t timeout_ms) {
+  (void)ctx;
+  if (g_bus == nullptr || g_thread_dataset_sem == nullptr) return false;
+  // Forget an answer from an earlier attempt, so we never start with a stale dataset.
+  g_thread_dataset.clear();
+  while (xSemaphoreTake(g_thread_dataset_sem, 0) == pdTRUE) {
+  }
+  hubproto::Header q{};
+  q.version = hubproto::kProtocolVersion;
+  q.type = hubproto::MsgType::ThreadDatasetReq;
+  q.chip_id = kThreadChipId;
+  if (!g_bus->publish(q, nullptr, 0)) return false;
+  if (xSemaphoreTake(g_thread_dataset_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return false;
+  len = g_thread_dataset.size();
+  if (len == 0 || len > cap) return false;
+  std::memcpy(out, g_thread_dataset.data(), len);
+  return true;
+}
+
+static void bridge_progress(void* ctx, hubproto::MatterState state, hubproto::MatterCode code,
+                            std::uint16_t entity) {
+  (void)ctx;
+  if (g_matter_q == nullptr) return;  // before app_main creates the queue: nothing to tell yet
+  const MatterUpdate u{state, code, entity};
+  if (xQueueSend(g_matter_q, &u, 0) != pdTRUE) {
+    ESP_LOGW(kTag, "matter: the result queue is full, dropping a result");
+  }
+}
+#endif
 
 // Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
 // co-processor (chip 0x02) exposes endpoints that mirror registry entities
@@ -641,7 +913,6 @@ std::atomic<bool> g_thread_seen{false};
 void on_bus_forward(void* ctx, const hubproto::Header& h,
                     const std::uint8_t* p, std::size_t len) {
   core::Bus* bus = static_cast<core::Bus*>(ctx);
-  if (h.chip_id == kThreadChipId) g_thread_seen = true;  // the Matter chip is alive
   // Zigbee -> Matter mirror: DECLARE (so Matter can create a bridged
   // endpoint), STATE (so it can update the Matter attribute). No need to
   // mirror DECLARE_END — Matter Bridge builds endpoints incrementally as
@@ -686,19 +957,28 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     bus->publish(fwd, p, len);
     ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> Zigbee seq=%u",
              static_cast<unsigned>(h.entity_id), static_cast<unsigned>(h.seq));
-  } else if (h.type == hubproto::MsgType::MatterResult && h.chip_id == kThreadChipId) {
-    // How far the commissioning got. Queue it — the main loop owns the cache and the clients.
-    hubproto::MatterResult res{};
-    if (!hubproto::decode_matter_result(p, len, res)) {
-      ESP_LOGW(kTag, "matter: the chip sent a result of %u bytes that makes no sense",
+  }
+#ifdef KEYSTONE_HAVE_MATTER
+  else if (h.type == hubproto::MsgType::ThreadDataset && h.chip_id == kThreadChipId) {
+    // The co-processor's Thread network, for the Matter commissioner: the brain has no
+    // 802.15.4 radio, so this is where the dataset the device needs comes from.
+    hubproto::ThreadDatasetView view{};
+    if (!hubproto::decode_thread_dataset(p, len, view)) {
+      ESP_LOGW(kTag, "matter: the chip sent a Thread dataset of %u bytes that makes no sense",
                static_cast<unsigned>(len));
-    } else if (g_matter_q != nullptr) {
-      const MatterUpdate u{res.state, res.code, res.entity_id};
-      if (xQueueSend(g_matter_q, &u, 0) != pdTRUE) {
-        ESP_LOGW(kTag, "matter: the result queue is full, dropping a result");
-      }
+    } else if (!g_thread_dataset.set(view.bytes, view.len)) {
+      ESP_LOGW(kTag, "matter: the Thread dataset of the chip is not one we can use (%u bytes)",
+               static_cast<unsigned>(view.len));
+    } else {
+      ESP_LOGI(kTag, "matter: got the Thread dataset (%u bytes, channel %u, name '%s', ext pan id %s)",
+               static_cast<unsigned>(g_thread_dataset.size()),
+               static_cast<unsigned>(g_thread_dataset.channel()),
+               g_thread_dataset.network_name(),
+               g_thread_dataset.ext_pan_id());
+      if (g_thread_dataset_sem != nullptr) xSemaphoreGive(g_thread_dataset_sem);
     }
   }
+#endif
 }
 
 // ---- Console <-> main-loop request channel --------------------------------
@@ -829,7 +1109,8 @@ void persist_names(const core::EntityRegistry<>::Names& names) {
   if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
   // static: this runs in the request-drain path of the main task, whose stack
   // (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is far too small for a 2 KB local.
-  static std::uint8_t buf[kNamesBlobMax];
+  // PSRAM: frees internal-DRAM BSS space before heap_init pool.
+  static EXT_RAM_BSS_ATTR std::uint8_t buf[kNamesBlobMax];
   std::size_t written = names.save(buf, sizeof(buf));
   if (written > 0) {
     nvs_set_blob(h, "ent_names", buf, written);
@@ -846,7 +1127,7 @@ void restore_names(core::EntityRegistry<>::Names& names) {
   if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
   std::size_t sz = 0;
   if (nvs_get_blob(h, "ent_names", nullptr, &sz) == ESP_OK && sz <= kNamesBlobMax) {
-    static std::uint8_t buf[kNamesBlobMax];
+    static EXT_RAM_BSS_ATTR std::uint8_t buf[kNamesBlobMax];
     if (nvs_get_blob(h, "ent_names", buf, &sz) == ESP_OK) {
       if (names.load(buf, sz)) {
         ESP_LOGI(kTag, "restored %u entity name(s) from NVS",
@@ -1859,7 +2140,7 @@ int cmd_cancel(int argc, char** argv) {
 }
 
 int cmd_rule(int argc, char** argv) {
-  static char buf[1536];  // only the console task calls this
+  static EXT_RAM_BSS_ATTR char buf[1536];  // only the console task calls this
   Req r{};
   r.kind = REQ_RULE;
   r.argc = argc;
@@ -1871,7 +2152,7 @@ int cmd_rule(int argc, char** argv) {
 }
 
 int cmd_desired(int argc, char** argv) {
-  static char buf[1024];
+  static EXT_RAM_BSS_ATTR char buf[1024];
   Req r{};
   r.kind = REQ_DESIRED;
   r.argc = argc;
@@ -1923,7 +2204,7 @@ int cmd_identify(int argc, char** argv) {
 // scene add <name> <id> <attr> <value> …  create or replace (one or more triples)
 // scene del <name>
 int cmd_scene(int argc, char** argv) {
-  static char buf[1024];
+  static EXT_RAM_BSS_ATTR char buf[1024];
   Req r{};
   r.kind = REQ_SCENE;
   r.argc = argc;
@@ -2185,6 +2466,144 @@ int cmd_wifi_scan(int /*argc*/, char** /*argv*/) {
   printf(submit(r, 6000) ? "%s" : "timeout\n", buf);
   return 0;
 }
+
+#ifdef KEYSTONE_HAVE_MATTER
+// IPv6 diagnostics for the Matter path.
+//
+// The commissioner lives on the brain, but the Thread network lives on the C6
+// co-processor, which is a border router. A packet to a Matter device goes:
+// brain -> Wi-Fi -> C6 -> 802.15.4. The brain learns the route to the mesh
+// from the C6's router advertisement (a RIO), which the Matter stack's route
+// hook keeps. Three things decide whether the operational session (CASE) can
+// reach a device, and this command shows all of them: the addresses the hub
+// owns (the source address of that traffic), the route lwIP would take, and
+// whether a datagram actually leaves.
+//
+// From the Matter stack's route hook (platform/ESP32/route_hook/ESP32RouteTable.h):
+// the RIOs from the Thread border router, and how lwIP asks it for the route
+// and the next hop.
+extern "C" struct netif* lwip_hook_ip6_route(const ip6_addr_t* src, const ip6_addr_t* dest);
+extern "C" const ip6_addr_t* lwip_hook_nd6_get_gw(struct netif* netif, const ip6_addr_t* dest);
+
+static void ip6_print_addrs() {
+  esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (netif == nullptr) {
+    printf("no Wi-Fi netif\n");
+    return;
+  }
+  esp_ip6_addr_t addrs[6]{};
+  const int n = esp_netif_get_all_ip6(netif, addrs);
+  printf("Wi-Fi IPv6: %d address(es)\n", n);
+  for (int i = 0; i < n && i < 6; i++) {
+    ip6_addr_t a{};
+    memcpy(a.addr, addrs[i].addr, 16);
+    printf("  %s%s\n", ip6addr_ntoa(&a), ip6_addr_islinklocal(&a) ? " (link-local)" : "");
+  }
+  esp_ip6_addr_t global{};
+  if (esp_netif_get_ip6_global(netif, &global) == ESP_OK) {
+    ip6_addr_t a{};
+    memcpy(a.addr, global.addr, 16);
+    printf("  global: %s\n", ip6addr_ntoa(&a));
+  }
+}
+
+static void ip6_print_route(const char* text) {
+  ip6_addr_t dest{};
+  if (!ip6addr_aton(text, &dest)) {
+    printf("not an IPv6 address: %s\n", text);
+    return;
+  }
+  struct netif* nif = nullptr;
+  ip6_addr_t gw{};
+  bool have_gw = false;
+  // The route table is touched by the router-advertisement callback, which runs
+  // in the TCP/IP thread; the core lock keeps the two apart.
+  LOCK_TCPIP_CORE();
+  nif = lwip_hook_ip6_route(nullptr, &dest);
+  if (nif != nullptr) {
+    const ip6_addr_t* g = lwip_hook_nd6_get_gw(nif, &dest);
+    if (g != nullptr) {
+      gw = *g;
+      have_gw = true;
+    }
+  }
+  UNLOCK_TCPIP_CORE();
+  // ip6addr_ntoa() hands out one static buffer, so each address needs its own copy.
+  char dest_text[INET6_ADDRSTRLEN], gw_text[INET6_ADDRSTRLEN];
+  strncpy(dest_text, ip6addr_ntoa(&dest), sizeof(dest_text) - 1);
+  dest_text[sizeof(dest_text) - 1] = '\0';
+  if (nif == nullptr) {
+    printf("route to %s: none\n", dest_text);
+    return;
+  }
+  printf("route to %s: netif %c%c", dest_text, nif->name[0], nif->name[1]);
+  if (have_gw) {
+    strncpy(gw_text, ip6addr_ntoa(&gw), sizeof(gw_text) - 1);
+    gw_text[sizeof(gw_text) - 1] = '\0';
+    printf(" via %s", gw_text);
+  }
+  printf("\n");
+}
+
+// Send one datagram at the address and report what lwIP made of it. The reply
+// is not expected (nothing answers there): what matters is whether the packet
+// leaves the hub at all — the C6 counts what enters the mesh.
+static int ip6_probe(const char* text, int port) {
+  ip6_addr_t dest{};
+  if (!ip6addr_aton(text, &dest)) {
+    printf("not an IPv6 address: %s\n", text);
+    return 1;
+  }
+  const int fd = lwip_socket(AF_INET6, SOCK_DGRAM, 0);
+  if (fd < 0) {
+    printf("socket failed: errno=%d\n", errno);
+    return 1;
+  }
+  struct sockaddr_in6 sa{};
+  sa.sin6_family = AF_INET6;
+  sa.sin6_port = htons(static_cast<std::uint16_t>(port));
+  // The raw bytes of an IPv6 address are the same in lwIP and in the socket API.
+  memcpy(&sa.sin6_addr, dest.addr, 16);
+  const char payload[] = "keystone";
+  const int sent = lwip_sendto(fd, payload, sizeof(payload) - 1, 0,
+                               reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa));
+  if (sent < 0) {
+    printf("sendto %s failed: errno=%d (-4 no route, -6 no source address)\n", text, errno);
+  } else {
+    // lwIP binds the socket on the first send, so this is the source address
+    // it chose for the traffic — the one the device would have to answer.
+    struct sockaddr_in6 local{};
+    socklen_t local_len = sizeof(local);
+    if (lwip_getsockname(fd, reinterpret_cast<struct sockaddr*>(&local), &local_len) == 0) {
+      ip6_addr_t from{};
+      memcpy(from.addr, &local.sin6_addr, 16);
+      printf("sent %d bytes to [%s]:%d from %s\n", sent, text, port, ip6addr_ntoa(&from));
+    } else {
+      printf("sent %d bytes to [%s]:%d\n", sent, text, port);
+    }
+  }
+  lwip_close(fd);
+  return sent < 0 ? 1 : 0;
+}
+
+int cmd_ip6(int argc, char** argv) {
+  if (argc >= 2 && strcmp(argv[1], "probe") == 0) {
+    if (argc < 3) {
+      printf("usage: ip6 probe <address> [port]\n");
+      return 1;
+    }
+    const int port = argc >= 4 ? atoi(argv[3]) : 5540;
+    return ip6_probe(argv[2], port);
+  }
+  ip6_print_addrs();
+  if (argc >= 2) {
+    ip6_print_route(argv[1]);
+  } else {
+    printf("usage: ip6 [<address> | probe <address> [port]]\n");
+  }
+  return 0;
+}
+#endif  // KEYSTONE_HAVE_MATTER
 
 int cmd_time(int /*argc*/, char** /*argv*/) {
   char buf[160];
@@ -2513,6 +2932,132 @@ int cmd_led(int argc, char** argv) {
   return 1;
 }
 
+#ifdef KEYSTONE_HAVE_MATTER
+// The stack of the task that creates the CHIP controller. The controller's own
+// init (client.init + setup_commissioner) runs the CHIP stack's bring-up,
+// which is a deep call chain — the same reason the commissioning has a task
+// of its own (matter_bridge's worker).
+static constexpr std::uint32_t kMatterCtrlTaskStackBytes = 8192;
+
+// How long the controller task waits for the Wi-Fi interface to have a usable
+// IPv6 link-local address. The interface comes up with the Wi-Fi driver (the
+// Matter stack starts it on its own event loop), and the address needs the
+// duplicate address detection to finish — about a second in total.
+static constexpr std::uint32_t kMatterIpv6WaitMs = 10000;
+
+// The commissioning itself runs on matter_bridge's worker task: the CHIP call chain is deep
+// and used to overflow the console task's 8 KB and panic the brain. These commands only check
+// their arguments and hand the request over; the bridge logs the progress and pushes it to the
+// app.
+static bool matter_commissioner_up() {
+  if (matter_bridge::ready()) return true;
+  printf("matter: the commissioner is not up yet: %s\n", g_matter_status);
+  return false;
+}
+
+static void matter_attempt_busy() {
+  printf("matter: another attempt is already running (matter_pair_cancel stops it)\n");
+}
+
+// `matter_pair <node_id> <setup-code>`: a manual pairing code or the MT: QR text. It carries no
+// Thread network, so it can only bring up a device that is already on a network (a Wi-Fi Matter
+// device); a Thread device needs matter_pair_thread.
+int cmd_matter_pair(int argc, char** argv) {
+  if (argc != 3) {
+    printf("usage: matter_pair <node_id> <setup-code>\n"
+           "  node_id:    decimal, the id you assign in our fabric (any >1)\n"
+           "  setup-code: 11-digit manual code (\"12345678901\") or QR payload (\"MT:...\")\n"
+           "  no Thread network is handed over: use matter_pair_thread for a Thread device\n");
+    return 1;
+  }
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
+  if (node_id < 2) {
+    printf("node_id must be >= 2 (1 is reserved for the commissioner itself)\n");
+    return 1;
+  }
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_code(argv[2], /*with_dataset=*/false, node_id)) {
+    matter_attempt_busy();
+    return 1;
+  }
+  printf("matter: pairing node 0x%016llx with code '%s' queued\n",
+         static_cast<unsigned long long>(node_id), argv[2]);
+  printf("matter: watch the log for PASE/CASE progress\n");
+  return 0;
+}
+
+// The pure BLE path: scan for a device that advertises `discriminator`, connect and run PASE
+// (SPAKE2+) with `pincode`. Without a Thread dataset a Thread device stops after PASE; this form
+// is for a device that needs no network hand-over.
+int cmd_matter_pair_ble(int argc, char** argv) {
+  if (argc != 4) {
+    printf("usage: matter_pair_ble <node_id> <pincode> <discriminator>\n"
+           "  node_id:      decimal, the id you assign in our fabric (any >1)\n"
+           "  pincode:      the setup PIN of the device, decimal (1..99999998,\n"
+           "                chip::kSetupPINCodeMaximumValue — a Matter manual code\n"
+           "                packs it in bits, so it is not the digits you read)\n"
+           "  discriminator: the 12-bit setup discriminator (0..4095)\n");
+    return 1;
+  }
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
+  const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
+  if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
+    printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
+    return 1;
+  }
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_pin(node_id, pincode, disc, /*with_dataset=*/false)) {
+    matter_attempt_busy();
+    return 1;
+  }
+  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
+         static_cast<unsigned long long>(node_id), pincode, disc);
+  printf("matter: watch the log for PASE/CASE progress\n");
+  return 0;
+}
+
+// Abort an attempt that is still running (the BLE scan waits ~60 s for the device).
+int cmd_matter_pair_cancel(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+  matter_bridge::cancel();
+  printf("matter: cancelling the commissioning attempt\n");
+  return 0;
+}
+
+// The same as matter_pair_ble, but with the co-processor's Thread network: the bridge borrows the
+// dataset (hubproto ThreadDatasetReq) and hands it to the device over BLE. Without it the device
+// refuses the network (networkingStatus=1) and the commissioning dies at the Thread step.
+int cmd_matter_pair_thread(int argc, char** argv) {
+  if (argc != 4) {
+    printf("usage: matter_pair_thread <node_id> <pincode> <discriminator>\n"
+           "  node_id:      decimal, the id you assign in our fabric (any >1)\n"
+           "  pincode:      the setup PIN of the device, decimal (1..99999998)\n"
+           "  discriminator: the 12-bit setup discriminator (0..4095)\n"
+           "  the Thread dataset is borrowed from the co-processor (chip 0x02)\n");
+    return 1;
+  }
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
+  const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
+  if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
+    printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
+    return 1;
+  }
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_pin(node_id, pincode, disc, /*with_dataset=*/true)) {
+    matter_attempt_busy();
+    return 1;
+  }
+  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
+         static_cast<unsigned long long>(node_id), pincode, disc);
+  printf("matter: the bridge asks chip 0x%02x for the Thread dataset; watch the log for PASE/CASE\n",
+         kThreadChipId);
+  return 0;
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 void reg_cmd(const char* name, const char* help, esp_console_cmd_func_t fn) {
   esp_console_cmd_t c{};
   c.command = name;
@@ -2568,6 +3113,20 @@ void start_console() {
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
   reg_cmd("relay", "relay [<secret> | <host> <secret> | clear] - remote access tunnel", &cmd_relay);
   reg_cmd("led", "led [on|off] - status LED (green=healthy, amber=degraded, red=offline)", &cmd_led);
+#ifdef KEYSTONE_HAVE_MATTER
+  reg_cmd("matter_pair",
+          "matter_pair <node_id> <setup-code> - try to commission a Matter device from the hub",
+          &cmd_matter_pair);
+  reg_cmd("matter_pair_ble",
+          "matter_pair_ble <node_id> <pincode> <discriminator> - commission a Matter device over BLE",
+          &cmd_matter_pair_ble);
+  reg_cmd("matter_pair_cancel", "matter_pair_cancel - abort a running Matter commissioning attempt", &cmd_matter_pair_cancel);
+  reg_cmd("matter_pair_thread",
+          "matter_pair_thread <node_id> <pincode> <discriminator> - commission a Matter device with the Thread dataset of the co-processor",
+          &cmd_matter_pair_thread);
+  reg_cmd("ip6", "ip6 [<address> | probe <address> [port]] - the hub's IPv6 addresses, the route to the Thread mesh, a probe datagram",
+          &cmd_ip6);
+#endif
 
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }
@@ -2613,24 +3172,21 @@ void app_on_state(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const 
   if (xQueueSend(g_app_ev_q, &e, 0) != pdTRUE) g_app_resync = true;  // clients resync, no gap recovery needed
 }
 
-// How the last attempt to add a Matter device stands. The main loop owns it: the chip's answer
-// arrives in the UART task (queued) and the app asks for it (`matter.status`) or hears about it
-// (the `matter` push).
+// How the last attempt to add a Matter device stands. The main loop owns it: matter_bridge's
+// progress reports arrive on the bridge's worker task (queued) and the app asks for it
+// (`matter.status`) or hears about it (the `matter` push).
 struct MatterStatus {
   hubproto::MatterState state = hubproto::MatterState::Idle;
   hubproto::MatterCode code = hubproto::MatterCode::Ok;
   std::uint16_t entity = 0;
-  std::uint32_t deadline_ms = 0;  // when the attempt is given up on (0: nothing running)
+  std::uint32_t deadline_ms = 0;  // when a silent attempt is given up on (0: nothing running)
 };
 MatterStatus g_matter;
 
-// Has the Matter chip ever answered a MatterPair? A chip that is alive but silent
-// has no commissioner — then a second attempt is refused right away instead of
-// making the app wait another minute.
-bool g_matter_cannot = false;
-
-// How long the hub waits for the Matter chip to say something before it gives up.
-constexpr std::uint32_t kMatterTimeoutMs = 60000;
+// How long the hub waits for the commissioner to say anything before it gives up. This is an
+// inactivity limit, not the length of the attempt: every progress report (scanning, PASE,
+// adding, the Thread attach) pushes the deadline, and the BLE scan alone may run for a minute.
+constexpr std::uint32_t kMatterTimeoutMs = 180000;
 
 // Commands in flight on behalf of a client: CMD_ACK (any task) -> `ack` frame.
 struct AppPending {
@@ -2873,7 +3429,11 @@ struct AppSource {
 // Send the snapshot (in parts) to one client, or to all (fd < 0). Main loop only: the
 // buffer is shared.
 void app_send_snapshot(int fd, const AppSource& src) {
-  static char buf[core::app::kMaxFrame];
+  // 4 KB snapshot frame: in PSRAM via EXT_RAM_BSS_ATTR so it does not sit in
+  // the brain's internal-DRAM BSS (experiment/commissioner-on-s3: each KB
+  // freed before the heap pool starts widens the pool and the BLE controller's
+  // contiguous allocation gate with it).
+  static EXT_RAM_BSS_ATTR char buf[core::app::kMaxFrame];
   core::app::SnapshotCursor cur;
   while (!cur.done()) {
     core::JsonWriter w(buf, sizeof(buf));
@@ -2993,8 +3553,9 @@ std::uint32_t g_ev_push_ms = 0;
 void history_push(Scenes& scenes, std::uint32_t now_ms) {
   if (g_ev_mu == nullptr || now_ms - g_ev_push_ms < 250) return;
   g_ev_push_ms = now_ms;
-  static char hb[core::app::kMaxFrame];
-  static core::Event page[core::app::kHistoryPage];
+  // 4 KB history frame + ~576 B event page in PSRAM (see app_send_snapshot).
+  static EXT_RAM_BSS_ATTR char hb[core::app::kMaxFrame];
+  static EXT_RAM_BSS_ATTR core::Event page[core::app::kHistoryPage];
   xSemaphoreTake(g_ev_mu, portMAX_DELAY);
   const std::uint32_t latest = g_ev_ring.latest();
   std::size_t n = 0;
@@ -3115,16 +3676,16 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     std::memset(pass, 0, sizeof(pass));
   } else if (!std::strcmp(op, "wifi.scan")) {
     // The scan blocks for a couple of seconds; it is the whole reply, so answer here.
-    static char sb[1200];
+    static EXT_RAM_BSS_ATTR char sb[1200];
     struct Net { char ssid[core::kMaxSsidLen + 1]; int rssi; bool secure; };
-    static Net nets[16];
+    static EXT_RAM_BSS_ATTR Net nets[16];
     std::size_t n = 0;
     wifi_scan_config_t sc = {};
     if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
       uint16_t found = 0;
       esp_wifi_scan_get_ap_num(&found);
       uint16_t take = found > 40 ? 40 : found;
-      static wifi_ap_record_t recs[40];
+      static EXT_RAM_BSS_ATTR wifi_ap_record_t recs[40];
       if (esp_wifi_scan_get_ap_records(&take, recs) == ESP_OK) {
         for (uint16_t i = 0; i < take; ++i) {
           const char* name = reinterpret_cast<const char*>(recs[i].ssid);
@@ -3164,8 +3725,8 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     core::app::HistoryQuery q;
     o = core::app::history_parse(reader, m.args, q);
     if (o.ok) {
-      static char hb[core::app::kMaxFrame];
-      static core::Event page[core::app::kHistoryPage + 1];
+      static EXT_RAM_BSS_ATTR char hb[core::app::kMaxFrame];
+      static EXT_RAM_BSS_ATTR core::Event page[core::app::kHistoryPage + 1];
       std::size_t n = 0;
       std::uint32_t oldest = 0, latest = 0;
       xSemaphoreTake(g_ev_mu, portMAX_DELAY);
@@ -3240,48 +3801,53 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     o = cm.out;
     if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
   } else if (!std::strcmp(op, "matter.commission")) {
-    // The bytes the phone read from a Matter device over Bluetooth. The phone does not
-    // interpret them any further — the Matter chip is the only one with a stack that can
-    // commission anything — so they go there, and the chip says how far it got.
+    // The bytes the phone read from a Matter device over Bluetooth. Only the QR payload (kind 2)
+    // carries the setup passcode PASE needs; the service data and the enhanced advertisement
+    // identify the device but cannot start commissioning, so they are refused with a reason the
+    // app can show. Everything that talks to CHIP happens in matter_bridge.
     const core::app::MatterRequest mreq = core::app::matter_commission_parse(reader, m.args);
     o = mreq.out;
-    if (o.ok && !g_thread_seen) {
-      o = Outcome::fail(Err::Unsupported, "the hub has no Matter chip");
-    } else if (o.ok && g_matter_cannot) {
-      // The chip is alive and never answered the last time — it has no commissioner.
-      o = Outcome::fail(Err::Unsupported, "this hub's Matter chip cannot add Matter devices");
+    if (o.ok) {
+#ifdef KEYSTONE_HAVE_MATTER
+      switch (matter_bridge::commission_payload(mreq.kind, mreq.bytes, mreq.len)) {
+        case matter_bridge::Start::kStarted:
+          break;
+        case matter_bridge::Start::kNotReady:
+          o = Outcome::fail(Err::Unsupported, "the Matter commissioner is not up yet");
+          break;
+        case matter_bridge::Start::kBusy:
+          o = Outcome::fail(Err::Busy, "another Matter device is being added");
+          break;
+        case matter_bridge::Start::kNoSetupHash:
+          o = Outcome::fail(Err::Unsupported,
+                            "this payload carries no setup passcode: scan the QR code or type its code");
+          break;
+        case matter_bridge::Start::kBadPayload:
+          o = Outcome::fail(Err::BadArgs, "the payload is not a Matter setup payload");
+          break;
+      }
+#else
+      o = Outcome::fail(Err::Unsupported, "the hub has no Matter commissioner");
+#endif
     }
     if (o.ok) {
-      std::uint8_t payload[hubproto::kMatterPairHeader + hubproto::kMatterMaxPayload] = {};
-      const auto enc =
-          hubproto::encode_matter_pair(mreq.kind, mreq.bytes, mreq.len, payload, sizeof(payload));
-      if (!enc.ok) {
-        o = Outcome::fail(Err::Internal, "the payload does not fit");
-      } else {
-        hubproto::Header h{};
-        h.version = hubproto::kProtocolVersion;
-        h.type = hubproto::MsgType::MatterPair;
-        h.chip_id = kThreadChipId;
-        bus.publish(h, payload, enc.len);
-        g_matter.state = hubproto::MatterState::Scanning;
-        g_matter.code = hubproto::MatterCode::Ok;
-        g_matter.entity = 0;
-        g_matter.deadline_ms = now + kMatterTimeoutMs;
-        ESP_LOGI(kTag, "app: matter.commission kind=%u %u byte(s) -> chip 0x%02x",
-                 static_cast<unsigned>(mreq.kind), static_cast<unsigned>(mreq.len),
-                 static_cast<unsigned>(kThreadChipId));
-        // The answer says the bytes were handed over — how the attempt goes is reported
-        // by the `matter` push, not here.
-        static char mb[64];
-        core::JsonWriter mw(mb, sizeof(mb));
-        mw.begin_object().kv("type", "res").kv("id", static_cast<std::int64_t>(in.id)).kv("ok", true)
-            .key("result").begin_object().kv("state", "started").end_object().end_object();
-        if (mw.ok()) {
-          hub_send(in.fd, mb, mw.size());
-          return;
-        }
-        o = Outcome::fail(Err::Internal, "matter reply too large");
+      g_matter.state = hubproto::MatterState::Scanning;
+      g_matter.code = hubproto::MatterCode::Ok;
+      g_matter.entity = 0;
+      g_matter.deadline_ms = now + kMatterTimeoutMs;
+      ESP_LOGI(kTag, "app: matter.commission kind=%u %u byte(s) -> the brain's own commissioner",
+               static_cast<unsigned>(mreq.kind), static_cast<unsigned>(mreq.len));
+      // The answer says the attempt was accepted — how it goes is reported by the `matter`
+      // push, not here.
+      static char mb[64];
+      core::JsonWriter mw(mb, sizeof(mb));
+      mw.begin_object().kv("type", "res").kv("id", static_cast<std::int64_t>(in.id)).kv("ok", true)
+          .key("result").begin_object().kv("state", "started").end_object().end_object();
+      if (mw.ok()) {
+        hub_send(in.fd, mb, mw.size());
+        return;
       }
+      o = Outcome::fail(Err::Internal, "matter reply too large");
     }
   } else if (!std::strcmp(op, "matter.status")) {
     // A result of its own shape: sent right away.
@@ -3848,13 +4414,218 @@ const char* reset_reason_text(esp_reset_reason_t r) {
   }
 }
 
+#ifdef KEYSTONE_HAVE_MATTER
+// Minimal event callback — same shape as the vendor controller example
+// (ChipDeviceEvent + intptr_t). We don't act on events yet; the hook exists so
+// esp_matter::start() has something to call.
+static void matter_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event,
+                            intptr_t /*arg*/) {
+  (void)event;
+}
+
+// Bring up the Matter stack. Called once from app_main() before the Wi-Fi
+// driver is started.
+//
+// Only the CHIP *stack* comes up here. The controller/commissioner is created
+// later, when the Wi-Fi link is up — see matter_controller_start().
+//
+// Fabric 1 / node 112233 are placeholder admin credentials (test DAC); the
+// production path will mint per-hub credentials later, see docs/matter-backlog.md §6.
+static void matter_bringup() {
+  const std::size_t heap_before =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const std::size_t largest_before =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGI("matter", "heap before bringup: %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_before),
+           static_cast<unsigned>(largest_before));
+
+  esp_err_t err = esp_matter::start(&matter_event_cb);
+  if (err != ESP_OK) {
+    ESP_LOGE("matter", "esp_matter::start failed: %d", err);
+    return;
+  }
+  ESP_LOGI("matter",
+           "after esp_matter::start: heap %u B internal, largest block %u B, psram free %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+
+  // The task that runs the commissioning calls, reads descriptors, subscribes and sends
+  // invoke/write. It is created here, while the internal heap is still one big block — the
+  // CHIP stack needs a large contiguous chunk later on. The bridge only stores its hooks
+  // now; its first message waits for the controller (and for app_main to build the router).
+  if (!matter_bridge::start(nullptr, &bridge_sink, &bridge_dataset, &bridge_progress)) {
+    ESP_LOGE("matter", "the Matter bridge did not start: this hub cannot add Matter devices");
+  }
+
+  // The task that creates the controller. It waits for the Wi-Fi interface and
+  // for a usable IPv6 address on it — see matter_controller_task.
+  g_matter_ctrl_done = xSemaphoreCreateBinary();
+  if (g_matter_ctrl_done == nullptr) {
+    ESP_LOGE("matter", "no memory for the controller queue");
+  } else if (xTaskCreate(matter_controller_task, "matter_ctrl",
+                         kMatterCtrlTaskStackBytes / sizeof(StackType_t), nullptr,
+                         5, nullptr) != pdPASS) {
+    ESP_LOGE("matter", "could not create the controller task");
+    vSemaphoreDelete(g_matter_ctrl_done);
+    g_matter_ctrl_done = nullptr;
+  }
+
+  // The queue the co-processor's Thread dataset arrives on. The brain has no
+  // 802.15.4 radio, so the dataset has to come from the chip that has one.
+  g_thread_dataset_sem = xSemaphoreCreateBinary();
+  if (g_thread_dataset_sem == nullptr) {
+    ESP_LOGE("matter", "no memory for the Thread dataset queue");
+  }
+
+  const std::size_t heap_after =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGI("matter",
+           "stack up: heap %u B (-%d B), largest block %u B, psram free %u B",
+           static_cast<unsigned>(heap_after),
+           static_cast<int>(heap_before) - static_cast<int>(heap_after),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+}
+
+// Create the CHIP controller/commissioner.
+//
+// This is deliberately NOT done at the very beginning of the boot: it happens
+// when the Wi-Fi interface comes up and has a usable IPv6 link-local address
+// (matter_controller_task takes care of that) — but it happens BEFORE the
+// hub's own tables are allocated, because the controller wants one contiguous
+// block of internal RAM.
+//
+// The reason for the address is CHIP's own mDNS (DNS-SD) server. It binds one
+// UDP endpoint per interface that is up AND has an IPv6 address, and it binds
+// them ONCE — when the controller is created. Created before Wi-Fi, it binds
+// nothing at all, and the operational discovery of the accessory then fails
+// with CHIP_ERROR_NO_ENDPOINT (0x46): "Device connection failed. Error 46".
+//
+// The commissioning itself (BLE, PASE, the crypto) does not care about the
+// network, but the last step — finding the accessory's IPv6 address over
+// DNS-SD — does, and that step is the one that has to work.
+//
+// UDP listen port 5580 is Matter's default secure-session port.
+static void matter_controller_start() {
+  if (g_matter_controller_ready) {
+    return;
+  }
+  matter_set_status("creating the controller");
+  const std::size_t heap_before =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    auto &client = esp_matter::controller::matter_controller_client::get_instance();
+    const esp_err_t err = client.init(/*node_id=*/112233, /*fabric_id=*/1, /*udp_port=*/5580);
+    if (err != ESP_OK) {
+      ESP_LOGE("matter", "client.init failed: %d", err);
+      matter_set_status("client.init failed");
+      return;
+    }
+    // The trust store for the accessory's attestation chain — esp-matter reads
+    // it inside setup_commissioner(), so it has to be in place before that.
+    matter_install_paa_trust_store();
+    const esp_err_t comm_err = client.setup_commissioner();
+    if (comm_err != ESP_OK) {
+      ESP_LOGE("matter", "setup_commissioner failed: %d", comm_err);
+      matter_set_status("setup_commissioner failed");
+      return;
+    }
+  }
+  g_matter_controller_ready = true;
+  matter_bridge::controller_ready();  // the worker may now talk to CHIP
+  matter_set_status("up");
+  ESP_LOGI("matter",
+           "controller up (node 112233, fabric 1, UDP 5580): heap %u B (-%d B), "
+           "largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<int>(heap_before) -
+               static_cast<int>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
+
+// The task that creates the controller.
+//
+// It waits for the Wi-Fi interface to be up and to have a *usable* IPv6
+// link-local address on it: a fresh lwIP address is tentative until the
+// duplicate address detection has finished, and CHIP's mDNS skips a tentative
+// address — it would bind no endpoint again, which is exactly the failure
+// this whole dance is about ("Device connection failed. Error 46").
+//
+// It runs on a task of its own (the CHIP init is a deep call chain, and
+// app_main's stack is small) and it is started right after the Matter stack —
+// the Wi-Fi driver, and with it the interface, comes up a moment later. The
+// hub's own tables are allocated only after this task is done, because the
+// controller wants one contiguous block of internal RAM and the tables would
+// fragment it away.
+static void matter_controller_task(void* arg) {
+  (void)arg;
+  matter_set_status("waiting for IPv6");
+  if (!wait_wifi_ipv6_linklocal(kMatterIpv6WaitMs)) {
+    ESP_LOGE("matter", "no usable IPv6 on the Wi-Fi interface; the commissioner stays down");
+    matter_set_status("no usable IPv6");
+  } else {
+    matter_controller_start();
+  }
+  if (g_matter_ctrl_done != nullptr) xSemaphoreGive(g_matter_ctrl_done);
+  vTaskDelete(nullptr);
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 }  // namespace
 
 extern "C" void app_main(void) {
+#ifdef KEYSTONE_HAVE_MATTER
+  ESP_LOGI("matter", "app_main entry: heap %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+#endif
   status_led::init();
 
-  // Инициализация Wi-Fi
-  wifi_init();
+  // NVS + netif + default event loop + default STA/AP netifs (cheap).
+  wifi_bootstrap();
+#ifdef KEYSTONE_HAVE_MATTER
+  ESP_LOGI("matter", "after bootstrap: heap %u B internal, largest block %u B",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+#endif
+
+#ifdef KEYSTONE_HAVE_MATTER
+  // experiment/commissioner-on-s3: bring up Matter + BLE BEFORE the Wi-Fi
+  // driver init, so the BLE controller gets to take its ~30 KB contiguous
+  // internal-RAM allocation from the fattest pool (the Wi-Fi driver's own
+  // ~20 KB had been fragmenting it into chunks too small for BLE to fit).
+  // Step 1a of docs/matter-backlog.md §3's R3 path; the hardware log from
+  // the previous commit (BLE_INIT: Malloc failed) is what justifies this
+  // reordering.
+  matter_bringup();
+#endif
+
+  // Heavy Wi-Fi driver init + config + start.
+  wifi_start_driver();
+
+#ifdef KEYSTONE_HAVE_MATTER
+  // The CHIP controller is created HERE — between the Matter stack and the
+  // hub's own tables, and that is the whole point of the ordering:
+  //
+  //   * it wants one contiguous block of internal RAM (the CHIP stack's
+  //     bring-up asks for tens of KB at once), and the hub's own tables —
+  //     the UART links, the NVS buffers, the app server — would fragment the
+  //     heap away before it runs. That is exactly how the controller died
+  //     with "client.init failed" when it was created at the end of the boot;
+  //   * and it binds CHIP's DNS-SD endpoints on the interfaces that have an
+  //     IPv6 address, so the Wi-Fi interface has to be up with a link-local
+  //     address first — the Wi-Fi driver above is what brings it up.
+  //
+  // The task does the work (its own stack: the CHIP init is a deep call
+  // chain); app_main waits for it, so the heap is still one big block when it
+  // runs.
+  if (g_matter_ctrl_done != nullptr) {
+    xSemaphoreTake(g_matter_ctrl_done, portMAX_DELAY);
+  }
+#endif
 
   // Event history first: everything below may emit.
   g_ev_mu = xSemaphoreCreateMutex();
@@ -3893,37 +4664,72 @@ extern "C" void app_main(void) {
   }());
   ESP_ERROR_CHECK(link_th.begin());
 
-  static core::UartTransport bus_zb(link_zb);
-  static core::UartTransport bus_th(link_th);
+  // experiment/commissioner-on-s3: tagged EXT_RAM_BSS_ATTR so all the brain's
+  // core tables (registry, bus router, radio coord, state machine, dispatcher,
+  // chip monitor, rule engine, OTA jobs, reconciler) live in PSRAM instead of
+  // internal-DRAM BSS. That frees ~15 KB of internal RAM for the Matter
+  // controller to use at runtime. These are plain C++ aggregates with no
+  // vtables; their constructors run on first entry to app_main (long after
+  // PSRAM is initialised by the bootloader).
+  static EXT_RAM_BSS_ATTR core::UartTransport bus_zb(link_zb);
+  static EXT_RAM_BSS_ATTR core::UartTransport bus_th(link_th);
 
-  static Registry reg;
+#ifdef KEYSTONE_HAVE_MATTER
+  // Deliberately NOT in PSRAM: MatterLink is polymorphic, and a constant-initialised vtable
+  // pointer in .ext_ram.bss (a NOLOAD section) never reaches RAM — the first virtual call
+  // would fault. It is one pointer wide, so internal DRAM is the right place.
+  static MatterLink matter_link;
+#endif
+
+  static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
-  static ChipRouter bus;                            // presents itself as one Bus
-  bus.bind(kZigbeeChipId, bus_zb);                  // publish(chip=0x01) -> UART1
-  bus.bind(kThreadChipId, bus_th);                  // publish(chip=0x02) -> UART2
+  static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
+  // publish(chip=0x01) -> UART1, publish(chip=0x02) -> UART2. A refused bind
+  // means the brain is deaf on that link — say so.
+  if (!bus.bind(kZigbeeChipId, bus_zb)) {
+    ESP_LOGE(kTag, "no room for the Zigbee link");
+  }
+  if (!bus.bind(kThreadChipId, bus_th)) {
+    ESP_LOGE(kTag, "no room for the Thread link");
+  }
+#ifdef KEYSTONE_HAVE_MATTER
+  if (!bus.bind(matter_bridge::kChipId, matter_link)) {
+    ESP_LOGE(kTag, "no room for the Matter link");
+  }
+#endif
+  g_bus = &bus;
 
-  static core::RadioCoordinator<Registry> coord(bus, reg);
-  static core::StateMachine<Registry> sm(bus, reg);
-  static Dispatcher disp(bus, reg);
-  static core::ChipMonitor monitor(bus, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR core::RadioCoordinator<Registry> coord(bus, reg);
+  static EXT_RAM_BSS_ATTR core::StateMachine<Registry> sm(bus, reg);
+  static EXT_RAM_BSS_ATTR Dispatcher disp(bus, reg);
+  static EXT_RAM_BSS_ATTR core::ChipMonitor monitor(bus, &now_ms, nullptr);
   g_monitor = &monitor;
   monitor.on_event(&on_chip_event, nullptr);
   disp.set_alive_filter(&core::ChipMonitor::alive_thunk, &monitor);
-  static Rules rules(disp, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR Rules rules(disp, &now_ms, nullptr);
 
-  static fw::OtaJob ota_job(bus);
+  static EXT_RAM_BSS_ATTR fw::OtaJob ota_job(bus);
   g_ota = &ota_job;
-  static fw::DeviceOtaJob dev_ota_job(bus);
+  static EXT_RAM_BSS_ATTR fw::DeviceOtaJob dev_ota_job(bus);
   g_dev_ota = &dev_ota_job;
   dev_ota_job.on_phase(&on_dev_ota_phase, nullptr);
-  static core::OtaVerifier verifier(bus);
+  static EXT_RAM_BSS_ATTR core::OtaVerifier verifier(bus);
   g_verifier = &verifier;
   verifier.on_done(&on_verify_done, nullptr);
   ota_job.on_accepted(&on_ota_accepted, nullptr);
 
   disp.on_result(&on_cmd_result, nullptr);
-  bus.subscribe(&on_bus_traffic, nullptr);  // per-chip rx counter (silent unless `log on`)
-  bus.subscribe(&on_bus_forward, &bus);     // Matter <-> Zigbee cross-chip mirror
+  // Check the result: a refused subscription is a feature that silently does
+  // nothing (see ChipRouter::subscribe).
+  if (!bus.subscribe(&on_bus_traffic, nullptr)) {
+    ESP_LOGE(kTag, "no room for the per-chip rx counter");
+  }
+  if (!bus.subscribe(&on_bus_forward, &bus)) {
+    ESP_LOGE(kTag, "no room for the cross-chip forwarder — Matter <-> Zigbee and the "
+                   "Thread dataset will not work");
+  }
+  ESP_LOGI(kTag, "bus fan-out: %d subscribers (room for %d)",
+           bus.subscriber_count(), ChipRouter::kMaxSubs);
 
   restore_rules(rules);  // user rules from NVS (`rule add ...`)
   // Rule constraints: local minute of day (-1 until SNTP has synced) and the
@@ -3945,7 +4751,7 @@ extern "C" void app_main(void) {
 
   g_rec_mu = xSemaphoreCreateRecursiveMutex();
   g_reg = &reg;
-  static Reconciler reconciler(disp, &now_ms, nullptr);
+  static EXT_RAM_BSS_ATTR Reconciler reconciler(disp, &now_ms, nullptr);
   g_rec = &reconciler;
   restore_desired(reconciler);
   reconciler.on_event(&on_reconcile, nullptr);
@@ -3958,19 +4764,20 @@ extern "C" void app_main(void) {
   link_zb.start();
   link_th.start();
 
-  // Persistent timers table (survives reboots via NVS).
-  static core::TimerTable<8> timer_table;
+  // Persistent timers table (survives reboots via NVS). PSRAM-backed storage
+  // (EXT_RAM_BSS_ATTR) to keep internal-DRAM BSS small for Matter+BLE on S3.
+  static EXT_RAM_BSS_ATTR core::TimerTable<8> timer_table;
   time_t boot_now = 0;
   if (s_time_synced) time(&boot_now);
   restore_timers(timer_table, now_ms(nullptr), static_cast<std::uint64_t>(boot_now));
 
   // Recurring time-of-day actions (`at HH:MM …`); they only run once the clock is
   // synced, in local time (see `tz`).
-  static Schedules schedule_table;
+  static EXT_RAM_BSS_ATTR Schedules schedule_table;
   restore_schedules(schedule_table);
 
   // Scenes: named groups of actions (`scene`), applied from the console or the app.
-  static Scenes scene_store;
+  static EXT_RAM_BSS_ATTR Scenes scene_store;
   restore_scenes(scene_store);
   g_scenes = &scene_store;
   g_scene_q = xQueueCreate(8, sizeof(std::uint8_t));
@@ -4008,6 +4815,12 @@ extern "C" void app_main(void) {
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
+#ifdef KEYSTONE_HAVE_MATTER
+  // Every Matter node that joined our fabric earlier comes back here: the bridge re-reads
+  // its descriptor and re-declares its entities, so a hub reboot does not lose the devices
+  // it added (the nodes live in the CHIP fabric, not in the core's tables).
+  matter_bridge::restore();
+#endif
   // Why did we come up? A watchdog or a panic shows up here even when the log around it
   // is lost (the USB console is the only place we can read).
   ESP_LOGI(kTag, "reset reason: %s", reset_reason_text(esp_reset_reason()));
@@ -4020,9 +4833,24 @@ extern "C" void app_main(void) {
   // the co-processor re-sends DECLARE + DECLARE_END; a ready chip is skipped.
   const std::uint32_t kSelfHealMs = 5000;
   std::uint32_t last_query_ms = 0;
+  std::size_t s_bad_zb = bus_zb.bad_frames();
+  std::size_t s_bad_th = bus_th.bad_frames();
   const std::uint8_t kBoundChips[] = {kZigbeeChipId, kThreadChipId};
   while (true) {
     const std::uint32_t t = now_ms(nullptr);
+    // The frame layer drops a block without a word (bad COBS, bad CRC, a type we
+    // do not know). That silence is why a lost frame is hard to see: count it.
+    {
+      const std::size_t bad_zb = bus_zb.bad_frames();
+      const std::size_t bad_th = bus_th.bad_frames();
+      if (bad_zb != s_bad_zb || bad_th != s_bad_th) {
+        ESP_LOGW(kTag, "link dropped frames: zigbee %u, thread %u (bad COBS/CRC or unknown type)",
+                 static_cast<unsigned>(bad_zb - s_bad_zb),
+                 static_cast<unsigned>(bad_th - s_bad_th));
+        s_bad_zb = bad_zb;
+        s_bad_th = bad_th;
+      }
+    }
     disp.poll(t);
     monitor.poll(t);
     if (g_verify_req.pending) {
@@ -4215,7 +5043,7 @@ extern "C" void app_main(void) {
                                      dev_ota_status_name(de.status), de.percent);
         if (w.ok()) hub_broadcast(b, w.size());
       }
-      // What the Matter chip said about the attempt to add a device — and what the app hears.
+      // What the clock says about the attempt to add a device — and what the app hears.
       {
         MatterUpdate mu;
         bool moved = false;
@@ -4225,22 +5053,29 @@ extern "C" void app_main(void) {
           g_matter.entity = mu.entity;
           if (mu.state == hubproto::MatterState::Done || mu.state == hubproto::MatterState::Failed) {
             g_matter.deadline_ms = 0;  // it is over, one way or another
+          } else {
+            // Progress, not the end: the deadline is an inactivity limit, and a long
+            // commissioning (scan, PASE, Thread attach, CASE) keeps moving.
+            g_matter.deadline_ms = t + kMatterTimeoutMs;
           }
           moved = true;
         }
-        // The chip went quiet: the attempt is given up on, so the app is not left waiting.
+        // The commissioner went quiet: the attempt is given up on, so the app is not left
+        // waiting forever.
         if (!moved && g_matter.deadline_ms != 0 &&
             static_cast<std::int32_t>(t - g_matter.deadline_ms) >= 0) {
-          const auto* ti = g_monitor != nullptr ? g_monitor->info(kThreadChipId) : nullptr;
-          const bool chip_alive = ti != nullptr && !ti->silent;
-          if (chip_alive) g_matter_cannot = true;
           g_matter.state = hubproto::MatterState::Failed;
-          g_matter.code = chip_alive ? hubproto::MatterCode::Unsupported : hubproto::MatterCode::Timeout;
+#ifdef KEYSTONE_HAVE_MATTER
+          g_matter.code = matter_bridge::ready() ? hubproto::MatterCode::Timeout
+                                                 : hubproto::MatterCode::Unsupported;
+#else
+          g_matter.code = hubproto::MatterCode::Unsupported;
+#endif
           g_matter.entity = 0;
           g_matter.deadline_ms = 0;
           moved = true;
-          ESP_LOGW(kTag, "matter: the chip did not answer (chip alive: %s)",
-                   chip_alive ? "yes" : "no");
+          ESP_LOGW(kTag, "matter: the commissioner said nothing for %u s, giving the attempt up",
+                   static_cast<unsigned>(kMatterTimeoutMs / 1000));
         }
         if (moved) {
           ESP_LOGI(kTag, "matter: %s (%s), entity 0x%04x", core::app::matter_state_name(g_matter.state),
@@ -4621,12 +5456,18 @@ extern "C" void app_main(void) {
                   r->out + off, r->out_cap - off, "tx_frames %lu, ",
                   static_cast<unsigned long>(v.as_u32())));
             }
+            // What THIS side dropped: the frame layer is silent about it, so it is
+            // counted here. A frame the chip sent and we never saw is here.
+            const std::size_t dropped =
+                id == kThreadChipId ? bus_th.bad_frames() : bus_zb.bad_frames();
             if (reg.get_value(id, hubproto::chip_attr::kCrcErrors, v)) {
               off += static_cast<std::size_t>(std::snprintf(
-                  r->out + off, r->out_cap - off, "crc_errors %u\n",
-                  static_cast<unsigned>(v.as_u16())));
-            } else if (reg.find(id) != nullptr) {
-              off += static_cast<std::size_t>(std::snprintf(r->out + off, r->out_cap - off, "\n"));
+                  r->out + off, r->out_cap - off, "crc_errors %u, dropped %u\n",
+                  static_cast<unsigned>(v.as_u16()), static_cast<unsigned>(dropped)));
+            } else {
+              off += static_cast<std::size_t>(std::snprintf(
+                  r->out + off, r->out_cap - off, "dropped %u\n",
+                  static_cast<unsigned>(dropped)));
             }
           }
           if (off == 0) std::snprintf(r->out, r->out_cap, "no chips seen yet\n");

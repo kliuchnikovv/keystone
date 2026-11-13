@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -68,8 +69,13 @@ int g_fails = 0;
 std::uint32_t g_fail_until_ms = 0;
 std::atomic<std::uint32_t> g_dropped{0};  // outbound frames lost (full queue or a dead socket)
 
-// Frame accumulation (esp_websocket_client may fragment large frames).
-char g_rx_buf[5120];
+// Frame accumulation (esp_websocket_client may fragment large frames). The
+// 5 KB buffer sits in PSRAM (`EXT_RAM_BSS_ATTR`): a plain char array is POD,
+// has no vtable, so startup zero-fills it in external BSS before anything
+// reads from it. Keeping it out of internal DRAM freed the largest
+// contiguous pool from ~31 KB to enough for the BLE controller's ~40 KB
+// one-shot allocation (experiment/commissioner-on-s3, docs/matter-backlog.md §3).
+EXT_RAM_BSS_ATTR char g_rx_buf[5120];
 std::size_t g_rx_len = 0;
 std::size_t g_rx_total = 0;
 bool g_rx_over = false;   // the frame is bigger than g_rx_buf: drop its sender

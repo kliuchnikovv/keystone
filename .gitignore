@@ -5,11 +5,16 @@ cmake-build-*/
 
 # ESP-IDF per-app build output
 firmware/*/build/
-firmware/*/build-docker/
+firmware/*/build-*/
 firmware/*/sdkconfig
 firmware/*/sdkconfig.old
+firmware/*/sdkconfig.bak
+firmware/*/sdkconfig.bod
 firmware/*/managed_components/
 firmware/*/dependencies.lock
+
+# Loose build logs captured at the repo root
+/build*.log
 
 # Editor / OS
 .vscode/

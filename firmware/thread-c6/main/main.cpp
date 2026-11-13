@@ -1,25 +1,22 @@
-// Matter Bridge co-processor (ESP32-C6, chip_id 0x02).
+// Thread network co-processor (ESP32-C6, chip_id 0x02).
 //
-// C6#2 is a Matter Bridge (Device Type 0x000E Aggregator) over Thread. Every
-// entity the brain announces (Zigbee plugs, lamps, sensors, thermostats, buttons, ...) shows
-// up in Apple/Google/Alexa as its own bridged Matter accessory. Mapping is
-// per-entity (BridgedAddr = {chip_id, entity_id}) and persisted in NVS by
-// esp-matter's app_bridge machinery, so endpoint ids survive reboots and
-// Apple Home doesn't lose devices.
+// The home's Thread network lives here. The brain runs the Matter commissioner
+// over BLE, but it has no 802.15.4 radio: it can neither form a Thread network
+// nor give one to a device it commissions. This co-processor has the radio, so
+// it forms (and keeps) the network and lends its operational dataset to the
+// brain over the hub link — hubproto ThreadDatasetReq (0x62) / ThreadDataset
+// (0x63). The brain hands those very bytes to the device in the commissioning
+// step (docs/matter-backlog.md §3).
 //
-// Data flow:
-//   - DECLARE(entity_id, device_type, attrs) from the brain → core/matter_plan.hpp picks the
-//     Matter device type and the extra clusters; allocate a bridged endpoint for it if we don't
-//     already have one (or re-shape it when the entity's attributes changed), remember the
-//     mapping. The plan is persisted with the endpoint as its "device type id".
-//   - STATE from the brain → find the endpoint by entity_id, attribute::update() (units
-//     converted by hubproto/units.hpp).
-//   - Matter attribute PRE_UPDATE from a controller → look up the entity
-//     behind the endpoint, send COMMAND to the brain, which forwards it to
-//     the owning chip (routing done in brain-s3::on_bus_forward).
+// What it is not (any more): a Matter Bridge. The Apple Home bridge is gone.
+// The CHIP stack it needs does not fit this chip (the bridge alone took
+// 190 KB of static DRAM, docs/matter-backlog.md §3), and the bridge stood in
+// the way of the goal: it needs the CHIP stack, the CHIP stack keeps the
+// Thread role disabled until the chip sits in a Matter fabric, and the Thread
+// role is exactly what this chip is for.
 //
-// UART bridge: chip 0x02, HELLO on boot, heartbeat every 5s, DECLARE_END on
-// QUERY (Matter endpoints live on the C6, not in the brain's registry).
+// UART bridge: chip 0x02, HELLO on boot, heartbeat every 5 s, our own
+// telemetry every 5 s, the chip-self DECLARE when the brain asks (QUERY).
 //
 // Wiring: C6.TX(GPIO5) -> S3.RX(GPIO9), C6.RX(GPIO4) <- S3.TX(GPIO8).
 #include <cstdint>
@@ -29,69 +26,57 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "esp_netif.h"
-#include "nvs_flash.h"
 #include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "nvs_flash.h"
 
-#include "esp_matter.h"
-#include "esp_matter_ota.h"
-#include "integration.h"
 #include "esp_openthread.h"
+#include "esp_openthread_border_router.h"
+#include "esp_openthread_lock.h"
+#include "esp_openthread_netif_glue.h"
 #include "esp_openthread_types.h"
-#include <app/server/Server.h>
-#include <platform/CHIPDeviceLayer.h>
-#include <platform/ESP32/OpenthreadLauncher.h>
-#include <app/clusters/boolean-state-server/BooleanStateCluster.h>
-#include <app/clusters/occupancy-sensor-server/OccupancySensingCluster.h>
-#include <data_model_provider/esp_matter_data_model_provider.h>
-
-#include <app_bridged_device.h>
-#include "keystone_bridged_device.hpp"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_mac.h"
+#include "esp_vfs_eventfd.h"
+#include "esp_coexist.h"
+#include "soc/soc_caps.h"
+#include "mdns.h"
+#include "wifi_secrets.h"
+#include <openthread/border_routing.h>
+#include <openthread/dataset.h>
+#include <openthread/dataset_ftd.h>
+#include <openthread/error.h>
+#include <openthread/instance.h>
+#include <openthread/ip6.h>
+#include <openthread/thread.h>
+#include <openthread/thread_ftd.h>
 
 #include "hal/brownout_ll.h"
 #include "esp_ota_sink.hpp"
-#include "esp_timer.h"
 #include "esp_uart_link.hpp"
 #include "nvs_boot_id.hpp"
-#include "core/matter_plan.hpp"
 #include "core/ota_receiver.hpp"
 #include "core/uart_transport.hpp"
-#include "core/zcl_profile.hpp"
-#include "hubproto/attrs.hpp"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
-#include "hubproto/units.hpp"
 #include "hubproto/version.hpp"
 #include "status_led.hpp"
 
-using namespace esp_matter;
-using namespace esp_matter::attribute;
-using namespace esp_matter::endpoint;
-using namespace chip::app::Clusters;
-
 namespace {
 
-namespace A = hubproto::attr;
-namespace M = core::matter;
-namespace U = hubproto::units;
-
-const char* kTag = "matter-c6";
+const char* kTag = "thread-c6";
 
 constexpr int kUartTxGpio = 5;
 constexpr int kUartRxGpio = 4;
 constexpr std::uint8_t kOwnChipId = 0x02;
 
-// Matter Electrical Power Measurement cluster (0x0090).
-// ActivePower (0x0008) is nullable int64, milliwatts.
-constexpr std::uint32_t kEpmClusterId = 0x0090;
-constexpr std::uint32_t kEpmAttrActivePower = 0x0008;
-constexpr std::uint32_t kEpmAttrPowerMode = 0x0000;
-
 // UartTransport::publish uses one shared encode buffer, but we publish from the
-// Matter task, the main loop and the UART RX task (OTA acks) — serialize it.
+// main loop and from the UART RX task (OTA acks) — serialize it.
 class LockedBus final : public core::Bus {
  public:
   explicit LockedBus(core::Bus& inner) : inner_(inner), mu_(xSemaphoreCreateRecursiveMutex()) {}
@@ -109,59 +94,18 @@ class LockedBus final : public core::Bus {
   SemaphoreHandle_t mu_;
 };
 
-// The last value the brain told us per bridged endpoint (-1 = unknown). Matter calls our
-// PRE_UPDATE callback for OUR OWN attribute::update() too; without this the STATE we mirror
-// comes straight back as a COMMAND, which re-triggers the device and any rule reacting to it
-// (seen: an on/off ping-pong lasting seconds).
-struct Mirror {
-  std::int32_t onoff = -1;
-  std::int32_t level = -1;
-  std::int32_t ct = -1;
-  std::int32_t x = -1;
-  std::int32_t y = -1;
-  std::int32_t setpoint = -1;  // hub units (0.1 °C)
-  std::int32_t mode = -1;
-  // The Matter stack reacts to our own on/off and level updates with changes of its own (turning
-  // a lamp on moves CurrentLevel to the stored level, i.e. 1). Those are not a controller's
-  // request: for a moment after we mirror an "on", level/colour changes that differ from the
-  // hub's value are refused instead of being forwarded to the real lamp.
-  std::uint32_t quiet_until_ms = 0;
-};
-// Endpoint ids only ever grow (a removed endpoint's id is not reused), so the table is keyed by
-// endpoint id rather than indexed by it.
-struct MirrorSlot {
-  bool used;
-  std::uint16_t ep;
-  Mirror m;
-};
-constexpr int kMirrorSlots = 32;
-MirrorSlot g_mirror_slots[kMirrorSlots];
-
-Mirror* mirror_for(std::uint16_t ep) {
-  MirrorSlot* free_slot = nullptr;
-  for (auto& s : g_mirror_slots) {
-    if (s.used && s.ep == ep) return &s.m;
-    if (!s.used && free_slot == nullptr) free_slot = &s;
-  }
-  if (free_slot == nullptr) return nullptr;
-  free_slot->used = true;
-  free_slot->ep = ep;
-  free_slot->m = Mirror{};
-  return &free_slot->m;
-}
-
 core::Bus* g_bus = nullptr;
 fw::OtaConfirmGate g_ota_confirm;
 std::uint8_t g_boot_id = 0;
-node_t* g_node = nullptr;
-std::uint16_t g_aggregator_endpoint_id = 0;
-constexpr std::uint32_t kQuietAfterMirrorMs = 600;
-// While an endpoint is being created or restored, and for a few seconds after boot, the Matter
-// stack initialises attributes (a lamp's CurrentLevel to 1, ...). Those writes are not a
-// controller's request and must never reach the real device.
-constexpr std::uint32_t kBootGraceMs = 8000;
-bool g_building = false;
 std::uint16_t g_next_seq = 1;
+
+// Wi-Fi backbone + Border Router state. Declared here because thread_bring_up
+// (further down) needs them; the Wi-Fi bringup code itself is in a section
+// below it.
+esp_netif_t* g_wifi_netif = nullptr;
+SemaphoreHandle_t g_wifi_got_ip = nullptr;
+bool g_wifi_connected = false;
+bool g_br_started = false;
 
 hubproto::Header header(hubproto::MsgType type,
                         std::uint16_t entity = hubproto::kSelfEntityId,
@@ -176,585 +120,817 @@ hubproto::Header header(hubproto::MsgType type,
   return h;
 }
 
-// Send a COMMAND for a bridged entity toward the brain.
-void send_command(std::uint16_t entity_id, std::uint8_t attr, const hubproto::Value& v) {
-  hubproto::Command cmd{};
-  cmd.entity_id = entity_id;
-  cmd.attr_id = attr;
-  cmd.value = v;
-  std::uint8_t buf[16];
-  auto r = hubproto::encode_command(cmd, buf, sizeof(buf));
-  if (!r.ok) return;
-  g_bus->publish(header(hubproto::MsgType::Command, entity_id), buf, r.len);
-  if (v.type == hubproto::ValueType::XyColor) {
-    std::uint16_t x = 0, y = 0;
-    v.as_xy(x, y);
-    ESP_LOGI(kTag, "COMMAND -> entity=0x%04x attr=0x%02x xy=(%u,%u)", entity_id,
-             static_cast<unsigned>(attr), static_cast<unsigned>(x), static_cast<unsigned>(y));
-  } else {
-    long n = 0;
-    switch (v.type) {
-      case hubproto::ValueType::Bool: n = v.as_bool() ? 1 : 0; break;
-      case hubproto::ValueType::U8: n = v.as_u8(); break;
-      case hubproto::ValueType::Enum8: n = v.as_enum8(); break;
-      case hubproto::ValueType::I16: n = v.as_i16(); break;
-      case hubproto::ValueType::U16: n = v.as_u16(); break;
-      default: break;
-    }
-    ESP_LOGI(kTag, "COMMAND -> entity=0x%04x attr=0x%02x value=%ld", entity_id,
-             static_cast<unsigned>(attr), n);
+// --- The Thread network we lend to the brain --------------------------------
+//
+// The network must survive a reboot of this chip: the devices we commissioned
+// are attached to its PAN id and network key, and a fresh key would leave them
+// behind (they would have to be re-commissioned). So the operational dataset
+// lives in NVS; the Thread port keeps its own copy of the dataset as well, but
+// we keep our own because that is the one we hand to the brain and because it
+// survives a reflash that wipes the port's settings.
+
+constexpr char kThreadNs[] = "thread_net";
+constexpr char kThreadDsKey[] = "ds";
+constexpr char kThreadNetName[] = "keystone-home";
+
+// The Thread channel. The Wi-Fi backbone of this chip sits on channel 6 of the
+// home network (2417-2457 MHz), and the C6 has one radio for Wi-Fi and
+// 802.15.4 alike — so Thread has to stay out of that band. Channel 26
+// (2480 MHz) is the cleanest choice.
+constexpr std::uint8_t kThreadChannel = 26;
+
+// The name this chip answers to on the backbone (mDNS). The Border Router
+// publishes the Thread network under it, and the Thread services reflected
+// from the mesh hang on it.
+constexpr char kBrHostname[] = "keystone-br";
+
+bool thread_load_dataset(otOperationalDatasetTlvs& out) {
+  nvs_handle_t h;
+  if (nvs_open(kThreadNs, NVS_READONLY, &h) != ESP_OK) return false;
+  std::size_t len = sizeof(out.mTlvs);
+  const esp_err_t err = nvs_get_blob(h, kThreadDsKey, out.mTlvs, &len);
+  nvs_close(h);
+  if (err != ESP_OK || len == 0 || len > OT_OPERATIONAL_DATASET_MAX_LENGTH) return false;
+  out.mLength = static_cast<std::uint8_t>(len);
+  return true;
+}
+
+void thread_save_dataset(const otOperationalDatasetTlvs& tlvs) {
+  nvs_handle_t h;
+  if (nvs_open(kThreadNs, NVS_READWRITE, &h) != ESP_OK) return;
+  esp_err_t err = nvs_set_blob(h, kThreadDsKey, tlvs.mTlvs, tlvs.mLength);
+  if (err == ESP_OK) err = nvs_commit(h);
+  nvs_close(h);
+  if (err != ESP_OK) {
+    ESP_LOGE(kTag, "could not save the Thread dataset: %d", static_cast<int>(err));
   }
 }
 
-// A controller dragging a slider makes the Matter stack walk CurrentLevel (or the colour) through
-// many values; forwarding every step would flood the Zigbee device. Commands for everything but
-// on/off are held for kDebounceMs and only the latest value per (entity, attribute) is sent.
-constexpr std::uint32_t kDebounceMs = 150;
-struct QueuedCmd {
-  bool used;
-  std::uint16_t entity;
-  std::uint8_t attr;
-  hubproto::Value v;
-  std::uint32_t due_ms;
-};
-QueuedCmd g_q[8] = {};
-SemaphoreHandle_t g_q_mu = nullptr;
-
-std::uint32_t now_ms() { return static_cast<std::uint32_t>(esp_timer_get_time() / 1000); }
-
-void queue_command(std::uint16_t entity, std::uint8_t attr, const hubproto::Value& v) {
-  if (g_q_mu == nullptr) return;
-  xSemaphoreTake(g_q_mu, portMAX_DELAY);
-  QueuedCmd* slot = nullptr;
-  for (auto& q : g_q) {
-    if (q.used && q.entity == entity && q.attr == attr) {
-      slot = &q;
-      break;
-    }
-  }
-  if (slot == nullptr) {
-    for (auto& q : g_q) {
-      if (!q.used) {
-        slot = &q;
-        break;
-      }
-    }
-  }
-  if (slot != nullptr) {
-    slot->used = true;
-    slot->entity = entity;
-    slot->attr = attr;
-    slot->v = v;
-    slot->due_ms = now_ms() + kDebounceMs;
-  }
-  xSemaphoreGive(g_q_mu);
+void thread_forget_dataset() {
+  nvs_handle_t h;
+  if (nvs_open(kThreadNs, NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_erase_key(h, kThreadDsKey);
+  nvs_commit(h);
+  nvs_close(h);
 }
 
-void forward_task(void*) {
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(40));
+const char* role_name(otDeviceRole role) {
+  switch (role) {
+    case OT_DEVICE_ROLE_DISABLED: return "disabled";
+    case OT_DEVICE_ROLE_DETACHED: return "detached";
+    case OT_DEVICE_ROLE_CHILD: return "child";
+    case OT_DEVICE_ROLE_ROUTER: return "router";
+    case OT_DEVICE_ROLE_LEADER: return "leader";
+    default: return "unknown";
+  }
+}
+
+// How many devices are attached to us right now. A commissioned Matter device
+// shows up here as a child — that is the moment we know it joined our network.
+int thread_child_count() {
+  otInstance* ot = esp_openthread_get_instance();
+  if (ot == nullptr) return 0;
+  int count = 0;
+  for (std::uint16_t i = 0; i < 32; ++i) {
+    otChildInfo info{};
+    if (otThreadGetChildInfoByIndex(ot, i, &info) != OT_ERROR_NONE) break;
+    ++count;
+  }
+  return count;
+}
+
+// The children of our network, one line each.
+//
+// This is the diagnostic for the last step of the commissioning: the device
+// joins the Thread network as our child, and from then on the brain talks to
+// it through us. Two numbers matter here:
+//
+//   * the age (seconds since we last heard the child) — a child that stopped
+//     answering is a device that left or went to sleep for good;
+//   * the queued messages — packets that arrived for the child but could not
+//     be handed over yet (a sleepy end device only picks them up when it
+//     polls). A number that grows while the brain is sending means the traffic
+//     reaches us and the device is the one that is not taking it.
+//
+// The IPv6 addresses are printed too: the mesh-local address of the child is
+// the address the brain sends the CASE packets to, and if the two disagree
+// the packets go nowhere.
+void thread_print_children(otInstance* ot) {
+  for (std::uint16_t i = 0; i < 32; ++i) {
+    otChildInfo info{};
+    if (otThreadGetChildInfoByIndex(ot, i, &info) != OT_ERROR_NONE) break;
+    printf("  child %u: ieee %02x%02x%02x%02x%02x%02x%02x%02x rloc=%04x rssi=%d age=%us queued=%u%s\n",
+           static_cast<unsigned>(i),
+           info.mExtAddress.m8[0], info.mExtAddress.m8[1], info.mExtAddress.m8[2],
+           info.mExtAddress.m8[3], info.mExtAddress.m8[4], info.mExtAddress.m8[5],
+           info.mExtAddress.m8[6], info.mExtAddress.m8[7],
+           static_cast<unsigned>(info.mRloc16), static_cast<int>(info.mLastRssi),
+           static_cast<unsigned>(info.mAge),
+           static_cast<unsigned>(info.mQueuedMessageCnt),
+           info.mRxOnWhenIdle ? "" : " sleepy");
+    otChildIp6AddressIterator iter = OT_CHILD_IP6_ADDRESS_ITERATOR_INIT;
     for (;;) {
-      QueuedCmd out{};
-      bool have = false;
-      xSemaphoreTake(g_q_mu, portMAX_DELAY);
-      for (auto& q : g_q) {
-        if (q.used && static_cast<std::int32_t>(now_ms() - q.due_ms) >= 0) {
-          out = q;
-          q.used = false;
-          have = true;
-          break;
-        }
+      otIp6Address addr{};
+      if (otThreadGetChildNextIp6Address(ot, i, &iter, &addr) != OT_ERROR_NONE) break;
+      char text[48] = {0};
+      otIp6AddressToString(&addr, text, sizeof(text));
+      printf("    ipv6 %s\n", text);
+    }
+  }
+}
+
+// What the Border Router tells the LAN about, and what it sees coming in.
+//
+// The commissioning talks to the device over the mesh, so the traffic has to
+// take this way: the brain sends a packet to the device's mesh-local address,
+// the LAN routes it to us (the BR publishes the OMR prefix upstream, the LAN
+// learns it from our router advertisement), and we forward it into the mesh.
+//
+// Three numbers say where a packet got lost:
+//   * the mesh-local prefix — the prefix the devices carry their addresses in;
+//   * the OMR prefix — the route we publish upward, so the LAN hands us the
+//     traffic for the mesh; it has to be the same prefix as the one the
+//     devices use, or the LAN routes to us a prefix nobody is in;
+//   * the counters — unicast packets that came in from the backbone (the CASE
+//     packets of the brain) and the ones that went back out.
+// The two fields of the dataset that say which network this is: the extended
+// PAN id (the identity of the network itself) and the mesh-local prefix (the
+// prefix the devices carry their addresses in — it is a random ULA of its own,
+// independent of the extended PAN id).
+void thread_print_dataset_ids(const otOperationalDatasetTlvs& tlvs) {
+  constexpr std::uint8_t kTlvExtPanId = 0x02;
+  constexpr std::uint8_t kTlvMeshLocalPrefix = 0x07;
+  std::uint8_t i = 0;
+  while (i + 2 <= tlvs.mLength) {
+    const std::uint8_t type = tlvs.mTlvs[i];
+    const std::uint8_t len = tlvs.mTlvs[i + 1];
+    const std::uint8_t* value = &tlvs.mTlvs[i + 2];
+    if (i + 2 + len > tlvs.mLength) break;
+    if (type == kTlvExtPanId && len == 8) {
+      printf("ext pan id:         %02x%02x%02x%02x%02x%02x%02x%02x\n",
+             value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]);
+    } else if (type == kTlvMeshLocalPrefix && len == 8) {
+      printf("dataset ml prefix:  %02x%02x%02x%02x:%02x%02x:%02x%02x::/64\n",
+             value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]);
+    }
+    i = static_cast<std::uint8_t>(i + 2 + len);
+  }
+}
+
+// The identity of the network, as hex: the extended PAN id out of the dataset.
+// It belongs in the boot log, because a change from boot to boot means the
+// network was re-formed — and every device commissioned into the old one is
+// orphaned for good (it stays in a network that no longer exists, and the
+// brain's route to the old OMR prefix points nowhere).
+bool thread_ext_pan_id(const otOperationalDatasetTlvs& tlvs, char* out, std::size_t len,
+                       std::uint8_t* channel = nullptr) {
+  if (out == nullptr || len < 17) return false;
+  out[0] = '\0';
+  constexpr std::uint8_t kTlvExtPanId = 0x02;
+  constexpr std::uint8_t kTlvChannel = 0x00;
+  bool found = false;
+  std::uint8_t i = 0;
+  while (i + 2 <= tlvs.mLength) {
+    const std::uint8_t type = tlvs.mTlvs[i];
+    const std::uint8_t vlen = tlvs.mTlvs[i + 1];
+    if (i + 2 + vlen > tlvs.mLength) break;
+    if (type == kTlvExtPanId && vlen == 8) {
+      static constexpr char kHex[] = "0123456789abcdef";
+      const std::uint8_t* value = &tlvs.mTlvs[i + 2];
+      for (std::size_t k = 0; k < 8; ++k) {
+        out[k * 2] = kHex[value[k] >> 4];
+        out[k * 2 + 1] = kHex[value[k] & 0x0f];
       }
-      xSemaphoreGive(g_q_mu);
-      if (!have) break;
-      send_command(out.entity, out.attr, out.v);
+      out[16] = '\0';
+      found = true;
     }
+    // The channel TLV holds three bytes: the channel page (one byte, always 0)
+    // and the channel number (two bytes, big endian) — reading the page gives
+    // 0 for every network, and a network on channel 0 does not exist.
+    if (type == kTlvChannel && vlen >= 3 && channel != nullptr) {
+      *channel = static_cast<std::uint8_t>((tlvs.mTlvs[i + 3] << 8) | tlvs.mTlvs[i + 4]);
+    }
+    i = static_cast<std::uint8_t>(i + 2 + vlen);
+  }
+  return found;
+}
+
+// Every TLV of the dataset, one line each. We hand these bytes to the device
+// during the commissioning (the brain passes them to CHIP verbatim), so what is
+// (and is not) in here decides what the device joins: the mesh-local prefix it
+// gets, and whether the partition id survives a reboot of this chip.
+void thread_print_dataset_tlvs(const otOperationalDatasetTlvs& tlvs) {
+  // The MeshCoP TLV types of an operational dataset (openthread/dataset.h).
+  const char* kName[] = {"channel",           "pan id",        "ext pan id",
+                         "network name",      "pskc",          "master key",
+                         "key sequence",      "mesh local prefix", "steering data",
+                         "border agent rloc", "commissioner id", "commission session id",
+                         "security policy",   "active timestamp"};
+  std::uint8_t i = 0;
+  while (i + 2 <= tlvs.mLength) {
+    const std::uint8_t type = tlvs.mTlvs[i];
+    const std::uint8_t len = tlvs.mTlvs[i + 1];
+    const std::uint8_t* value = &tlvs.mTlvs[i + 2];
+    if (i + 2 + len > tlvs.mLength) {
+      printf("  tlv 0x%02x: truncated\n", type);
+      break;
+    }
+    printf("  tlv 0x%02x (%-18s) %u bytes:", type,
+           type < sizeof(kName) / sizeof(kName[0]) ? kName[type] : "?", len);
+    for (std::uint8_t k = 0; k < len; ++k) printf(" %02x", value[k]);
+    printf("\n");
+    i = static_cast<std::uint8_t>(i + 2 + len);
   }
 }
 
-// ---- endpoint construction ----------------------------------------------------
-
-esp_matter_attr_val_t nullable_u8(std::uint8_t v) {
-  esp_matter_attr_val_t a{};
-  a.type = ESP_MATTER_VAL_TYPE_NULLABLE_UINT8;
-  a.val.u8 = v;
-  return a;
-}
-esp_matter_attr_val_t nullable_i16(std::int16_t v) {
-  esp_matter_attr_val_t a{};
-  a.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
-  a.val.i16 = v;
-  return a;
-}
-esp_matter_attr_val_t nullable_u16(std::uint16_t v) {
-  esp_matter_attr_val_t a{};
-  a.type = ESP_MATTER_VAL_TYPE_NULLABLE_UINT16;
-  a.val.u16 = v;
-  return a;
-}
-
-// esp-matter defaults StartUpOnOff to Off, so every boot of this chip forced the bridged
-// endpoint Off and our PRE_UPDATE hook forwarded that as COMMAND on_off=0, switching the real
-// device off. The hub owns the state (Reconciler): null = "keep the previous value", i.e. no
-// startup action. The same goes for the start-up level and colour temperature.
-template <typename Cfg>
-void keep_on_off(Cfg& c) {
-  c.on_off_lighting.start_up_on_off = nullable<uint8_t>();
-}
-
-void add_extras(esp_matter::endpoint_t* ep, std::uint16_t extras) {
-  const unsigned epid = esp_matter::endpoint::get_id(ep);
-  if (extras & M::kXTemperature) {
-    cluster::temperature_measurement::config_t c;
-    cluster::temperature_measurement::create(ep, &c, CLUSTER_FLAG_SERVER);
+void thread_print_br(otInstance* ot) {
+  char text[48] = {0};
+  const otMeshLocalPrefix* mlp = otThreadGetMeshLocalPrefix(ot);
+  if (mlp != nullptr) {
+    // The mesh-local prefix comes back as the eight bytes of a network prefix;
+    // the printer wants a full prefix with a length.
+    otIp6Prefix ml{};
+    ml.mPrefix.mFields.mComponents.mNetworkPrefix = *mlp;
+    ml.mLength = 64;
+    otIp6PrefixToString(&ml, text, sizeof(text));
+    printf("mesh-local prefix: %s\n", text);
+  } else {
+    printf("mesh-local prefix: none\n");
   }
-  if (extras & M::kXHumidity) {
-    cluster::relative_humidity_measurement::config_t c;
-    cluster::relative_humidity_measurement::create(ep, &c, CLUSTER_FLAG_SERVER);
+  otIp6Prefix omr{};
+  const bool have_omr = otBorderRoutingGetOmrPrefix(ot, &omr) == OT_ERROR_NONE;
+  if (have_omr) {
+    otIp6PrefixToString(&omr, text, sizeof(text));
+    printf("omr prefix:        %s\n", text);
+    // The OMR prefix is only advertised upstream (as a route) when the leader's
+    // network data carries it. Without it the LAN has no way into the mesh.
+    printf("omr in netdata:    %s\n",
+           otNetDataContainsOmrPrefix(ot, &omr) ? "yes" : "NO (the LAN cannot route into the mesh)");
+  } else {
+    printf("omr prefix:        none\n");
   }
-  if (extras & M::kXIlluminance) {
-    cluster::illuminance_measurement::config_t c;
-    cluster::illuminance_measurement::create(ep, &c, CLUSTER_FLAG_SERVER);
+  // The on-link prefix is what the Border Router offers the hosts on the
+  // backbone (the brain): they take an address out of it, and the BR maps it
+  // into the mesh. It is the address the brain's packets to the mesh come from.
+  otIp6Prefix onlink{};
+  if (otBorderRoutingGetOnLinkPrefix(ot, &onlink) == OT_ERROR_NONE) {
+    otIp6PrefixToString(&onlink, text, sizeof(text));
+    printf("on-link prefix:    %s\n", text);
+  } else {
+    printf("on-link prefix:    none\n");
   }
-  if (extras & M::kXBattery) {
-    cluster::power_source::config_t c;
-    c.status = 1;  // Active
-    c.feature_flags = cluster::power_source::feature::battery::get_id();
-    c.features.battery.bat_charge_level = 0;  // OK
-    c.features.battery.bat_replacement_needed = false;
-    c.features.battery.bat_replaceability = 1;  // not replaceable: we cannot tell
-    cluster_t* ps = cluster::power_source::create(ep, &c, CLUSTER_FLAG_SERVER);
-    if (ps) {
-      cluster::power_source::attribute::create_bat_percent_remaining(
-          ps, nullable<uint8_t>(), nullable<uint8_t>(0), nullable<uint8_t>(200));
-    }
+  // Every prefix the mesh publishes: the routes the leader knows about.
+  otBorderRouterConfig entry{};
+  otNetworkDataIterator iterator = OT_NETWORK_DATA_ITERATOR_INIT;
+  int n = 0;
+  while (otNetDataGetNextOnMeshPrefix(ot, &iterator, &entry) == OT_ERROR_NONE) {
+    otIp6PrefixToString(&entry.mPrefix, text, sizeof(text));
+    printf("  on-mesh prefix:   %s (pref=%d slaac=%d on-mesh=%d)\n", text,
+           entry.mPreference, entry.mSlaac ? 1 : 0, entry.mOnMesh ? 1 : 0);
+    if (++n > 16) break;
   }
-  if (extras & M::kXPower) {
-    esp_matter::cluster_t* epm = esp_matter::cluster::create(ep, kEpmClusterId, CLUSTER_FLAG_SERVER);
-    if (epm) {
-      // PowerMode: AC = 0 (mandatory).
-      esp_matter_attr_val_t pm{};
-      pm.type = ESP_MATTER_VAL_TYPE_ENUM8;
-      pm.val.u8 = 0;
-      esp_matter::attribute::create(epm, kEpmAttrPowerMode, ATTRIBUTE_FLAG_NONE, pm);
-      // ActivePower: nullable int64, milliwatts.
-      esp_matter_attr_val_t ap{};
-      ap.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT64;
-      ap.val.i64 = 0;
-      esp_matter::attribute::create(epm, kEpmAttrActivePower, ATTRIBUTE_FLAG_NULLABLE, ap);
-      ESP_LOGI(kTag, "added ElectricalPowerMeasurement cluster to ep %u", epid);
+  if (n == 0) printf("  on-mesh prefix:   none\n");
+  // The "ot" netif is the door into the mesh: lwIP forwards a backbone packet
+  // into it, and it can only resolve a next hop for a mesh address if the
+  // netif carries an address of the prefix the mesh lives in. That address is
+  // the one the SLAAC module forms out of the "slaac" on-mesh prefix above
+  // (main/esp_ot_custom_config.h turns the module on) — without it lwIP has
+  // no route into the mesh at all and drops the packet with ERR_RTE.
+  printf("ot slaac:         %s\n", otIp6IsSlaacEnabled(ot) ? "on" : "off");
+  esp_netif_t* ot_netif = esp_openthread_get_netif();
+  if (ot_netif != nullptr) {
+    esp_ip6_addr_t addrs[8]{};
+    const int count = esp_netif_get_all_ip6(ot_netif, addrs);
+    printf("ot netif:         %d address(es)\n", count);
+    for (int i = 0; i < count && i < 8; i++) {
+      otIp6Address address{};
+      std::memcpy(address.mFields.m8, addrs[i].addr, sizeof(address.mFields.m8));
+      char line[48] = {0};
+      otIp6AddressToString(&address, line, sizeof(line));
+      const bool in_omr =
+          have_omr && std::memcmp(address.mFields.m8, omr.mPrefix.mFields.m8, 8) == 0;
+      printf("  %s%s\n", line,
+             in_omr ? "   (in the omr prefix: lwIP can route into the mesh)" : "");
     }
+  } else {
+    printf("ot netif:         none\n");
   }
-  if (extras & M::kXEnergy) {
-    // EEM cluster: ImportedEnergy + CumulativeEnergy features.
-    // create() internally adds CumulativeEnergyImported attribute (managed).
-    cluster::electrical_energy_measurement::config_t eem_cfg;
-    eem_cfg.feature_flags =
-        cluster::electrical_energy_measurement::feature::imported_energy::get_id() |
-        cluster::electrical_energy_measurement::feature::cumulative_energy::get_id();
-    cluster::electrical_energy_measurement::create(ep, &eem_cfg, CLUSTER_FLAG_SERVER);
-    ESP_LOGI(kTag, "added ElectricalEnergyMeasurement cluster to ep %u", epid);
-  }
-}
-
-// Bridged endpoint creation callback: populate the newly created endpoint
-// (either freshly created via app_bridge_create_new_device, or restored from
-// NVS at boot) with the cluster set for its plan. `packed` is core::matter::Plan::packed().
-esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep, std::uint32_t packed,
-                                  void* /*priv*/) {
-  const std::uint16_t kind = M::kind_of(packed);
-  const std::uint16_t extras = M::extras_of(packed);
-  esp_err_t err = ESP_ERR_INVALID_ARG;
-  switch (kind) {
-    case M::kOnOffLight: {
-      on_off_light::config_t c;
-      keep_on_off(c);
-      err = on_off_light::add(ep, &c);
-      break;
-    }
-    case M::kDimmableLight: {
-      dimmable_light::config_t c;
-      keep_on_off(c);
-      c.level_control_lighting.start_up_current_level = nullable<uint8_t>();
-      err = dimmable_light::add(ep, &c);
-      break;
-    }
-    case M::kColorTemperatureLight: {
-      color_temperature_light::config_t c;
-      keep_on_off(c);
-      c.level_control_lighting.start_up_current_level = nullable<uint8_t>();
-      c.color_control_color_temperature.start_up_color_temperature_mireds = nullable<uint16_t>();
-      err = color_temperature_light::add(ep, &c);
-      break;
-    }
-    case M::kExtendedColorLight: {
-      extended_color_light::config_t c;
-      keep_on_off(c);
-      c.level_control_lighting.start_up_current_level = nullable<uint8_t>();
-      c.color_control_color_temperature.start_up_color_temperature_mireds = nullable<uint16_t>();
-      err = extended_color_light::add(ep, &c);
-      break;
-    }
-    case M::kTemperatureSensor: {
-      temperature_sensor::config_t c;
-      err = temperature_sensor::add(ep, &c);
-      break;
-    }
-    case M::kHumiditySensor: {
-      humidity_sensor::config_t c;
-      err = humidity_sensor::add(ep, &c);
-      break;
-    }
-    case M::kLightSensor: {
-      light_sensor::config_t c;
-      err = light_sensor::add(ep, &c);
-      break;
-    }
-    case M::kOccupancySensor: {
-      occupancy_sensor::config_t c;
-      // PIR sensor: type 0 = PIR, bitmap bit0 = PIR.
-      c.occupancy_sensing.occupancy_sensor_type = 0;
-      c.occupancy_sensing.occupancy_sensor_type_bitmap = 1;
-      // The cluster refuses to be created without at least one sensing feature (it aborts).
-      c.occupancy_sensing.feature_flags = cluster::occupancy_sensing::feature::passive_infrared::get_id();
-      err = occupancy_sensor::add(ep, &c);
-      break;
-    }
-    case M::kContactSensor: {
-      contact_sensor::config_t c;
-      c.boolean_state.state_value = true;  // closed until told otherwise
-      err = contact_sensor::add(ep, &c);
-      break;
-    }
-    case M::kThermostat: {
-      thermostat::config_t c;
-      c.thermostat.control_sequence_of_operation = 2;  // heating only
-      c.thermostat.system_mode = 4;                    // heat
-      c.thermostat.feature_flags = cluster::thermostat::feature::heating::get_id();
-      err = thermostat::add(ep, &c);
-      break;
-    }
-    case M::kGenericSwitch: {
-      generic_switch::config_t c;
-      c.switch_cluster.number_of_positions = 2;
-      c.switch_cluster.feature_flags =
-          cluster::switch_cluster::feature::momentary_switch::get_id() |
-          cluster::switch_cluster::feature::momentary_switch_release::get_id() |
-          cluster::switch_cluster::feature::momentary_switch_long_press::get_id();
-      err = generic_switch::add(ep, &c);
-      break;
-    }
-    default:
-      ESP_LOGE(kTag, "bridged endpoint: unknown kind 0x%04x", static_cast<unsigned>(kind));
-      return ESP_ERR_INVALID_ARG;
-  }
-  if (err != ESP_OK) return err;
-  add_extras(ep, extras);
-  return ESP_OK;
-}
-
-app_bridged_device_t* alloc_bridged(node_t* /*node*/, std::uint16_t /*endpoint*/) {
-  return chip::Platform::New<keystone::BridgedDevice>();
-}
-void free_bridged(app_bridged_device_t* d) {
-  chip::Platform::Delete(static_cast<keystone::BridgedDevice*>(d));
-}
-
-void forget_endpoint_state(std::uint16_t ep) {
-  for (auto& s : g_mirror_slots) {
-    if (s.used && s.ep == ep) s.used = false;
+  const otBorderRoutingCounters* c = otIp6GetBorderRoutingCounters(ot);
+  if (c != nullptr) {
+    printf("br counters: in_unicast=%u pkt/%u B  out_unicast=%u pkt/%u B  "
+           "in_mcast=%u  out_mcast=%u\n",
+           static_cast<unsigned>(c->mInboundUnicast.mPackets),
+           static_cast<unsigned>(c->mInboundUnicast.mBytes),
+           static_cast<unsigned>(c->mOutboundUnicast.mPackets),
+           static_cast<unsigned>(c->mOutboundUnicast.mBytes),
+           static_cast<unsigned>(c->mInboundMulticast.mPackets),
+           static_cast<unsigned>(c->mOutboundMulticast.mPackets));
+    printf("br ra: tx_ok=%u tx_fail=%u  rs: rx=%u tx_ok=%u tx_fail=%u  ra_rx=%u\n",
+           static_cast<unsigned>(c->mRaTxSuccess), static_cast<unsigned>(c->mRaTxFailure),
+           static_cast<unsigned>(c->mRsRx), static_cast<unsigned>(c->mRsTxSuccess),
+           static_cast<unsigned>(c->mRsTxFailure), static_cast<unsigned>(c->mRaRx));
   }
 }
 
-void remove_endpoint(std::uint16_t ep, app_bridged_device_t* bd, const char* why,
-                     std::uint16_t entity_id) {
-  // The Matter stack reads endpoints from its own task: take its lock (recursive, so safe if already held).
-  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-  const esp_err_t err = app_bridge_remove_device(bd);
-  forget_endpoint_state(ep);  // unknown again
-  ESP_LOGI(kTag, "%s entity 0x%04x: removed Matter endpoint %u (%s)", why, entity_id,
-           static_cast<unsigned>(ep), err == ESP_OK ? "ok" : esp_err_to_name(err));
-}
-
-// Diagnostics: what the bridge component believes it holds (its table is persisted in NVS).
-void log_bridge_table() {
-  std::uint16_t eps[MAX_BRIDGED_DEVICE_COUNT]{};
-  esp_matter_bridge::get_bridged_endpoint_ids(eps);
-  int used = 0;
-  for (int i = 0; i < MAX_BRIDGED_DEVICE_COUNT; ++i) {
-    if (eps[i] == chip::kInvalidEndpointId || eps[i] == 0) continue;
-    ++used;
-    auto* bd = static_cast<keystone::BridgedDevice*>(app_bridge_get_device(eps[i]));
-    ESP_LOGI(kTag, "  bridge slot %d: endpoint %u -> %s entity 0x%04x", i, static_cast<unsigned>(eps[i]),
-             bd ? "device" : "NO DEVICE", bd ? static_cast<unsigned>(bd->addr().entity_id) : 0u);
-  }
-  ESP_LOGI(kTag, "bridge table: %d of %d slots used", used, MAX_BRIDGED_DEVICE_COUNT);
-}
-
-// Look up (or create) the Matter endpoint that mirrors a given hubproto entity.
-std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id,
-                                      const M::Plan& plan) {
-  if (plan.kind == M::kNone) return chip::kInvalidEndpointId;
-  keystone::BridgedAddr addr{chip_id, entity_id};
-  std::uint16_t ep = app_bridge_get_endpoint(&addr);
-  if (ep != chip::kInvalidEndpointId) {
-    app_bridged_device_t* old = app_bridge_get_device(ep);
-    const std::uint32_t stored = old ? old->get_matter_device()->persistent_info.device_type_id : 0;
-    if (old == nullptr || M::stored_matches(stored, plan)) return ep;
-    // The entity changed shape (a lamp's colour modes were read, a sensor gained a battery...): the
-    // cluster set of an endpoint cannot change once created, so replace it. Controllers see a
-    // new accessory.
-    ESP_LOGW(kTag, "entity 0x%04x changed shape (0x%08lx -> 0x%08lx): re-creating its endpoint",
-             entity_id, static_cast<unsigned long>(stored),
-             static_cast<unsigned long>(plan.packed()));
-    remove_endpoint(ep, old, "reshape", entity_id);
-  }
-  // The last argument is the device's private data, not an out-parameter: the new endpoint is
-  // found again through its address.
-  g_building = true;
-  const esp_err_t err = app_bridge_create_new_device(g_node, g_aggregator_endpoint_id,
-                                                     plan.packed(), &addr, nullptr);
-  g_building = false;
-  const std::uint16_t new_ep = err == ESP_OK ? app_bridge_get_endpoint(&addr) : chip::kInvalidEndpointId;
-  if (new_ep == chip::kInvalidEndpointId) {
-    ESP_LOGE(kTag, "app_bridge_create_new_device failed for entity 0x%04x: %d", entity_id, err);
-    log_bridge_table();
-    return chip::kInvalidEndpointId;
-  }
-  forget_endpoint_state(new_ep);
-  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u (kind 0x%04x, extras 0x%02x)",
-           entity_id, chip_id, static_cast<unsigned>(new_ep), static_cast<unsigned>(plan.kind),
-           static_cast<unsigned>(plan.extras));
-  return new_ep;
-}
-
-// The entity is gone from the hub (a device was unpaired): remove the Matter endpoint that mirrored it, so
-// controllers (Apple Home...) stop listing a dead accessory. Also forgets it in NVS (app_bridge_remove_device).
-void remove_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id) {
-  keystone::BridgedAddr addr{chip_id, entity_id};
-  const std::uint16_t ep = app_bridge_get_endpoint(&addr);
-  if (ep == chip::kInvalidEndpointId) {
-    ESP_LOGI(kTag, "undeclare entity 0x%04x: no bridged endpoint for it", entity_id);
+void thread_print_status(const char* why) {
+  otInstance* ot = esp_openthread_get_instance();
+  if (ot == nullptr) {
+    ESP_LOGI(kTag, "Thread (%s): no OpenThread instance", why);
     return;
   }
-  app_bridged_device_t* bd = app_bridge_get_device(ep);
-  if (bd == nullptr) return;
-  remove_endpoint(ep, bd, "undeclare", entity_id);
+  const otDeviceRole role = otThreadGetDeviceRole(ot);
+  const char* name = otThreadGetNetworkName(ot);
+  ESP_LOGI(kTag, "Thread (%s): role=%s network=%s partition=0x%06x children=%d",
+           why, role_name(role), name ? name : "?",
+           static_cast<unsigned>(otThreadGetPartitionId(ot)), thread_child_count());
 }
 
-// ---- STATE from the brain -> the mirrored Matter attribute ---------------------------------
+// The backbone services, in two parts: mDNS first (no OpenThread lock), then
+// the Border Router (an OpenThread call, so it takes the lock for its own
+// duration).
+void thread_bring_up_mdns();
+void thread_bring_up_border_router();
 
-void emit_button_event(std::uint16_t ep, A::ButtonEvent ev) {
-  namespace sw = cluster::switch_cluster::event;
-  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-  switch (ev) {
-    case A::ButtonEvent::Idle:
+// Bring the network up: restore the dataset we know (or form a new one),
+// enable the Thread role and lead the network so that a device we commission
+// has a router in range to attach to.
+void thread_bring_up() {
+  otInstance* ot = esp_openthread_get_instance();
+  if (ot == nullptr) {
+    ESP_LOGE(kTag, "no OpenThread instance: the brain cannot borrow a Thread network");
+    return;
+  }
+
+  otOperationalDatasetTlvs tlvs{};
+  bool have_network = false;
+  if (otDatasetGetActiveTlvs(ot, &tlvs) == OT_ERROR_NONE && tlvs.mLength > 0) {
+    ESP_LOGI(kTag, "an active Thread dataset is already there (%u bytes)", tlvs.mLength);
+    // Keep our own copy in step with the stack's: it is the one that survives
+    // a crash-loop wipe (see app_main) and the one we hand to the brain.
+    thread_save_dataset(tlvs);
+    have_network = true;
+  } else if (thread_load_dataset(tlvs)) {
+    if (otDatasetSetActiveTlvs(ot, &tlvs) != OT_ERROR_NONE) {
+      ESP_LOGE(kTag, "could not restore our Thread network");
       return;
-    case A::ButtonEvent::Hold:
-      sw::send_initial_press(ep, 1);
-      sw::send_long_press(ep, 1);
-      break;
-    case A::ButtonEvent::Release:
-      sw::send_long_release(ep, 0);
-      break;
-    default:  // press, double, on, off, up, down: a Matter switch only knows "pressed"
-      sw::send_initial_press(ep, 1);
-      sw::send_short_release(ep, 0);
-      break;
+    }
+    ESP_LOGI(kTag, "restored our Thread network from NVS (%u bytes)", tlvs.mLength);
+    have_network = true;
   }
-  ESP_LOGI(kTag, "STATE -> Matter ep=%u button event %u", static_cast<unsigned>(ep),
-           static_cast<unsigned>(ev));
-}
 
-void update_attr(std::uint16_t ep, std::uint32_t cluster_id, std::uint32_t attr_id,
-                 esp_matter_attr_val_t v, const char* what, long shown) {
-  // attribute::update touches the Matter data model — must hold the stack lock
-  // when called from a non-Matter task (e.g. the UART RX task), otherwise the
-  // commissioning PASE handshake can corrupt state and crash.
-  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-  const esp_err_t err = attribute::update(ep, cluster_id, attr_id, &v);
-  ESP_LOGI(kTag, "STATE -> Matter ep=%u %s=%ld%s", static_cast<unsigned>(ep), what, shown,
-           err == ESP_OK ? "" : " (update failed)");
-}
-
-void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& v) {
-  Mirror dummy;
-  Mirror* mp = mirror_for(ep);
-  Mirror& m = mp != nullptr ? *mp : dummy;
-  const bool tracked = mp != nullptr;
-  // Turning a lamp on makes the Matter stack move its level on its own: open the quiet window
-  // on an "on" only (level confirmations of a slider drag must not close the door on the next step).
-  if (tracked && attr_id == A::kOnOff && v.as_bool()) m.quiet_until_ms = now_ms() + kQuietAfterMirrorMs;
-  switch (attr_id) {
-    case A::kOnOff: {
-      if (tracked) m.onoff = v.as_bool() ? 1 : 0;
-      update_attr(ep, OnOff::Id, OnOff::Attributes::OnOff::Id, esp_matter_bool(v.as_bool()),
-                  "OnOff", v.as_bool() ? 1 : 0);
-      break;
-    }
-    case A::kBrightness: {
-      // Matter CurrentLevel is 1..254 (0 would be out of range).
-      const std::uint8_t lvl = v.as_u8() == 0 ? 1 : v.as_u8();
-      if (tracked) m.level = lvl;
-      update_attr(ep, LevelControl::Id, LevelControl::Attributes::CurrentLevel::Id, nullable_u8(lvl),
-                  "CurrentLevel", lvl);
-      break;
-    }
-    case A::kColorTemp: {
-      if (tracked) m.ct = v.as_u16();
-      update_attr(ep, ColorControl::Id, ColorControl::Attributes::ColorTemperatureMireds::Id,
-                  esp_matter_uint16(v.as_u16()), "ColorTemperatureMireds", v.as_u16());
-      break;
-    }
-    case A::kColorXy: {
-      std::uint16_t x = 0, y = 0;
-      v.as_xy(x, y);
-      if (tracked) {
-        m.x = x;
-        m.y = y;
-      }
-      update_attr(ep, ColorControl::Id, ColorControl::Attributes::CurrentX::Id, esp_matter_uint16(x),
-                  "CurrentX", x);
-      update_attr(ep, ColorControl::Id, ColorControl::Attributes::CurrentY::Id, esp_matter_uint16(y),
-                  "CurrentY", y);
-      break;
-    }
-    case A::kTemperature: {
-      const std::int16_t centi = U::temp_to_centi(v.as_i16());
-      // A thermostat carries its temperature in its own cluster; everything else in
-      // TemperatureMeasurement. Try the thermostat first.
-      if (attribute::get(ep, Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id) != nullptr) {
-        update_attr(ep, Thermostat::Id, Thermostat::Attributes::LocalTemperature::Id,
-                    nullable_i16(centi), "LocalTemperature", centi);
+  if (have_network) {
+    // The channel is part of the dataset, and it has to be one the Wi-Fi
+    // backbone can live with: the C6 has ONE radio for both, and the home
+    // network sits on channel 6 (2417-2457 MHz). A Thread network on channel
+    // 15 (2425 MHz) lands in the middle of that band — the two radios starve
+    // each other and the Wi-Fi stops even finding the AP. Channel 26 (2480 MHz)
+    // is clear of it. If the network we have is on another channel, we move it
+    // (the PAN id and the keys stay, so the devices we know keep working).
+    otOperationalDataset parsed{};
+    if (otDatasetParseTlvs(&tlvs, &parsed) != OT_ERROR_NONE) {
+      ESP_LOGW(kTag, "could not read the channel out of the dataset");
+    } else if (parsed.mChannel != kThreadChannel) {
+      ESP_LOGW(kTag, "the network is on channel %u, moving it to %u",
+               static_cast<unsigned>(parsed.mChannel),
+               static_cast<unsigned>(kThreadChannel));
+      parsed.mChannel = kThreadChannel;
+      parsed.mComponents.mIsChannelPresent = true;
+      if (otDatasetSetActive(ot, &parsed) != OT_ERROR_NONE) {
+        ESP_LOGE(kTag, "could not move the network to channel %u",
+                 static_cast<unsigned>(kThreadChannel));
       } else {
-        update_attr(ep, TemperatureMeasurement::Id, TemperatureMeasurement::Attributes::MeasuredValue::Id,
-                    nullable_i16(centi), "Temperature", centi);
+        otOperationalDatasetTlvs moved{};
+        if (otDatasetGetActiveTlvs(ot, &moved) == OT_ERROR_NONE) {
+          tlvs = moved;  // the log below has to show the network as it is now
+          thread_save_dataset(moved);
+        }
       }
-      break;
     }
-    case A::kHumidity: {
-      const std::uint16_t centi = U::humidity_to_centi(v.as_u16());
-      update_attr(ep, RelativeHumidityMeasurement::Id,
-                  RelativeHumidityMeasurement::Attributes::MeasuredValue::Id, nullable_u16(centi),
-                  "Humidity", centi);
-      break;
+  } else {
+    // A network of our own: a random PAN id, extended PAN id, network key and
+    // PSKc (otDatasetCreateNewNetwork fills those in), our name and channel.
+    otOperationalDataset ds{};
+    if (otDatasetCreateNewNetwork(ot, &ds) != OT_ERROR_NONE) {
+      ESP_LOGE(kTag, "could not create a Thread network");
+      return;
     }
-    case A::kIlluminance: {
-      const std::uint16_t m16 = U::lux_to_measured(v.as_u16());
-      update_attr(ep, IlluminanceMeasurement::Id, IlluminanceMeasurement::Attributes::MeasuredValue::Id,
-                  nullable_u16(m16), "Illuminance", m16);
-      break;
+    ds.mChannel = kThreadChannel;
+    ds.mComponents.mIsChannelPresent = true;
+    std::memset(ds.mNetworkName.m8, 0, sizeof(ds.mNetworkName.m8));
+    std::memcpy(ds.mNetworkName.m8, kThreadNetName, std::strlen(kThreadNetName));
+    ds.mComponents.mIsNetworkNamePresent = true;
+    if (otDatasetSetActive(ot, &ds) != OT_ERROR_NONE) {
+      ESP_LOGE(kTag, "could not set the new Thread dataset");
+      return;
     }
-    case A::kBattery: {
-      const std::uint8_t half = U::battery_to_half_percent(v.as_u8());
-      update_attr(ep, PowerSource::Id, PowerSource::Attributes::BatPercentRemaining::Id,
-                  nullable_u8(half), "BatPercentRemaining", half);
-      // 0 ok, 1 warning (<20 %), 2 critical (<10 %).
-      const std::uint8_t level = v.as_u8() < 10 ? 2 : v.as_u8() < 20 ? 1 : 0;
-      update_attr(ep, PowerSource::Id, PowerSource::Attributes::BatChargeLevel::Id,
-                  esp_matter_enum8(level), "BatChargeLevel", level);
-      break;
+    if (otDatasetGetActiveTlvs(ot, &tlvs) != OT_ERROR_NONE || tlvs.mLength == 0) {
+      ESP_LOGE(kTag, "the new Thread dataset did not come back");
+      return;
     }
-    case A::kSetpoint: {
-      if (tracked) m.setpoint = v.as_i16();
-      const std::int16_t centi = U::temp_to_centi(v.as_i16());
-      update_attr(ep, Thermostat::Id, Thermostat::Attributes::OccupiedHeatingSetpoint::Id,
-                  esp_matter_int16(centi), "OccupiedHeatingSetpoint", centi);
-      break;
+    thread_save_dataset(tlvs);
+    ESP_LOGI(kTag, "formed a Thread network '%s' (channel %u, %u bytes of dataset)",
+             kThreadNetName, static_cast<unsigned>(kThreadChannel),
+             static_cast<unsigned>(tlvs.mLength));
+  }
+
+  if (otIp6SetEnabled(ot, true) != OT_ERROR_NONE) {
+    ESP_LOGE(kTag, "could not enable IPv6");
+    return;
+  }
+  // The identity of the network, in the boot log. If this line differs from the
+  // one of the previous boot, the network was re-formed in between — and the
+  // devices commissioned into the old one are gone for good.
+  {
+    char id[17] = {0};
+    std::uint8_t channel = 0;
+    if (thread_ext_pan_id(tlvs, id, sizeof(id), &channel)) {
+      ESP_LOGI(kTag, "the Thread network is %s (channel %u, %u bytes of dataset)", id,
+               static_cast<unsigned>(channel), static_cast<unsigned>(tlvs.mLength));
     }
-    case A::kMode: {
-      if (!U::mode_valid(v.as_enum8())) break;
-      if (tracked) m.mode = v.as_enum8();
-      update_attr(ep, Thermostat::Id, Thermostat::Attributes::SystemMode::Id,
-                  esp_matter_enum8(v.as_enum8()), "SystemMode", v.as_enum8());
-      break;
-    }
-    // BooleanState and OccupancySensing are code-driven clusters: their values are not plain
-    // attributes (attribute::update is refused), the cluster object has to be told.
-    case A::kOccupied: {
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
-          chip::app::ConcreteClusterPath(ep, OccupancySensing::Id));
-      if (sci != nullptr) {
-        static_cast<chip::app::Clusters::OccupancySensingCluster*>(sci)->SetOccupancy(v.as_bool());
-      }
-      ESP_LOGI(kTag, "STATE -> Matter ep=%u Occupancy=%d%s", static_cast<unsigned>(ep),
-               v.as_bool() ? 1 : 0, sci ? "" : " (no cluster)");
-      break;
-    }
-    case A::kContact: {
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
-          chip::app::ConcreteClusterPath(ep, BooleanState::Id));
-      if (sci != nullptr) {
-        static_cast<chip::app::Clusters::BooleanStateCluster*>(sci)->SetStateValue(v.as_bool());
-      }
-      ESP_LOGI(kTag, "STATE -> Matter ep=%u StateValue=%d%s", static_cast<unsigned>(ep),
-               v.as_bool() ? 1 : 0, sci ? "" : " (no cluster)");
-      break;
-    }
-    case A::kEvent:
-      emit_button_event(ep, static_cast<A::ButtonEvent>(v.as_enum8()));
-      break;
-    case A::kPowerW: {
-      const std::int64_t mw = static_cast<std::int64_t>(v.as_u16()) * 1000;
-      esp_matter_attr_val_t mv{};
-      mv.type = ESP_MATTER_VAL_TYPE_NULLABLE_INT64;
-      mv.val.i64 = mw;
-      {
-        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-        attribute::update(ep, kEpmClusterId, kEpmAttrActivePower, &mv);
-      }
-      ESP_LOGI(kTag, "STATE -> Matter ep=%u ActivePower=%lld mW", static_cast<unsigned>(ep),
-               static_cast<long long>(mw));
-      break;
-    }
-    case A::kEnergyWh: {
-      const std::uint32_t wh = v.as_u32();
-      using EMS = ElectricalEnergyMeasurement::Structs::EnergyMeasurementStruct::Type;
-      using NEMS = chip::app::DataModel::Nullable<EMS>;
-      EMS imported;
-      imported.energy = static_cast<std::int64_t>(wh) * 1000LL;  // Wh -> mWh
-      NEMS ni, ne;
-      ni.SetNonNull(imported);
-      // ne stays null (no export measurement)
-      // The cluster registry is touched from here: without the stack lock the SDK aborts
-      // ("Chip stack locking error ... Code is unsafe/racy") on the first energy_wh, e.g. 0.
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      ElectricalEnergyMeasurement::NotifyCumulativeEnergyMeasured(ep, ni, ne);
-      ESP_LOGI(kTag, "STATE -> Matter ep=%u CumulativeEnergyImported=%u Wh",
-               static_cast<unsigned>(ep), static_cast<unsigned>(wh));
-      break;
-    }
-    default:
-      break;
+  }
+  // The Border Router advertises its OMR prefix in the network data with the
+  // "slaac" flag; the SLAAC module (compiled in by main/esp_ot_custom_config.h)
+  // is what puts an address of that prefix on the "ot" netif. lwIP can then
+  // resolve a next hop into the mesh — without it every backbone packet to a
+  // mesh address dies with ERR_RTE before it reaches the OpenThread stack.
+  // The module is on by default once it is built in; the call makes that
+  // explicit and gives us the state for the log.
+  otIp6SetSlaacEnabled(ot, true);
+  ESP_LOGI(kTag, "OpenThread SLAAC module: %s",
+           otIp6IsSlaacEnabled(ot) ? "on" : "off");
+  if (otThreadSetEnabled(ot, true) != OT_ERROR_NONE) {
+    ESP_LOGE(kTag, "could not enable the Thread role");
+    return;
+  }
+  // The devices we commission need a router in range: lead our own network
+  // instead of waiting for an attach attempt to time out.
+  const otError err = otThreadBecomeLeader(ot);
+  ESP_LOGI(kTag, "the Thread role is enabled (become leader: %d)", static_cast<int>(err));
+  status_led::set(status_led::State::Ready);
+
+  // The backbone services are not part of this function: mDNS needs the
+  // OpenThread lock OFF and has to run BEFORE the Thread role comes up, see
+  // thread_bring_up_mdns().
+}
+
+// The backbone services, part one: mDNS on the Wi-Fi side.
+//
+// It runs before the Thread role comes up, and without the OpenThread lock.
+// Two reasons:
+//  - mDNS is an lwIP thing: mdns_init() waits for the lwIP thread (a TCP/IP
+//    API call), and the MLD report that goes out while joining ff02::fb can
+//    reach the "ot" netif's transmit path, which waits for the OpenThread
+//    task-switching lock. The OpenThread lock holds that very lock, so doing
+//    mDNS under it means the two wait for each other and the chip freezes
+//    right after "starting mDNS".
+//  - The Border Router publishes its Thread network ("_meshcop") as soon as
+//    the Thread role is up, and that publish needs the mDNS hostname to be
+//    there already: without it the service is dropped ("Failed to publish
+//    meshcop mdns service") and the LAN never hears about our network.
+void thread_bring_up_mdns() {
+  if (g_wifi_netif == nullptr) {
+    return;
+  }
+  // mDNS on the Wi-Fi side: OT's DNS-SD server answers unicast DNS over
+  // Thread, and espressif/mdns advertises the same records as multicast on
+  // Wi-Fi — together they reflect the device's _matter._tcp onto the
+  // commissioner's side.
+  ESP_LOGI(kTag, "starting mDNS");
+  const esp_err_t m = mdns_init();
+  if (m != ESP_OK && m != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(kTag, "mdns_init: %d", static_cast<int>(m));
+  } else {
+    ESP_LOGI(kTag, "mDNS is up");
+  }
+  // The hostname is NOT set by mdns_init(): the component leaves
+  // s_server->hostname empty until somebody tells it who we are. Every
+  // service published under it then fails SILENTLY — mdns_service_add()
+  // returns ESP_ERR_INVALID_ARG without a single log line, because the
+  // component has no hostname to hang the record on. The Border Router
+  // publishes its Thread network ("_meshcop") exactly that way, and the
+  // failure ends in "Failed to publish meshcop mdns service".
+  //
+  // mdns_hostname_set() is synchronous: it queues the action and waits for
+  // the mDNS task to apply it, so the hostname is in place when it returns.
+  ESP_LOGI(kTag, "setting the mDNS hostname");
+  const esp_err_t h = mdns_hostname_set(kBrHostname);
+  if (h != ESP_OK) {
+    ESP_LOGE(kTag, "mdns_hostname_set(%s): %d", kBrHostname, static_cast<int>(h));
+  } else {
+    ESP_LOGI(kTag, "mDNS hostname is '%s'", kBrHostname);
   }
 }
 
-void apply_state(std::uint8_t chip_id, const hubproto::Header& h,
-                 const std::uint8_t* payload, std::size_t len) {
-  keystone::BridgedAddr addr{chip_id, h.entity_id};
-  const std::uint16_t ep = app_bridge_get_endpoint(&addr);
-  if (ep == chip::kInvalidEndpointId) return;
-  auto rd = hubproto::state_reader(payload, len);
-  if (!rd.valid) return;
-  while (rd.remaining > 0 && rd.valid) {
-    std::uint8_t attr_id = 0;
-    if (!hubproto::state_next_attr(rd, attr_id)) break;
-    hubproto::ValueType vt{};
-    if (!core::zcl::attr_value_type(attr_id, vt)) {
-      if (attr_id == A::kPowerW) {
-        vt = hubproto::ValueType::U16;
-      } else if (attr_id == A::kEnergyWh) {
-        vt = hubproto::ValueType::U32;
-      } else {
-        break;  // unknown attr — can't skip w/o value_type
-      }
-    }
-    hubproto::Value v{};
-    if (!hubproto::state_consume(rd, vt, v)) break;
-    apply_value(ep, attr_id, v);
+// The backbone services, part two: the Border Router itself — SRP server,
+// DNS-SD and border routing. It is an OpenThread call, so it takes the lock
+// for the duration of the call and nothing else.
+void thread_bring_up_border_router() {
+  if (g_wifi_netif == nullptr) {
+    return;
   }
+  ESP_LOGI(kTag, "starting the Border Router");
+  esp_openthread_lock_acquire(portMAX_DELAY);
+  const esp_err_t br = esp_openthread_border_router_init();
+  esp_openthread_lock_release();
+  if (br == ESP_OK) {
+    ESP_LOGI(kTag, "Border Router is up (SRP server + DNS-SD + border routing)");
+    g_br_started = true;
+  } else {
+    ESP_LOGE(kTag, "esp_openthread_border_router_init: %d", static_cast<int>(br));
+  }
+}
+
+// Wait until the backbone has a usable IPv6 link-local address (defined with
+// the Wi-Fi code below).
+static bool wait_backbone_ipv6(std::uint32_t timeout_ms);
+
+void thread_network_task(void* /*arg*/) {
+  // The main loop has to spin before the Thread state machine may run.
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  // Wait for Wi-Fi to come up before enabling the Thread role: on the C6,
+  // the Wi-Fi and 802.15.4 radios share one antenna, and Thread is far
+  // chattier than an idle Wi-Fi scan — if Thread is already an active leader
+  // when the 4-way handshake runs, EAPOL packets lose airtime and auth times
+  // out (reason 2). With Thread silent until we have an IP, Wi-Fi joins first
+  // and coex stays sane after.
+  const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(60000);
+  while (!g_wifi_connected && xTaskGetTickCount() < deadline) {
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+  if (!g_wifi_connected) {
+    ESP_LOGW(kTag, "giving up on Wi-Fi; bringing Thread up without BR");
+  }
+  // The Border Router needs a usable IPv6 on the backbone before it starts:
+  // without it the Router Solicitation goes out without a source address
+  // ("Failed to send ND6 message", "Failed to send RS 1/3") and the Thread
+  // prefix is never offered to the LAN.
+  wait_backbone_ipv6(10000);
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+  // Wi-Fi and 802.15.4 share ONE radio on the C6, and the coexistence
+  // arbiter has to know that the 802.15.4 radio is there. It has to happen
+  // BEFORE the Thread role is enabled: the radio goes active the moment the
+  // role is on, and without the arbiter the Wi-Fi loses the access point
+  // ("bcn_timeout") - the backbone dies before the Border Router is even up.
+  // (The IDF's own examples/openthread/ot_br arms it right after the Border
+  // Router starts; there the role is enabled by the BR itself, so the window
+  // is much shorter than ours.)
+  const esp_err_t coex = esp_coex_wifi_i154_enable();
+  if (coex != ESP_OK) {
+    ESP_LOGE(kTag, "esp_coex_wifi_i154_enable: %d", static_cast<int>(coex));
+  } else {
+    ESP_LOGI(kTag, "Wi-Fi / 802.15.4 coexistence is on");
+  }
+#endif
+  // mDNS first, with the OpenThread lock OFF: it is an lwIP thing and it must
+  // not run while the lock is held (deadlock, see thread_bring_up_mdns()).
+  // It also has to be up before the Thread role, because the Border Router
+  // publishes its "_meshcop" service the moment the role comes up.
+  thread_bring_up_mdns();
+  esp_openthread_lock_acquire(portMAX_DELAY);
+  thread_bring_up();
+  esp_openthread_lock_release();
+  thread_bring_up_border_router();
+  vTaskDelete(nullptr);
+}
+
+// --- Wi-Fi infrastructure (backbone for the Border Router) ------------------
+//
+// The Border Router needs an "infrastructure" netif — the IP network that is
+// on the other side of the Thread mesh from it. Here that is Wi-Fi: the chip
+// joins the same SSID as the brain, and OpenThread's BR advertises Thread
+// prefixes onto Wi-Fi while reflecting SRP services (the device's
+// _matter._tcp) via mDNS so the CHIP commissioner on the brain can find them.
+//
+// Credentials live in main/wifi_secrets.h (gitignored), same mechanism as the
+// brain uses. Reconnect is handled in the event handler: the Wi-Fi driver drops
+// the link whenever the AP is slow or busy, and silent reconnect keeps BR up.
+
+int g_scan_logged = 0;
+
+void log_wifi_scan() {
+  if (g_scan_logged++) return;  // once is enough
+  wifi_scan_config_t sc{};  // default: all channels, active scan
+  esp_wifi_scan_start(&sc, true /*block*/);
+  uint16_t n = 0;
+  esp_wifi_scan_get_ap_num(&n);
+  ESP_LOGW(kTag, "Wi-Fi scan found %u APs:", n);
+  wifi_ap_record_t recs[16];
+  uint16_t want = n < 16 ? n : 16;
+  esp_wifi_scan_get_ap_records(&want, recs);
+  for (uint16_t i = 0; i < want; ++i) {
+    ESP_LOGW(kTag, "  ap %u: '%s' rssi=%d ch=%u auth=%d",
+             i, recs[i].ssid, recs[i].rssi, recs[i].primary,
+             static_cast<int>(recs[i].authmode));
+  }
+}
+
+// The IPv6 link-local address of the Wi-Fi backbone.
+//
+// lwIP does NOT create it by itself — the application has to ask for it
+// (esp_netif_create_ip6_linklocal). Without it the backbone has no IPv6 at
+// all, and two things break:
+//   - the Border Router cannot send a Router Solicitation/Advertisement
+//     ("Failed to send ND6 message", "BorderRouting-: Failed to send RS 1/3"),
+//     so the Thread prefix is never offered to the backbone;
+//   - the DNS-SD server cannot publish the Thread services there
+//     ("Failed to publish meshcop mdns service"), so the CHIP commissioner on
+//     the brain cannot find the accessory.
+//
+// The address is derived from the interface's hardware address, so it can only
+// be made after esp_wifi_init() has given the netif its MAC, and the interface
+// has to be up (lwIP refuses otherwise).
+static void wifi_ipv6_linklocal() {
+  if (g_wifi_netif == nullptr) {
+    return;
+  }
+  const esp_err_t err = esp_netif_create_ip6_linklocal(g_wifi_netif);
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "no IPv6 link-local address on the backbone: %d",
+             static_cast<int>(err));
+  }
+}
+
+// Wait until the backbone's link-local address is usable.
+//
+// A fresh lwIP address is "tentative" until the duplicate address detection
+// has finished (about a second). Nothing may use a tentative address, and
+// esp_netif_get_ip6_linklocal() says so: it only hands out a "preferred"
+// address. The Border Router has to wait for that — otherwise its Router
+// Solicitation goes out with no source address ("Failed to send ND6 message").
+static bool wait_backbone_ipv6(std::uint32_t timeout_ms) {
+  if (g_wifi_netif == nullptr) {
+    return false;
+  }
+  for (std::uint32_t waited = 0; waited <= timeout_ms; waited += 200) {
+    esp_ip6_addr_t ll{};
+    if (esp_netif_get_ip6_linklocal(g_wifi_netif, &ll) == ESP_OK) {
+      ESP_LOGI(kTag, "backbone IPv6 link-local: " IPV6STR, IPV62STR(ll));
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+  ESP_LOGW(kTag, "the backbone has no usable IPv6 link-local address after %u ms",
+           static_cast<unsigned>(timeout_ms));
+  return false;
+}
+
+void wifi_event(void* /*arg*/, esp_event_base_t base, int32_t id, void* data) {
+  if (base == WIFI_EVENT) {
+    switch (id) {
+      case WIFI_EVENT_STA_START:
+        esp_wifi_connect();
+        break;
+      case WIFI_EVENT_STA_CONNECTED:
+        // esp_netif has already brought the interface up (its own handler runs
+        // first), so the link-local address can be made now.
+        wifi_ipv6_linklocal();
+        break;
+      case WIFI_EVENT_STA_DISCONNECTED: {
+        auto* e = static_cast<wifi_event_sta_disconnected_t*>(data);
+        ESP_LOGW(kTag, "Wi-Fi disconnected (reason %d), retrying", e ? e->reason : -1);
+        g_wifi_connected = false;
+        if (e && e->reason == WIFI_REASON_NO_AP_FOUND) log_wifi_scan();
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_wifi_connect();
+        break;
+      }
+      default:
+        break;
+    }
+  } else if (base == IP_EVENT) {
+    if (id == IP_EVENT_STA_GOT_IP) {
+      auto* e = static_cast<ip_event_got_ip_t*>(data);
+      ESP_LOGI(kTag, "Wi-Fi got IP " IPSTR, IP2STR(&e->ip_info.ip));
+      // Idempotent: on a reconnect the address may have been dropped.
+      wifi_ipv6_linklocal();
+      g_wifi_connected = true;
+      if (g_wifi_got_ip) xSemaphoreGive(g_wifi_got_ip);
+    }
+  }
+}
+
+void wifi_bringup_init() {
+  ESP_ERROR_CHECK(esp_netif_init());
+  ESP_ERROR_CHECK(esp_event_loop_create_default());
+  g_wifi_netif = esp_netif_create_default_wifi_sta();
+  if (g_wifi_netif == nullptr) {
+    ESP_LOGE(kTag, "could not create the default Wi-Fi STA netif");
+    return;
+  }
+  wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&wcfg));
+
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(
+      WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event, nullptr, nullptr));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(
+      IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event, nullptr, nullptr));
+
+  wifi_config_t wc{};
+  std::strncpy(reinterpret_cast<char*>(wc.sta.ssid), KEYSTONE_WIFI_SSID,
+               sizeof(wc.sta.ssid) - 1);
+  std::strncpy(reinterpret_cast<char*>(wc.sta.password), KEYSTONE_WIFI_PASSWORD,
+               sizeof(wc.sta.password) - 1);
+  // No authmode threshold: accept anything the AP offers (WPA2/WPA3 mixed).
+  wc.sta.threshold.authmode = WIFI_AUTH_OPEN;
+  // All-channel scan + pick strongest match.
+  wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+  wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+  ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+  g_wifi_got_ip = xSemaphoreCreateBinary();
+}
+
+bool wifi_bringup_connect() {
+  ESP_LOGI(kTag, "Wi-Fi joining SSID (%d chars)",
+           static_cast<int>(std::strlen(KEYSTONE_WIFI_SSID)));
+  // Disable Wi-Fi power save: on the C6, Wi-Fi + 802.15.4 share the one
+  // antenna, and MODEM power save steals the airtime a WPA2 4-way handshake
+  // needs — the AP's EAPOL messages time out and auth fails with reason 2
+  // (AUTH_EXPIRE). PS_NONE keeps the receiver on and lets coex schedule
+  // 802.15.4 around it.
+  ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+  ESP_ERROR_CHECK(esp_wifi_start());
+
+  // 30 s is enough for the AP; without an IP we can still run (OT keeps its
+  // network), but BR stays off until an IP arrives. A silent reconnect fires
+  // in the event handler.
+  if (xSemaphoreTake(g_wifi_got_ip, pdMS_TO_TICKS(30000)) != pdTRUE) {
+    ESP_LOGW(kTag, "no Wi-Fi yet; Border Router will start when the link is up");
+    return false;
+  }
+  return true;
+}
+
+// Start OpenThread: the platform (radio), the instance and the main loop.
+bool thread_start() {
+  // The OpenThread port waits on eventfd()s (its task queue and its radio), so
+  // the event VFS has to be there before the stack starts. Without it the port
+  // fails to create its task queue and the radio driver is torn down again.
+  //
+  // How many: the netif, the task queue, the border router and — because we
+  // run the radio on the chip itself — the radio driver. The IDF's own
+  // examples/openthread/ot_br counts them the same way; one short and the
+  // last one silently fails to open.
+  esp_vfs_eventfd_config_t evcfg{};
+  evcfg.max_fds = 4;
+  const esp_err_t ev = esp_vfs_eventfd_register(&evcfg);
+  if (ev != ESP_OK && ev != ESP_ERR_INVALID_STATE) {
+    ESP_LOGE(kTag, "could not register the eventfd VFS: %d", static_cast<int>(ev));
+    return false;
+  }
+
+  // esp_openthread_start() — not the older esp_openthread_init() — is what
+  // creates the "ot" netif: it makes esp_netif_new() for the OpenThread
+  // interface and attaches the netif glue (esp_openthread.cpp: ot_task_worker).
+  // Without that netif lwIP has no interface into the mesh at all: every
+  // backbone packet to a mesh address dies with ERR_RTE before it reaches the
+  // OpenThread stack, and the Border Router counters stay at in_unicast=0 —
+  // which is exactly how the Matter CASE session to a commissioned device
+  // died ("Session establishment failed", CHIP error 32).
+  //
+  // The config is static on purpose: esp_openthread_start() hands the pointer
+  // to its worker task, which reads it after we return.
+  static esp_openthread_config_t cfg = {
+      .netif_config = ESP_NETIF_DEFAULT_OPENTHREAD(),
+      .platform_config = {
+          .radio_config = {
+              .radio_mode = RADIO_MODE_NATIVE,
+          },
+          .host_config = {
+              .host_connection_mode = HOST_CONNECTION_MODE_NONE,
+          },
+          .port_config = {
+              .storage_partition_name = "nvs",
+              .netif_queue_size = 10,
+              .task_queue_size = 10,
+          },
+      },
+  };
+
+  // The call blocks until the stack is up and the netif is attached; the main
+  // loop then runs in the task esp_openthread_start() creates (we do not need
+  // our own mainloop task any more).
+  const esp_err_t err = esp_openthread_start(&cfg);
+  if (err != ESP_OK) {
+    ESP_LOGE(kTag, "esp_openthread_start failed: %d", static_cast<int>(err));
+    return false;
+  }
+  ESP_LOGI(kTag, "OpenThread is up (FTD, native radio, \"ot\" netif created)");
+
+  // The Border Router needs the backbone netif (the Wi-Fi side) — it is the
+  // infrastructure interface the BR routes through. Now that the OT stack
+  // exists, hand it over; the IDF's own examples/openthread/ot_br does the
+  // same right before esp_openthread_border_router_init().
+  if (g_wifi_netif != nullptr) {
+    esp_openthread_set_backbone_netif(g_wifi_netif);
+    ESP_LOGI(kTag, "backbone netif set (Wi-Fi), BR path armed");
+  } else {
+    ESP_LOGW(kTag, "no backbone netif; Border Router disabled this boot");
+  }
+
+  xTaskCreate(thread_network_task, "ks_thread_net", 4096, nullptr, 5, nullptr);
+  return true;
 }
 
 void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
@@ -765,144 +941,123 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
       std::uint8_t sbuf[64];
       auto sr = hubproto::encode_chip_self_declare(kOwnChipId, sbuf, sizeof(sbuf));
       if (sr.ok) {
-        g_bus->publish(header(hubproto::MsgType::Declare, kOwnChipId),
-                       sbuf, sr.len);
+        g_bus->publish(header(hubproto::MsgType::Declare, kOwnChipId), sbuf, sr.len);
       }
       g_bus->publish(header(hubproto::MsgType::DeclareEnd), nullptr, 0);
       return;
     }
-    case hubproto::MsgType::Declare: {
-      hubproto::DeclareView view{};
-      if (!hubproto::decode_declare(payload, len, view)) return;
-      M::Attrs attrs;
-      for (std::uint8_t i = 0; i < view.attr_count; ++i) {
-        attrs.add(hubproto::declare_attr_at(view, i).attr_id);
+    case hubproto::MsgType::ThreadDatasetReq: {
+      // The brain has no 802.15.4 radio, so the Matter commissioner on it borrows ours: it
+      // asks for the active Thread dataset and hands it to the device over BLE
+      // (docs/matter-backlog.md §3). Without a dataset the device refuses the network
+      // (networkingStatus=1) and the commissioning dies at the Thread step.
+      // The OpenThread instance belongs to the main loop task: every call into it
+      // has to hold the port lock, or the main loop may be halfway through a
+      // dataset update while we read it.
+      esp_openthread_lock_acquire(portMAX_DELAY);
+      otInstance* ot = esp_openthread_get_instance();
+      if (ot == nullptr) {
+        esp_openthread_lock_release();
+        ESP_LOGW(kTag, "the brain asked for the Thread dataset, but there is no OpenThread");
+        return;
       }
-      ensure_bridged_endpoint(h.chip_id, view.entity_id, M::plan_for(view.device_type, attrs));
+      // The dataset is the biggest thing this chip ever sends, and this runs on
+      // the UART RX task: keep the two buffers out of that task's stack (it also
+      // carries the OTA state machine). Only the RX task delivers inbound
+      // frames, so a static buffer here has a single writer.
+      static otOperationalDatasetTlvs tlvs{};
+      const otError err = otDatasetGetActiveTlvs(ot, &tlvs);
+      esp_openthread_lock_release();
+      if (err != OT_ERROR_NONE || tlvs.mLength == 0) {
+        ESP_LOGW(kTag, "no active Thread dataset to give (err %d)", static_cast<int>(err));
+        return;
+      }
+      static std::uint8_t buf[1 + hubproto::kThreadDatasetMax];
+      auto r = hubproto::encode_thread_dataset(tlvs.mTlvs, tlvs.mLength, buf, sizeof(buf));
+      if (!r.ok) {
+        ESP_LOGW(kTag, "the Thread dataset does not fit a frame (%u bytes)", tlvs.mLength);
+        return;
+      }
+      // Say whether the frame really went out: this is the only big frame the chip
+      // ever sends, and if it is lost the brain has nothing to show for it.
+      const bool sent = g_bus->publish(header(hubproto::MsgType::ThreadDataset), buf, r.len);
+      ESP_LOGI(kTag, "sent the Thread dataset (%u bytes, %u byte payload) to the brain: %s",
+               tlvs.mLength, static_cast<unsigned>(r.len), sent ? "written" : "WRITE FAILED");
       return;
     }
-    case hubproto::MsgType::State:
-      apply_state(h.chip_id, h, payload, len);
+    case hubproto::MsgType::MatterPair: {
+      // We do not commission Matter devices any more — the CHIP stack is gone from this
+      // chip. Say so at once instead of letting the brain wait a minute for an answer
+      // that will never come.
+      hubproto::MatterResult res{};
+      res.state = hubproto::MatterState::Failed;
+      res.code = hubproto::MatterCode::Unsupported;
+      res.entity_id = 0;
+      std::uint8_t buf[16];
+      auto r = hubproto::encode_matter_result(res, buf, sizeof(buf));
+      if (r.ok) {
+        g_bus->publish(header(hubproto::MsgType::MatterResult), buf, r.len);
+      }
+      ESP_LOGW(kTag, "the brain asked us to commission a Matter device — we cannot");
       return;
-    case hubproto::MsgType::Undeclare:
-      remove_bridged_endpoint(h.chip_id, h.entity_id);
-      return;
+    }
     default:
       return;
-  }
-}
-
-bool quiet(const Mirror& m) {
-  return static_cast<std::int32_t>(m.quiet_until_ms - now_ms()) > 0;
-}
-
-// A controller changed an attribute of a bridged endpoint: forward it to the brain as a COMMAND
-// (which routes it to the owning chip). Our own mirror of a STATE comes back through here too;
-// the Mirror comparison drops it.
-esp_err_t attribute_update_cb(callback_type_t type, uint16_t endpoint_id,
-                              uint32_t cluster_id, uint32_t attribute_id,
-                              esp_matter_attr_val_t* val, void* /*priv*/) {
-  if (type != PRE_UPDATE) return ESP_OK;
-  const bool relevant =
-      (cluster_id == OnOff::Id && attribute_id == OnOff::Attributes::OnOff::Id) ||
-      (cluster_id == LevelControl::Id && attribute_id == LevelControl::Attributes::CurrentLevel::Id) ||
-      (cluster_id == ColorControl::Id &&
-       (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id ||
-        attribute_id == ColorControl::Attributes::CurrentX::Id ||
-        attribute_id == ColorControl::Attributes::CurrentY::Id)) ||
-      (cluster_id == Thermostat::Id &&
-       (attribute_id == Thermostat::Attributes::OccupiedHeatingSetpoint::Id ||
-        attribute_id == Thermostat::Attributes::SystemMode::Id));
-  if (!relevant) return ESP_OK;
-  const bool on_off = cluster_id == OnOff::Id;
-  // Level, colour and thermostat writes during endpoint construction or right after boot are the
-  // stack's own initialisation (on/off has its own guard: start_up_on_off is null).
-  if (!on_off && (g_building || now_ms() < kBootGraceMs)) return ESP_OK;
-  app_bridged_device_t* bd = app_bridge_get_device(endpoint_id);
-  if (!bd) return ESP_OK;
-  auto* kbd = static_cast<keystone::BridgedDevice*>(bd);
-  keystone::BridgedAddr addr = kbd->addr();
-  if (addr.entity_id == 0) return ESP_OK;
-  Mirror dummy;
-  Mirror* mp = mirror_for(endpoint_id);
-  Mirror& m = mp != nullptr ? *mp : dummy;
-
-  if (cluster_id == OnOff::Id) {
-    // Echo of our own mirror of the brain's STATE — not a controller's request.
-    if (m.onoff == (val->val.b ? 1 : 0)) return ESP_OK;
-    send_command(addr.entity_id, A::kOnOff, hubproto::Value::make_bool(val->val.b));
-  } else if (cluster_id == LevelControl::Id) {
-    const std::uint8_t lvl = val->val.u8;
-    if (lvl == 0xFF || m.level == lvl) return ESP_OK;  // null, or our own echo
-    if (quiet(m)) return ESP_ERR_INVALID_STATE;         // the stack's own reaction to our update
-    queue_command(addr.entity_id, A::kBrightness, hubproto::Value::make_u8(lvl));
-  } else if (cluster_id == ColorControl::Id) {
-    const std::uint16_t v16 = val->val.u16;
-    if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
-      if (m.ct == v16) return ESP_OK;
-      if (quiet(m)) return ESP_ERR_INVALID_STATE;
-      queue_command(addr.entity_id, A::kColorTemp, hubproto::Value::make_u16(v16));
-    } else {
-      // X and Y arrive as separate attribute writes; a COMMAND carries the pair.
-      const bool is_x = attribute_id == ColorControl::Attributes::CurrentX::Id;
-      if ((is_x ? m.x : m.y) == v16) return ESP_OK;
-      if (quiet(m)) return ESP_ERR_INVALID_STATE;
-      const std::uint16_t other = static_cast<std::uint16_t>(
-          (is_x ? m.y : m.x) < 0 ? (is_x ? 0x607d : 0x616b) : (is_x ? m.y : m.x));
-      queue_command(addr.entity_id, A::kColorXy,
-                    is_x ? hubproto::Value::make_xy(v16, other) : hubproto::Value::make_xy(other, v16));
-    }
-  } else if (cluster_id == Thermostat::Id) {
-    if (attribute_id == Thermostat::Attributes::OccupiedHeatingSetpoint::Id) {
-      std::int16_t deci = 0;
-      if (!U::temp_from_centi(val->val.i16, deci) || m.setpoint == deci) return ESP_OK;
-      queue_command(addr.entity_id, A::kSetpoint, hubproto::Value::make_i16(deci));
-    } else {
-      const std::uint8_t mode = val->val.u8;
-      if (!U::mode_valid(mode) || m.mode == mode) return ESP_OK;
-      queue_command(addr.entity_id, A::kMode, hubproto::Value::make_enum8(mode));
-    }
-  }
-  return ESP_OK;
-}
-
-esp_err_t identification_cb(identification::callback_type_t, uint16_t, uint8_t,
-                            uint8_t, void*) {
-  return ESP_OK;
-}
-
-void event_cb(const ChipDeviceEvent* event, intptr_t) {
-  switch (event->Type) {
-    case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
-      ESP_LOGI(kTag, "Matter: commissioning complete");
-      break;
-    case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
-      ESP_LOGI(kTag, "Matter: commissioning window opened");
-      break;
-    case chip::DeviceLayer::DeviceEventType::kFabricRemoved: {
-      // Reopen the commissioning window so the user can re-add us without
-      // reflashing (SPEC-friendly behavior; light example does the same).
-      if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
-        auto& mgr = chip::Server::GetInstance().GetCommissioningWindowManager();
-        if (!mgr.IsCommissioningWindowOpen()) {
-          mgr.OpenBasicCommissioningWindow(
-              chip::System::Clock::Seconds16(300),
-              chip::CommissioningWindowAdvertisement::kDnssdOnly);
-        }
-      }
-      break;
-    }
-    default:
-      break;
   }
 }
 
 }  // namespace
 
+static int cmd_thread(int argc, char** argv) {
+  if (argc >= 2 && std::strcmp(argv[1], "reset") == 0) {
+    printf("Forgetting the Thread network; a new one is formed after the reboot.\n");
+    thread_forget_dataset();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    return 0;
+  }
+  esp_openthread_lock_acquire(portMAX_DELAY);
+  otInstance* ot = esp_openthread_get_instance();
+  if (ot == nullptr) {
+    esp_openthread_lock_release();
+    printf("no OpenThread instance\n");
+    return 1;
+  }
+  otOperationalDatasetTlvs tlvs{};
+  const otError err = otDatasetGetActiveTlvs(ot, &tlvs);
+  printf("role=%s network=%s partition=0x%06x dataset=%u bytes children=%d\n",
+         role_name(otThreadGetDeviceRole(ot)),
+         otThreadGetNetworkName(ot) ? otThreadGetNetworkName(ot) : "?",
+         static_cast<unsigned>(otThreadGetPartitionId(ot)),
+         err == OT_ERROR_NONE ? static_cast<unsigned>(tlvs.mLength) : 0u,
+         thread_child_count());
+  thread_print_children(ot);
+  thread_print_dataset_ids(tlvs);
+  thread_print_dataset_tlvs(tlvs);
+  thread_print_br(ot);
+  esp_openthread_lock_release();
+  // The backbone's IPv6: without a usable link-local address the Border Router
+  // cannot send a Router Solicitation and the DNS-SD server cannot publish.
+  if (g_wifi_netif != nullptr) {
+    esp_ip6_addr_t ll{};
+    if (esp_netif_get_ip6_linklocal(g_wifi_netif, &ll) == ESP_OK) {
+      printf("backbone link-local: " IPV6STR "\n", IPV62STR(ll));
+    } else {
+      printf("backbone link-local: none (IPv6 unusable)\n");
+    }
+    esp_ip6_addr_t global{};
+    if (esp_netif_get_ip6_global(g_wifi_netif, &global) == ESP_OK) {
+      printf("backbone global:     " IPV6STR "\n", IPV62STR(global));
+    }
+  }
+  return 0;
+}
+
 static int cmd_factoryreset(int, char**) {
-  printf("Scheduling Matter factory reset...\n");
-  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-  chip::Server::GetInstance().ScheduleFactoryReset();
+  printf("Forgetting the Thread network and rebooting...\n");
+  thread_forget_dataset();
+  vTaskDelay(pdMS_TO_TICKS(200));
+  esp_restart();
   return 0;
 }
 
@@ -917,21 +1072,68 @@ static void start_console() {
   esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   repl_cfg.prompt = "thread>";
   repl_cfg.max_cmdline_length = 128;
-  esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
   esp_console_repl_t* repl = nullptr;
-  if (esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl) != ESP_OK) return;
+  // The C6's USB port is the USB-Serial-JTAG peripheral, and in ESP-IDF 5.5
+  // that is the default console for this chip — so the REPL lives there and is
+  // reachable over the very same cable we flash with (the UART0 pins of the
+  // DevKitC are not wired to the USB connector). The UART branch stays for a
+  // build that picks the UART console instead.
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+  esp_console_dev_usb_serial_jtag_config_t hw_cfg = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+  if (esp_console_new_repl_usb_serial_jtag(&hw_cfg, &repl_cfg, &repl) != ESP_OK) {
+    ESP_LOGW(kTag, "the REPL did not come up on USB-Serial-JTAG (the log still works)");
+    return;
+  }
+#elif CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
+  esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+  if (esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl) != ESP_OK) {
+    ESP_LOGW(kTag, "the REPL did not come up on UART");
+    return;
+  }
+#else
+  return;  // no console device selected — nothing to attach the REPL to
+#endif
   esp_console_register_help_command();
   static const esp_console_cmd_t cmds[] = {
-      {"factoryreset", "Erase Matter commissioning data and reboot", nullptr, cmd_factoryreset, nullptr},
-      {"reboot",       "Reboot the chip",                           nullptr, cmd_reboot,        nullptr},
+      {"thread",       "Show the Thread network status (reset: forget it)", nullptr, cmd_thread,
+       nullptr, nullptr},
+      {"factoryreset", "Forget the Thread network and reboot", nullptr, cmd_factoryreset, nullptr,
+       nullptr},
+      {"reboot",       "Reboot the chip", nullptr, cmd_reboot, nullptr, nullptr},
   };
   for (const auto& c : cmds) esp_console_cmd_register(&c);
   esp_console_start_repl(repl);
 }
 
+// Why did the last boot end? A watchdog, a panic or a plain brownout look the
+// same from the outside (the USB port just disappears), so the reason is worth
+// printing while it is still in the register.
+const char* thread_reset_reason_name() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external pin";
+    case ESP_RST_SW: return "software reset";
+    case ESP_RST_PANIC: return "panic/exception";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "other watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_USB: return "USB";
+    case ESP_RST_JTAG: return "JTAG";
+    case ESP_RST_EFUSE: return "eFuse";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "CPU lockup";
+    default: return "unknown";
+  }
+}
+
 extern "C" void app_main() {
+  // USB-powered DevKitC: the rail dips during radio bursts and the ana BOD would
+  // reset the chip. Disabled here and in sdkconfig.defaults (CONFIG_ESP_BROWNOUT_DET=n).
   brownout_ll_bod_enable(false);
   brownout_ll_ana_reset_enable(false);
+  ESP_LOGI(kTag, "reset reason: %s", thread_reset_reason_name());
   ESP_ERROR_CHECK(nvs_flash_init());
   // Mark app valid immediately so the bootloader never rolls back to an empty
   // ota_1 slot after erase_flash. The OtaConfirmGate (30 s + brain link) still
@@ -940,10 +1142,27 @@ extern "C" void app_main() {
   status_led::init();
   g_boot_id = fw::next_boot_id();
   if (g_boot_id > 50) {
-    ESP_LOGW(kTag, "crash loop detected (boot_id=%u > 50): erasing NVS to recover", g_boot_id);
+    // A crash loop used to mean "wipe NVS". But this partition now holds the
+    // Thread network: the PAN id, the network keys and — through the Border
+    // Router — the OMR prefix the brain routes to. Erasing it re-forms the
+    // network with a NEW identity, and every device commissioned into it (the
+    // IKEA TIMMERFLOTTE) is orphaned for good: it never answers again, and
+    // the route the brain holds for the old OMR prefix points nowhere. So the
+    // dataset is read out before the wipe and written back after it — only
+    // the crash-looper's leftovers are lost.
+    otOperationalDatasetTlvs saved{};
+    const bool keep_network = thread_load_dataset(saved);
+    ESP_LOGW(kTag,
+             "crash loop detected (boot_id=%u > 50): erasing NVS to recover%s", g_boot_id,
+             keep_network ? " (the Thread network is kept)" : "");
     nvs_flash_erase();
     nvs_flash_init();
     g_boot_id = fw::next_boot_id();  // restarts at 1
+    if (keep_network) {
+      thread_save_dataset(saved);
+      ESP_LOGI(kTag, "the Thread network survived the wipe (%u bytes of dataset)",
+               static_cast<unsigned>(saved.mLength));
+    }
   }
   start_console();
 
@@ -961,10 +1180,6 @@ extern "C" void app_main() {
   static LockedBus bus(raw_bus);
   g_bus = &bus;
   bus.subscribe(&on_bus_message, nullptr);
-
-  // Controller changes to level/colour/thermostat are debounced before they go to the brain.
-  g_q_mu = xSemaphoreCreateMutex();
-  xTaskCreate(forward_task, "ks_fwd", 3072, nullptr, 4, nullptr);
 
   // Firmware updates from the brain (docs/ota.md); polled from the UART RX task.
   static fw::EspOtaSink ota_sink;
@@ -990,90 +1205,27 @@ extern "C" void app_main() {
               nullptr, 5, nullptr);
 #endif
 
-
-  ESP_LOGI(kTag, "chip 0x%02x up (Matter Bridge); boot_id=%u", kOwnChipId,
+  ESP_LOGI(kTag, "chip 0x%02x up (Thread network); boot_id=%u", kOwnChipId,
            static_cast<unsigned>(g_boot_id));
 
-  // --- Matter data model: Root + Aggregator + dynamic bridged endpoints ---
-  node::config_t node_config;
-  g_node = node::create(&node_config, attribute_update_cb, identification_cb);
-  if (!g_node) { ESP_LOGE(kTag, "node::create failed"); return; }
+  // Order matters on the C6: Wi-Fi + 802.15.4 share one antenna, and the
+  // coexistence arbiter only schedules the radios it has been told about.
+  //
+  // 1) wifi_bringup_init(): esp_netif + esp_event + esp_wifi_init. Creates
+  //    the netif we hand to the OT backbone. Does NOT start Wi-Fi yet.
+  // 2) thread_start(): esp_openthread_set_backbone_netif(wifi_netif) +
+  //    esp_openthread_start (the OT stack, its "ot" netif and the main loop).
+  //    802.15.4 is now visible to coex, but the Thread role stays disabled
+  //    (silent radio).
+  // 3) wifi_bringup_connect(): esp_wifi_start + wait for an IP. Coex now
+  //    knows about both radios and the 4-way handshake has airtime.
+  // 4) thread_network_task (spawned by thread_start) waits for the IP, then
+  //    enables the Thread role and calls border_router_init.
+  wifi_bringup_init();
+  thread_start();
+  wifi_bringup_connect();
 
-  aggregator::config_t agg_conf;
-  endpoint_t* agg = aggregator::create(g_node, &agg_conf, ENDPOINT_FLAG_NONE, nullptr);
-  if (!agg) { ESP_LOGE(kTag, "aggregator::create failed"); return; }
-  g_aggregator_endpoint_id = esp_matter::endpoint::get_id(agg);
-  ESP_LOGI(kTag, "Aggregator endpoint id=%u",
-           static_cast<unsigned>(g_aggregator_endpoint_id));
-
-  // OpenThread platform config.
-  esp_openthread_platform_config_t ot_config{};
-  ot_config.radio_config.radio_mode = RADIO_MODE_NATIVE;
-  ot_config.host_config.host_connection_mode = HOST_CONNECTION_MODE_NONE;
-  ot_config.port_config.storage_partition_name = "nvs";
-  ot_config.port_config.netif_queue_size = 10;
-  ot_config.port_config.task_queue_size = 10;
-  set_openthread_platform_config(&ot_config);
-
-  esp_err_t err = esp_matter::start(event_cb);
-  if (err != ESP_OK) {
-    ESP_LOGE(kTag, "esp_matter::start failed: %d", static_cast<int>(err));
-    return;
-  }
-
-  // Bring bridged endpoints back from NVS. Fires create_bridged_clusters for
-  // each restored endpoint. New devices from live DECLAREs go through the
-  // same callback via app_bridge_create_new_device.
-  g_building = true;
-  err = app_bridge_initialize(g_node, create_bridged_clusters, alloc_bridged,
-                              free_bridged);
-  g_building = false;
-  if (err != ESP_OK) {
-    ESP_LOGE(kTag, "app_bridge_initialize: %d", err);
-  }
-
-  // The bridge persists its endpoint table as a blob. One stored by a build with a smaller limit
-  // is shorter than the table now, and the missing slots read as "endpoint 0" instead of "free":
-  // the bridge then thinks it is full after the old number of devices. Free those slots.
-  esp_matter_bridge::erase_bridged_device_info(0);
-
-  // Deduplicate bridged endpoints restored from NVS: prior builds had a
-  // BridgedAddr padding bug (memcmp on a struct with a padding byte) that
-  // created a new endpoint on every reflash for the same entity.
-  {
-    std::uint16_t eps[MAX_BRIDGED_DEVICE_COUNT]{};
-    esp_matter_bridge::get_bridged_endpoint_ids(eps);
-    for (int i = 0; i < MAX_BRIDGED_DEVICE_COUNT; ++i) {
-      if (eps[i] == 0) continue;
-      auto* bd_i = static_cast<keystone::BridgedDevice*>(
-          app_bridge_get_device(eps[i]));
-      if (!bd_i) continue;
-      keystone::BridgedAddr addr_i = bd_i->addr();
-      if (addr_i.entity_id == 0) continue;
-      for (int j = i + 1; j < MAX_BRIDGED_DEVICE_COUNT; ++j) {
-        if (eps[j] == 0) continue;
-        auto* bd_j = static_cast<keystone::BridgedDevice*>(
-            app_bridge_get_device(eps[j]));
-        if (!bd_j) continue;
-        keystone::BridgedAddr addr_j = bd_j->addr();
-        if (addr_i.chip_id == addr_j.chip_id &&
-            addr_i.entity_id == addr_j.entity_id) {
-          ESP_LOGW(kTag, "removing duplicate bridged ep %u (same as ep %u "
-                   "for entity 0x%04x)", static_cast<unsigned>(eps[j]),
-                   static_cast<unsigned>(eps[i]), addr_i.entity_id);
-          app_bridge_remove_device(bd_j);
-          eps[j] = 0;
-        }
-      }
-    }
-  }
-
-  log_bridge_table();
-
-  // Send HELLO after bridge infra is ready — the brain replies with DECLAREs
-  // that need app_bridge to be initialized.
   bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);
-  status_led::set(status_led::State::Ready);
 
   // LED tick timer (50 ms for smooth pulsing during pairing).
   static esp_timer_handle_t led_timer;
@@ -1089,6 +1241,7 @@ extern "C" void app_main() {
   ESP_ERROR_CHECK(esp_timer_create(&led_args, &led_timer));
   ESP_ERROR_CHECK(esp_timer_start_periodic(led_timer, 50000));
 
+  std::uint32_t status_tick = 0;
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(5000));
     const std::uint32_t now_s = static_cast<std::uint32_t>(esp_timer_get_time() / 1000000);
@@ -1099,6 +1252,20 @@ extern "C" void app_main() {
     self.rx_frames = static_cast<std::uint32_t>(raw_bus.rx_frames());
     self.tx_frames = static_cast<std::uint32_t>(raw_bus.tx_frames());
     self.crc_errors = static_cast<std::uint16_t>(raw_bus.bad_frames());
+    // Our place in the Thread network: the role and how many devices hang on
+    // us. The brain shows these, so the Thread state is visible without the
+    // chip's own console.
+    {
+      esp_openthread_lock_acquire(portMAX_DELAY);
+      otInstance* ot = esp_openthread_get_instance();
+      if (ot != nullptr) {
+        self.thread_role = static_cast<std::uint8_t>(otThreadGetDeviceRole(ot));
+        self.thread_children = static_cast<std::uint8_t>(thread_child_count());
+      } else {
+        self.thread_role = hubproto::chip_attr::kNoThreadRole;
+      }
+      esp_openthread_lock_release();
+    }
 
     std::uint8_t buf[64];
     auto r = hubproto::encode_chip_self_state(kOwnChipId, self, buf, sizeof(buf));
@@ -1106,5 +1273,13 @@ extern "C" void app_main() {
       bus.publish(header(hubproto::MsgType::State, kOwnChipId), buf, r.len);
     }
     bus.publish(header(hubproto::MsgType::Heartbeat), nullptr, 0);
+
+    // The Thread role changes quietly (the network comes up, a device attaches),
+    // so say where we stand every half minute.
+    if (++status_tick % 6 == 0) {
+      esp_openthread_lock_acquire(portMAX_DELAY);
+      thread_print_status("every 30 s");
+      esp_openthread_lock_release();
+    }
   }
 }

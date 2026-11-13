@@ -294,28 +294,32 @@ EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t
                                       std::size_t cap) noexcept {
   const std::uint8_t ro =
       kFlagReadable | kFlagReportable;  // telemetry is read-only
-  const AttrDecl attrs[6] = {
+  const AttrDecl attrs[8] = {
       {chip_attr::kUptimeS,   ValueType::U32, ro},
       {chip_attr::kHeapFree,  ValueType::U32, ro},
       {chip_attr::kBootId,    ValueType::U8,  ro},
       {chip_attr::kRxFrames,  ValueType::U32, ro},
       {chip_attr::kTxFrames,  ValueType::U32, ro},
       {chip_attr::kCrcErrors, ValueType::U16, ro},
+      {chip_attr::kThreadRole, ValueType::U8, ro},
+      {chip_attr::kThreadKids, ValueType::U8, ro},
   };
-  return encode_declare(self_entity_id, DeviceType::Chip, attrs, 6, out, cap);
+  return encode_declare(self_entity_id, DeviceType::Chip, attrs, 8, out, cap);
 }
 
 EncodeResult encode_chip_self_state(std::uint16_t self_entity_id, const ChipSelf& s,
                                     std::uint8_t* out, std::size_t cap) noexcept {
-  const StateEntry e[6] = {
+  const StateEntry e[8] = {
       {chip_attr::kUptimeS,   Value::make_u32(s.uptime_s)},
       {chip_attr::kHeapFree,  Value::make_u32(s.heap_free)},
       {chip_attr::kBootId,    Value::make_u8(s.boot_id)},
       {chip_attr::kRxFrames,  Value::make_u32(s.rx_frames)},
       {chip_attr::kTxFrames,  Value::make_u32(s.tx_frames)},
       {chip_attr::kCrcErrors, Value::make_u16(s.crc_errors)},
+      {chip_attr::kThreadRole, Value::make_u8(s.thread_role)},
+      {chip_attr::kThreadKids, Value::make_u8(s.thread_children)},
   };
-  return encode_state(self_entity_id, e, 6, out, cap);
+  return encode_state(self_entity_id, e, 8, out, cap);
 }
 
 // ---- OTA ------------------------------------------------------------------
@@ -569,6 +573,27 @@ bool decode_matter_result(const std::uint8_t* in, std::size_t len,
   out.state = static_cast<MatterState>(in[0]);
   out.code = static_cast<MatterCode>(in[1]);
   out.entity_id = static_cast<std::uint16_t>(in[2] | (in[3] << 8));
+  return true;
+}
+
+EncodeResult encode_thread_dataset(const std::uint8_t* bytes, std::size_t len,
+                                    std::uint8_t* out, std::size_t cap) noexcept {
+  if (bytes == nullptr || len == 0 || len > kThreadDatasetMax) return {false, 0};
+  const std::size_t need = 1 + len;
+  if (cap < need) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(len);
+  for (std::size_t i = 0; i < len; ++i) out[1 + i] = bytes[i];
+  return {true, need};
+}
+
+bool decode_thread_dataset(const std::uint8_t* in, std::size_t len,
+                           ThreadDatasetView& out) noexcept {
+  if (in == nullptr || len < 2) return false;
+  const std::size_t n = in[0];
+  if (n == 0 || n > kThreadDatasetMax) return false;
+  if (len != 1 + n) return false;
+  out.bytes = in + 1;
+  out.len = n;
   return true;
 }
 
