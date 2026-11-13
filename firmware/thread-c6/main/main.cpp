@@ -25,6 +25,7 @@
 #include "esp_console.h"
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -1068,6 +1069,19 @@ static int cmd_reboot(int, char**) {
   return 0;
 }
 
+// `heap` — how much RAM is free right now, the smallest largest-free-block we have
+// seen since boot, and the biggest chunk the allocator can still hand out. The
+// C6 has no PSRAM, so one number set is enough. Used to answer "can Matter
+// accessory + bridge fit back on this chip" (docs/matter-backlog.md § 10).
+static int cmd_heap(int, char**) {
+  const auto caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  printf("heap: free %u B, lowest since boot %u B, largest block %u B\n",
+         static_cast<unsigned>(heap_caps_get_free_size(caps)),
+         static_cast<unsigned>(heap_caps_get_minimum_free_size(caps)),
+         static_cast<unsigned>(heap_caps_get_largest_free_block(caps)));
+  return 0;
+}
+
 static void start_console() {
   esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   repl_cfg.prompt = "thread>";
@@ -1100,6 +1114,8 @@ static void start_console() {
       {"factoryreset", "Forget the Thread network and reboot", nullptr, cmd_factoryreset, nullptr,
        nullptr},
       {"reboot",       "Reboot the chip", nullptr, cmd_reboot, nullptr, nullptr},
+      {"heap",         "Show free heap (now / lowest since boot / largest block)",
+                                                        nullptr, cmd_heap, nullptr, nullptr},
   };
   for (const auto& c : cmds) esp_console_cmd_register(&c);
   esp_console_start_repl(repl);

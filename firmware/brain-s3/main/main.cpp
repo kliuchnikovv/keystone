@@ -3026,6 +3026,58 @@ int cmd_matter_pair_cancel(int argc, char** argv) {
   return 0;
 }
 
+// Multi-admin: open a fresh commissioning window on a device the hub owns so a second
+// admin (Apple Home, Google Home) can add the same device. The SDK generates a fresh
+// setup passcode and the bridge hands it back here; type it into the other admin.
+void on_console_share_result(void* /*ctx*/, std::uint16_t entity_id,
+                             const char* manual_code, const char* error) {
+  if (error != nullptr) {
+    printf("matter: sharing entity 0x%04x failed: %s\n",
+           static_cast<unsigned>(entity_id), error);
+    return;
+  }
+  printf("\nmatter: entity 0x%04x is open for commissioning\n",
+         static_cast<unsigned>(entity_id));
+  printf("matter: enter this setup code in Apple Home / Google Home:\n\n    %s\n\n",
+         manual_code);
+}
+
+int cmd_matter_share(int argc, char** argv) {
+  if (argc < 2 || argc > 3) {
+    printf("usage: matter_share <entity_id> [timeout_s]\n"
+           "  entity_id:  a Matter entity on this hub (0x0300..; see `home`)\n"
+           "  timeout_s:  how long the window stays open (60..900, default 180)\n");
+    return 1;
+  }
+  const std::uint16_t entity_id = static_cast<std::uint16_t>(std::strtoul(argv[1], nullptr, 0));
+  std::uint16_t timeout_s = (argc == 3)
+                                ? static_cast<std::uint16_t>(std::strtoul(argv[2], nullptr, 10))
+                                : 180;
+  if (timeout_s < 60 || timeout_s > 900) {
+    printf("timeout must be 60..900 seconds\n");
+    return 1;
+  }
+  if (!matter_commissioner_up()) return 1;
+  matter_bridge::set_share_handler(nullptr, &on_console_share_result);
+  switch (matter_bridge::share(entity_id, timeout_s)) {
+    case matter_bridge::ShareResult::kStarted:
+      printf("matter: opening a commissioning window on 0x%04x for %u s; the code will print\n",
+             static_cast<unsigned>(entity_id), static_cast<unsigned>(timeout_s));
+      return 0;
+    case matter_bridge::ShareResult::kNotReady:
+      printf("matter: the commissioner is not up yet\n");
+      return 1;
+    case matter_bridge::ShareResult::kBusy:
+      printf("matter: another Matter operation is in progress\n");
+      return 1;
+    case matter_bridge::ShareResult::kUnknownEntity:
+      printf("matter: no Matter entity 0x%04x (expect 0x0300..)\n",
+             static_cast<unsigned>(entity_id));
+      return 1;
+  }
+  return 1;
+}
+
 // The same as matter_pair_ble, but with the co-processor's Thread network: the bridge borrows the
 // dataset (hubproto ThreadDatasetReq) and hands it to the device over BLE. Without it the device
 // refuses the network (networkingStatus=1) and the commissioning dies at the Thread step.
@@ -3124,6 +3176,9 @@ void start_console() {
   reg_cmd("matter_pair_thread",
           "matter_pair_thread <node_id> <pincode> <discriminator> - commission a Matter device with the Thread dataset of the co-processor",
           &cmd_matter_pair_thread);
+  reg_cmd("matter_share",
+          "matter_share <entity_id> [timeout_s] - open a commissioning window on a Matter device so Apple Home / Google Home can add it (multi-admin)",
+          &cmd_matter_share);
   reg_cmd("ip6", "ip6 [<address> | probe <address> [port]] - the hub's IPv6 addresses, the route to the Thread mesh, a probe datagram",
           &cmd_ip6);
 #endif

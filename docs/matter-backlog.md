@@ -1095,6 +1095,143 @@ does (docs/ota.md) has no Matter-side representation — the progress is visible
 in the app and the console only. Nothing to implement, but worth remembering
 before someone looks for the missing Matter cluster.
 
+### 10. One hub, one interface: every device as a bridged endpoint
+
+The goal: when the hub joins Apple Home / Google Home / anything else, the
+outside world sees **one accessory — the hub** and every device behind it as
+an endpoint on it. Not one Matter accessory per device, not a mix of
+"this one is Zigbee, this one is Matter, this one is this hub" — one hub
+whose UX is the same whichever radio a device runs on.
+
+**Half of this already exists.** `brain-s3`'s core bus is unified:
+`core::EntityRegistry` holds every entity the same way, `Bus` carries the same
+DECLARE/STATE/COMMAND/CMD_ACK whether a message came from the Zigbee
+co-processor (chip 0x01), the Thread co-processor (chip 0x02) or the brain's
+own Matter commissioner (pseudo-chip 0x03). The hub's own app already reads
+everything through one protocol (`docs/app-protocol.md`). Internal
+unification is done.
+
+**What is missing is the external side.** `brain-s3` today runs Matter only
+as a **controller** (it commissions others); it has no **accessory/server**
+stack, so Apple Home has nothing to add. The thread-c6 used to serve that
+role (aggregator endpoint 0x000E + dynamic bridged endpoints per Zigbee
+entity), but that implementation came with ~190 KB static DRAM and we traded
+it away in commit `b9e8897` to make thread-c6 a clean Thread host.
+
+**The subtlety that worried the user: can a native Matter device become a
+bridged endpoint on our bridge?** From the **same** fabric — no (it already
+is a node of that fabric; a bridge endpoint would be a second representation
+of the same thing). From **another** fabric — yes. Matter 1.3 § 9.13 says a
+Bridge may expose "Matter nodes that are not part of the current Fabric
+(e.g. Matter devices from another ecosystem's Fabric)." That is exactly our
+shape: the hub owns one fabric, Apple Home owns another; TIMMERFLOTTE is a
+node in ours; we re-publish it to Home's fabric as a bridged endpoint on the
+hub's aggregator. Home Assistant's Matter Server does this today, which is
+the practical confirmation that esp-matter-class stacks can run it.
+
+Shape of the plan:
+
+- Enable the server/accessory side of esp-matter on brain-s3 **in addition
+  to** the controller. Two fabrics, both live:
+  - **Fabric A (hub's)** — brain-s3 is the commissioner; real Matter devices
+    (TIMMERFLOTTE) are nodes here.
+  - **Fabric B (Apple Home's)** — brain-s3 is a commissioned accessory, and
+    the only one it needs to know about.
+- Build the data model in Fabric B: root endpoint + aggregator (device type
+  0x000E) + one bridged endpoint per entity in `EntityRegistry`.
+- Pick the device type per entity from the same table the app uses
+  (`core::zcl_profile` for Zigbee, `core::matter::device_type` for Matter
+  nodes we own). On/Off plug → Device Type 0x010A; temperature+humidity
+  sensor → compose 0x0302 + 0x0307; etc.
+- Route reads/writes/subscriptions on a bridged endpoint to `Bus` — the
+  same Bus the console and the app already drive. STATE on Bus → attribute
+  update on Fabric B; command on Fabric B → `Dispatcher::send` → Bus →
+  CMD_ACK → attribute mirror.
+- Setup code / QR for the hub itself (printed on a label or shown by the
+  app). Open commissioning window for Fabric B on first boot when no admin
+  has joined yet.
+
+What makes this costly: **RAM**. After `esp_matter::start` + controller
+up, brain-s3 has ~115 KB internal RAM free and 1.7 MB PSRAM. The server
+stack, ACL, SRP, fabric-B CASE sessions and N bridged-endpoint cluster
+servers all land on top. Before writing any of it, measure: build the
+minimum server+aggregator+one bridged endpoint, flash, read the symbol map
++ `heap_caps_get_info`, decide whether it fits with room for growth
+(~32 KB headroom, per the controller's rule of thumb). If it does not:
+
+- F1 — split clusters: keep a **slim** per-bridged-endpoint cluster set
+  (Identify + the one device-type cluster + Descriptor), drop every
+  diagnostic cluster.
+- F2 — **host the server on thread-c6 instead of brain-s3** — the setup
+  that Phase 8 Stage D already proved. brain-s3 keeps the controller,
+  thread-c6 adds back the accessory + bridge + aggregator; the hub bus
+  already carries the entities and the Phase 8 wire to the bridge
+  (`on_bus_forward`) is in git history, removed in `b9e8897`.
+- F3 — move the brain to Linux (SPEC § 11); the RAM problem disappears,
+  the Matter server runs as a normal process, and the hub keeps the same
+  Bus. This is already the stated long-term direction, but it is a big
+  step.
+
+**RAM measurement (13.11.2026, hardware), thread-c6 as a pure Thread host
+in steady state** (OT leader + Border Router + SRP + mDNS + Wi-Fi
+coexistence + one child in the mesh). Uptime ~40 s.
+
+| | bytes | KiB |
+|---|---:|---:|
+| sram_seg (chip total) | 452 112 | 441.5 |
+| static (.iram0.text + .dram0.data + .dram0.bss) | 199 236 | 194.6 |
+| heap free now | 224 488 | 219.2 |
+| largest free block | 204 800 | 200.0 |
+| minimum free since boot | 221 220 | 216.0 |
+
+Two things about the shape of this heap: the **largest free block is
+200 KB**, so the heap is not fragmented — CHIP's one-chunk allocation and
+NimBLE's own ~30 KB chunk both fit as a single piece. And **peak usage
+is 3 KB above the stationary** (minimum free vs current), so the
+network's active life does not spike the floor — the 224 KB is honest.
+
+Adding `esp_matter` accessory + bridge **without** the controller (which
+stays on brain-s3) grows static DRAM by ~60–100 KB (CHIP server + NimBLE
+backend + bridge data model) and runtime heap by ~30–50 KB (CASE sessions
+in fabric B, SRP registrations, ACL, N bridged-endpoint cluster servers).
+Worst-case post-addition free heap: ~75 KB — well above the 32 KB
+headroom target. Phase 8 Stage D hit 181 KB free with a heavier config
+(controller + bridge together), which is the independent confirmation
+that F2 is not a tight fit but a comfortable one.
+
+**Verdict:** F2 is the recommended fork. The next moves are concrete:
+
+1. Cherry-pick the Matter accessory + bridge code that lived on
+   thread-c6 before `b9e8827` (search git for `app_bridge_*`,
+   `BridgedDevice`, `create_bridged_clusters`); restore it next to the
+   current Thread host + Border Router instead of replacing it.
+2. Restore `on_bus_forward` on brain-s3 so DECLARE/STATE/COMMAND for
+   Matter-owned entities (chip 0x03) is mirrored to the thread-c6 bridge
+   over UART, the same way Zigbee entities (chip 0x01) are mirrored today.
+3. Setup code + QR for the hub itself. Print on the brain console; later
+   the app shows it on first-run.
+4. First-run flow: no admin has joined fabric B → open commissioning
+   window on thread-c6 for N minutes; afterwards `matter_share`-style op
+   from the app to re-open for a second admin.
+
+The RAM measurement above lives in thread-c6 as the `heap` console
+command — kept around so the budget can be checked against the next
+build, not just this one.
+
+Non-goals / known limits:
+
+- The hub's fabric is not visible to Apple Home even then — fabrics are
+  intentionally isolated. Home sees the hub and its bridged endpoints,
+  not the nodes behind them.
+- OTA of bridged devices stays invisible to Home (§ 9 above).
+- `matter_share` from the previous task is still useful: an administrator
+  who wants a Matter device directly in Home (not through the hub) can
+  skip the bridge and multi-admin it. The bridge is the default path, not
+  the only one.
+
+Status: **planned, not started**. The RAM measurement is the first move;
+it decides between F1 and the harder forks.
+
 ## Grand order-of-work (rough)
 
 1. ✅ OpenThread up (Thread network formed on C6#2, FTD).

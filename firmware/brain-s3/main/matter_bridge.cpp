@@ -26,11 +26,13 @@
 #include <esp_matter_client.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_cluster_command.h>
+#include <esp_matter_controller_commissioning_window_opener.h>
 #include <esp_matter_controller_pairing_command.h>
 #include <esp_matter_controller_read_command.h>
 #include <esp_matter_controller_subscribe_command.h>
 #include <esp_matter_controller_utils.h>
 #include <esp_matter_controller_write_command.h>
+#include <esp_random.h>
 
 #include <app-common/zap-generated/cluster-objects.h>
 #include <app/data-model/Decode.h>
@@ -121,6 +123,8 @@ enum class Op : std::uint8_t {
   kCommissionFailed,     // ... and it failed
   kRestoreNext,          // read the descriptor of the next saved node
   kRepublish,            // re-send every DECLARE (the core asked with QUERY)
+  kShareOpen,            // open a commissioning window on a commissioned node (multi-admin)
+  kShareResult,          // SDK's commissioning_window_opener callback — manual code or failure
 };
 
 struct Request {
@@ -154,6 +158,15 @@ ProgressFn g_progress = nullptr;
 
 std::atomic<bool> g_controller_ready{false};
 std::atomic<bool> g_attempt_active{false};
+
+// Multi-admin: open a commissioning window on a node this hub already owns so
+// another admin (Apple Home, Google Home) can join the same device. Only one at
+// a time — the SDK's opener is a singleton without a user-data channel, so the
+// callback has nothing but global state to hand back.
+std::atomic<bool> g_share_active{false};
+std::uint16_t g_share_entity = 0;
+void* g_share_ctx = nullptr;
+ShareFn g_share_fn = nullptr;
 
 // Worker-only: the slot/node reserved for the attempt in flight and whether it has been
 // saved (a saved slot survives a failed descriptor read so the next boot retries it).
@@ -843,6 +856,73 @@ void set_callbacks() {
   esp_matter::controller::pairing_command::get_instance().set_callbacks(callbacks);
 }
 
+// The SDK's opener only fires this on success (OpenCommissioningWindow invoke accepted
+// and the manual code is computed from its own random PIN + salt). A failure path —
+// device offline, invoke refused — only logs; the worker's own deadline covers it.
+void on_share_manual_code(const char* code) {
+  Request req;
+  req.op = Op::kShareResult;
+  const std::size_t max = sizeof(req.bytes) - 1;
+  const std::size_t n = std::strlen(code) > max ? max : std::strlen(code);
+  std::memcpy(req.bytes, code, n);
+  req.bytes[n] = '\0';
+  req.len = static_cast<std::uint8_t>(n);
+  if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+    ESP_LOGE(kTag, "the request queue is full: cannot deliver the share code");
+  }
+}
+
+void start_share(const Request& req) {
+  const std::uint64_t node_id = req.node_id;
+  const std::uint16_t timeout_s = static_cast<std::uint16_t>(req.pincode);  // u32 slot reused
+
+  // Enhanced Commissioning: the SDK generates a random passcode + salt, invokes
+  // OpenCommissioningWindow on the device, and calls on_share_manual_code with the
+  // 11-digit manual code the user types into the other admin. The discriminator
+  // is random too — a predictable one would leak which device is in pairing mode.
+  std::uint16_t disc = static_cast<std::uint16_t>(esp_random() & 0x0FFFU);
+  if (disc == 0) disc = 1;
+
+  // Matter Spec v1.4 §5.1.1.2: PBKDF2 iteration count is 1000..100000. 1000 is the
+  // minimum and is what every mainstream admin uses; the chip has no cycles to spare.
+  constexpr std::uint32_t kIterations = 1000;
+  // Timed invoke: Admin Commissioning's OpenCommissioningWindow is a timed-invoke
+  // command. 10 s matches esp-matter's own examples.
+  constexpr std::uint16_t kTimedInvokeMs = 10000;
+
+  esp_err_t err;
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    err = esp_matter::controller::commissioning_window_opener::get_instance()
+              .send_open_commissioning_window_command(node_id, /*is_enhanced=*/true,
+                                                     timeout_s, kIterations, disc,
+                                                     kTimedInvokeMs);
+  }
+  if (err != ESP_OK) {
+    ESP_LOGE(kTag, "cannot open commissioning window on node 0x%016llx: %s",
+             static_cast<unsigned long long>(node_id), esp_err_to_name(err));
+    if (g_share_fn != nullptr) {
+      g_share_fn(g_share_ctx, g_share_entity, nullptr, "cannot open window");
+    }
+    g_share_active.store(false);
+    g_share_entity = 0;
+  } else {
+    ESP_LOGI(kTag,
+             "opening commissioning window on node 0x%016llx (entity 0x%04x), timeout %u s",
+             static_cast<unsigned long long>(node_id), static_cast<unsigned>(g_share_entity),
+             static_cast<unsigned>(timeout_s));
+  }
+}
+
+void handle_share_result(const Request& req) {
+  if (!g_share_active.load()) return;  // cancelled / unexpected callback
+  if (g_share_fn != nullptr) {
+    g_share_fn(g_share_ctx, g_share_entity, reinterpret_cast<const char*>(req.bytes), nullptr);
+  }
+  g_share_active.store(false);
+  g_share_entity = 0;
+}
+
 void start_attempt(Request& req) {
   ESP_LOGI(kTag, "commissioning: %s", req.op == Op::kCommissionQr ? "QR payload"
                                     : req.op == Op::kCommissionPin ? "passcode + discriminator"
@@ -1030,6 +1110,14 @@ void worker(void*) {
         publish_declare_end();
         break;
       }
+
+      case Op::kShareOpen:
+        start_share(req);
+        break;
+
+      case Op::kShareResult:
+        handle_share_result(req);
+        break;
     }
   }
 }
@@ -1057,6 +1145,10 @@ bool start(void* ctx, Sink sink, DatasetFn dataset, ProgressFn progress) {
     g_queue = nullptr;
     return false;
   }
+  // The opener is a singleton: register the callback once, right after the queue exists.
+  esp_matter::controller::commissioning_window_opener::get_instance().set_callback(
+      &on_share_manual_code);
+
   g_started = true;
   ESP_LOGI(kTag, "bridge up (worker task, %u slots)", static_cast<unsigned>(kSlots));
   return true;
@@ -1158,6 +1250,41 @@ void cancel() {
   if (!g_started) return;
   Request req{Op::kCancel};
   xQueueSend(g_queue, &req, 0);
+}
+
+void set_share_handler(void* ctx, ShareFn fn) {
+  g_share_ctx = ctx;
+  g_share_fn = fn;
+}
+
+ShareResult share(std::uint16_t entity_id, std::uint16_t timeout_s) {
+  if (!ready()) return ShareResult::kNotReady;
+  if (g_attempt_active.load()) return ShareResult::kBusy;
+  bool expected = false;
+  if (!g_share_active.compare_exchange_strong(expected, true)) return ShareResult::kBusy;
+
+  // Find the node that holds this entity. The entity table lives on the worker, but
+  // the worker only reads/writes it from its own task and `share` runs on the caller's
+  // (main loop / console task) — a stale read here just means kUnknownEntity, which is
+  // what an entity that was dropped would look like anyway.
+  RuntimeNode* node = nullptr;
+  if (find_entity(entity_id, &node) == nullptr || node == nullptr) {
+    g_share_active.store(false);
+    return ShareResult::kUnknownEntity;
+  }
+
+  g_share_entity = entity_id;
+
+  Request req;
+  req.op = Op::kShareOpen;
+  req.node_id = node->node_id;
+  req.pincode = timeout_s;  // packed into the u32 slot
+  if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+    g_share_active.store(false);
+    g_share_entity = 0;
+    return ShareResult::kNotReady;
+  }
+  return ShareResult::kStarted;
 }
 
 bool command(std::uint16_t seq, const std::uint8_t* payload, std::size_t len) {

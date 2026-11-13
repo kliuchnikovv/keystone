@@ -91,6 +91,26 @@ bool commission_code(const char* code, bool with_dataset, std::uint64_t node_id)
 // Abort an attempt that is still running (the BLE scan waits ~60 s).
 void cancel();
 
+// Open a fresh commissioning window on a device the hub already owns, so another
+// administrator (Apple Home, Google Home, …) can join the same device. Enhanced
+// Commissioning Method: the SDK generates a new passcode + salt and the callback
+// below hands back the manual setup code the user types into the other app. The
+// window stays open for `timeout_s` or until the other admin finishes.
+enum class ShareResult : std::uint8_t {
+  kStarted,         // the request was accepted; the manual code arrives via the handler
+  kNotReady,        // the commissioner is not up yet
+  kBusy,            // a commissioning or share is already running
+  kUnknownEntity,   // no Matter entity with this id
+};
+
+// The handler the caller sets before `share()`. Fires once per share: `manual_code`
+// is the 11-digit string to type into the other admin (or null on `error`).
+using ShareFn = void (*)(void* ctx, std::uint16_t entity_id, const char* manual_code,
+                         const char* error);
+void set_share_handler(void* ctx, ShareFn fn);
+
+ShareResult share(std::uint16_t entity_id, std::uint16_t timeout_s);
+
 // A COMMAND from the hub core for an entity of chip 0x03. `payload` is the COMMAND body:
 // entity_id(u16), attr_id(u8), value. Answers CMD_ACK for `seq` once CHIP accepted the
 // invoke/write. Returns false when the entity/attribute is not a Matter binding (the
