@@ -217,6 +217,111 @@ Invariant: chip health belongs to the *brain*. A chip reporting "I'm fine"
 tells the brain nothing useful about the *link* — the brain must judge
 liveness from its own inbound stream.
 
+## Investigate the C6 random restarts
+
+The two C6s reboot far more than they should: the last `chips` snapshot (hub
+uptime ~46 min) showed **203 reboots seen for zigbee-c6 and 169 for thread-c6**.
+Something — a mix of things — restarts them every few minutes. Known causes so
+far: the Pi5's 600 mA per-USB-port current cap trips VBUS when both chips burst
+at once (see the `pi5-usb-power-cap` memory, fix = `usb_max_current_enable=1` +
+reboot), and the brownout detector tripped on radio bursts at level 1
+(~2.58 V), now disabled in both C6 images (`CONFIG_ESP_BROWNOUT_DET` not set).
+After both of those the count is still high, so **there is a second class of
+restart we have not pinned down yet**. Question: what is actually resetting
+the chips, and how much of it is one root cause vs. several?
+
+What to collect, before changing anything:
+
+- Classify every reboot by `esp_reset_reason()` (we already print it at boot;
+  turn it into a persistent counter per reason in NVS so a session that wipes
+  the UART log does not lose it). The histogram per chip is what tells us
+  whether we see a panic storm, a brownout storm, a watchdog storm or USB
+  cycling.
+- Correlate with the Pi's dmesg (`USB disconnect, device number N`): a pair
+  of disconnects within 1–2 s on different buses is power, a lone one is
+  software (chip reset → USB re-enumerated without the Pi touching VBUS).
+- Capture the UART tail across a reset: when it is a panic/abort the chip
+  prints backtrace before the restart; when the port disappears with nothing,
+  it is power or hard reset. The `serial-tap.py` we already have teaches both
+  to the same log and is what to run during a soak.
+- Note what else the chip was doing at the moment: Zigbee TX burst, Thread
+  routing burst, OTA flash write, NVS commit. The `zigbee_reset_reason_name`
+  helper already prints it; add a one-line "last activity before reset" to
+  the chip's self-entity telemetry (`attr 0x78`?).
+
+Only then it is worth a fix — the fix will be different for brownout, panic,
+and silent power loss, and we do not know the mix yet.
+
+Status: **open, no plan yet** — the data is the deliverable, not a patch.
+
+## Auto-recovery when a chip restarts
+
+Related but separate: the user reports "часто один из чипов не виден" — after
+a C6 reboot the hub sometimes does not notice the chip came back, or the UART
+link stays wedged until the brain is also reset. RadioCoordinator already
+does the right thing when a frame arrives with a new boot_id (clear + re-QUERY),
+and ChipMonitor marks a chip SILENT after 20 s of no frames. **What is missing
+is the active step that turns SILENT back into READY by itself.**
+
+What we have today:
+
+- `ChipMonitor` marks SILENT, drops in-flight commands as Unreachable, probes
+  the chip with a QUERY every 10 s.
+- `RadioCoordinator` resyncs on any frame with an unknown `boot_id`.
+- No RX recovery on the brain's UART: if the C6 reboot left garbage in the
+  line, `FrameReader` resyncs on the next 0x00 — but a line that is stuck
+  high (floating RX during the other side's reset) emits no bytes to resync
+  from. We already pulled the RX pin up in `EspUartLink::begin()`, which cut
+  the phantom CRC errors; whether a wedged link is the same bug or another
+  one is unproven.
+
+What auto-recovery should cover:
+
+- **Link wedged, chip alive**: the brain sees heartbeats stop but nothing
+  coming in at all. Today the QUERY from `ChipMonitor` cannot wake it because
+  our side's RX ignores the (possibly valid) answer. Likely fix: on
+  `kSilent → still silent after one probe`, re-init our own UART driver
+  (`uart_driver_delete` + `uart_driver_install`) and resend QUERY once. One
+  shot, logged — never in a loop.
+- **Chip restarting fast (flapping)**: the monitor already logs FLAPPING on
+  ≥3 reboots in 5 min. Add a hub-side action: back off commands to that chip
+  for 30 s, surface `chip_flapping` as a history event with the reason
+  reported by the C6 (see the investigation above), and keep the LED amber.
+- **Chip gone for minutes**: once the pattern above is known, decide whether
+  the brain should give up and rely on the C6's own task-watchdog to reboot
+  it (acceptable today) or whether the soldered-rev reset line (EN pin from
+  a spare S3 GPIO, raised in the health section) is the real answer. **This
+  is the "automated hardware recovery" the health section mentioned —
+  turning it from "options for later" into a decision.**
+- **Co-processor outbound buffer**: when the link resumes and the chip did
+  not reboot, replay what we missed instead of relying on a fresh DECLARE
+  (same note the health section has, cross-reference, not duplicate).
+
+Status: **open**. Blocker: we do not yet know which failure mode is the
+common one — the investigation above runs first and chooses the fix.
+
+## The third chip the app shows as "?"
+
+Both the console (`chips`) and the app list a third chip with no name —
+`chip 0x03 (?): ready, N frames, ...`. It is not a mystery and not a bug in
+the wire: 0x03 is the Matter bridge's **pseudo-chip** on the brain itself
+(`firmware/brain-s3/main/matter_bridge.hpp::kChipId = 0x03`), the owner of
+every Matter node the hub commissioned. The current TIMMERFLOTTE is here
+(`0x0300 sensor chip3: battery / temperature / humidity`). The core routes
+DECLARE/STATE/COMMAND/CMD_ACK to it exactly like to a UART co-processor,
+which is why it appears in `chips` at all.
+
+The "?" is just a missing label. Fix:
+
+- `firmware/brain-s3/main/main.cpp::cmd_chips` prints "zigbee" for 0x01 and
+  "thread" for 0x02; teach it "matter" for 0x03 (any other id stays "?").
+- The app snapshot carries the same chip list — give 0x03 a display name
+  and a Matter-looking glyph (not a radio icon: it has no radio of its own).
+- Nothing on the wire needs to change; the chip id is already stable and
+  entity ids 0x0300.. already live there.
+
+Status: cosmetic; the plumbing is already right.
+
 ## OTA updates for the co-processor C6s
 
 Today the two C6s (Zigbee coordinator, Thread border router) can only be
