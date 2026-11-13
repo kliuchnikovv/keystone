@@ -143,6 +143,35 @@ PACKETBUF_OLD = "#include <esp_event.h>\n"
 PACKETBUF_NEW = "#include <esp_event.h>\n#include <system/SystemPacketBuffer.h>\n"
 
 
+# --- 6) the read command drags the chip-tool data-model logger into the image -
+#
+# esp_matter_controller_read_command.cpp prints every attribute it receives with
+# DataModelLogger::LogAttribute/LogEvent (and dumps the events with
+# DataModelLogger::LogEvent). That logger is the chip-tool's zap-generated
+# logging for *every* cluster in the spec: linking the read command — which the
+# brain needs to learn what a commissioned node has — pulls in
+# DataModelLogger.cpp.obj plus EntryToText.cpp.obj, ~420 KB of code the brain
+# never runs. Without them the Matter build fits the existing 0x1F0000 app slots
+# (2.03 MB); with them it overflows by 365 KB.
+#
+# The brain renders the TLV itself (main.cpp: matter_log_attribute), and the
+# caller's own callback still receives the raw reader, so the logger's output is
+# redundant here: drop the two calls (and the include) and leave the callback
+# path untouched.
+READ_CMD = ROOT / "components/esp_matter_controller/commands/esp_matter_controller_read_command.cpp"
+# The subscribe command carries the same include and the same two calls. The brain links it
+# as soon as it subscribes to a node's attributes, so leaving it unpatched would pull the
+# logger (and its ~420 KB) straight back into the image.
+SUBSCRIBE_CMD = ROOT / "components/esp_matter_controller/commands/esp_matter_controller_subscribe_command.cpp"
+DML_INCLUDE_OLD = "#include <commands/clusters/DataModelLogger.h>\n"
+DML_INCLUDE_NEW = ("// keystone: DataModelLogger left out (it links ~420 KB of chip-tool logging);\n"
+                   "// see scripts/matter-patches.py\n")
+DML_ATTR_OLD = "    error = DataModelLogger::LogAttribute(path, data);\n"
+DML_ATTR_NEW = "    error = CHIP_NO_ERROR;  // keystone: see scripts/matter-patches.py\n"
+DML_EVENT_OLD = "        error = DataModelLogger::LogEvent(event_header, data);\n"
+DML_EVENT_NEW = "        error = CHIP_NO_ERROR;  // keystone: see scripts/matter-patches.py\n"
+
+
 def patch(path, old, new, what, apps=ALL):
     if APP not in apps:
         print(f"  skip  {what} (not needed by {APP})")
@@ -167,6 +196,12 @@ def main():
     patch(NIMBLE_CPP, MTU_OLD, MTU_NEW, "nimble backend: survive a failed MTU exchange", (BRAIN,))
     patch(NIMBLE_CPP, CANCEL_OLD, CANCEL_NEW, "nimble backend: no ble_gap_conn_cancel on a dead host", (BRAIN,))
     patch(PLATFORM_EVENT_H, PACKETBUF_OLD, PACKETBUF_NEW, "platform event header: include system/SystemPacketBuffer.h")
+    patch(READ_CMD, DML_INCLUDE_OLD, DML_INCLUDE_NEW, "read command: no DataModelLogger include", (BRAIN,))
+    patch(READ_CMD, DML_ATTR_OLD, DML_ATTR_NEW, "read command: no DataModelLogger::LogAttribute", (BRAIN,))
+    patch(READ_CMD, DML_EVENT_OLD, DML_EVENT_NEW, "read command: no DataModelLogger::LogEvent", (BRAIN,))
+    patch(SUBSCRIBE_CMD, DML_INCLUDE_OLD, DML_INCLUDE_NEW, "subscribe command: no DataModelLogger include", (BRAIN,))
+    patch(SUBSCRIBE_CMD, DML_ATTR_OLD, DML_ATTR_NEW, "subscribe command: no DataModelLogger::LogAttribute", (BRAIN,))
+    patch(SUBSCRIBE_CMD, DML_EVENT_OLD, DML_EVENT_NEW, "subscribe command: no DataModelLogger::LogEvent", (BRAIN,))
 
 
 if __name__ == "__main__":

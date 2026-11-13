@@ -16,6 +16,13 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # --- Zigbee stack expects a 1 kHz tick ---
 CONFIG_FREERTOS_HZ=1000
 
+# Brownout detector OFF (not just a lower threshold). The C6-DevKitC on USB dips
+# its 3.3 V rail during a Zigbee transmission; even level 1 (~2.58 V) tripped and
+# the chip brownout-reset every ~40 s under load (E BOD: Brownout detector was
+# triggered, rst:0x3). main.cpp additionally disables the ana BOD at runtime.
+# Cost: a genuinely collapsing supply now hangs the chip instead of rebooting it.
+# CONFIG_ESP_BROWNOUT_DET is not set
+
 # --- OTA from the brain over the UART link (docs/ota.md) ---
 # A new image boots "pending verify" and is reverted by the bootloader on the next
 # reset unless the app confirms itself (we do, once the brain has queried us).

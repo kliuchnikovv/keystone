@@ -1129,6 +1129,8 @@ const char* thread_reset_reason_name() {
 }
 
 extern "C" void app_main() {
+  // USB-powered DevKitC: the rail dips during radio bursts and the ana BOD would
+  // reset the chip. Disabled here and in sdkconfig.defaults (CONFIG_ESP_BROWNOUT_DET=n).
   brownout_ll_bod_enable(false);
   brownout_ll_ana_reset_enable(false);
   ESP_LOGI(kTag, "reset reason: %s", thread_reset_reason_name());

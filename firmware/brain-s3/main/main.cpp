@@ -77,6 +77,7 @@
 #include "core/thread_dataset.hpp"
 #include "core/wifi_policy.hpp"
 #include "matter_paa.hpp"
+#include "matter_bridge.hpp"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_attr.h"
@@ -486,6 +487,36 @@ using Reconciler = core::Reconciler<Dispatcher>;
 // matches header.chip_id, and fans every inbound message from any underlying
 // transport out to all subscribers. Kept private to this app for now; if a
 // second app ever needs it we'll move it into core with host tests.
+
+#ifdef KEYSTONE_HAVE_MATTER
+// The Matter pseudo-chip (0x03) has no UART: its messages come from matter_bridge, and the
+// router injects them straight into the fan-out. This bus exists only so that the core can
+// publish to 0x03 like it publishes to any other chip: a COMMAND becomes a CHIP invoke/write,
+// and the core's QUERY (it does this for a chip it has just (re)discovered) becomes a
+// re-declaration of every Matter entity.
+class MatterLink final : public core::Bus {
+ public:
+  bool subscribe(MessageFn fn, void* ctx) noexcept override {
+    (void)fn;
+    (void)ctx;
+    return true;
+  }
+
+  bool publish(const hubproto::Header& h, const std::uint8_t* payload,
+               std::size_t len) noexcept override {
+    if (h.chip_id != matter_bridge::kChipId) return false;
+    if (h.type == hubproto::MsgType::Query) {
+      matter_bridge::republish();
+      return true;
+    }
+    if (h.type != hubproto::MsgType::Command) return false;
+    // The COMMAND body is entity_id(u16), attr_id(u8), value; the bridge answers with a
+    // CMD_ACK for `seq` once CHIP accepted the invoke/write, so the dispatcher's bookkeeping
+    // stays the same as for a real co-processor.
+    return matter_bridge::command(h.seq, payload, len);
+  }
+};
+#endif
 class ChipRouter final : public core::Bus {
  public:
   // Bind an underlying bus to a chip_id. Subscribes internally so its inbound
@@ -513,6 +544,15 @@ class ChipRouter final : public core::Bus {
 
   // How many subscribers the fan-out holds right now.
   int subscriber_count() const noexcept { return n_subs_; }
+
+  // Deliver a message as if it had arrived from a bound chip. The Matter bridge is the
+  // first user: chip 0x03 has no UART, so its DECLARE/STATE/CMD_ACK are produced in this
+  // process but must take exactly the same path (registry, state machine, app) as a
+  // co-processor's.
+  void inject_inbound(const hubproto::Header& h, const std::uint8_t* p,
+                      std::size_t len) noexcept {
+    fan_out(h, p, len);
+  }
 
   // How many subscribers fit. Who subscribes today: the radio coordinator, the
   // state machine, the dispatcher, the chip monitor, the OTA verifier, the two
@@ -794,18 +834,16 @@ void on_reconcile(void* /*ctx*/, Reconciler::Kind kind, std::uint16_t entity,
 }
 
 // ---- Matter commissioning ---------------------------------------------------------------------
-// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read; the Matter
-// chip (the only one with a stack that can commission anything) does the work and says how far it
-// got. That answer arrives in the UART RX task, so here it is only queued — the main loop owns the
-// cache and the clients.
+// The phone reads a Matter device over Bluetooth and hands the hub the bytes it read; the brain's
+// own commissioner (matter_bridge) does the work and says how far it got. Its progress reports
+// arrive on the bridge's worker task, so here they are only queued — the main loop owns the cache
+// and the clients.
 struct MatterUpdate {
   hubproto::MatterState state = hubproto::MatterState::Idle;
   hubproto::MatterCode code = hubproto::MatterCode::Ok;
   std::uint16_t entity = 0;
 };
 QueueHandle_t g_matter_q = nullptr;
-// Has the Matter chip ever said anything? Without it there is nothing to commission with.
-std::atomic<bool> g_thread_seen{false};
 
 #ifdef KEYSTONE_HAVE_MATTER
 // The Thread operational dataset the commissioner hands to the device over BLE.
@@ -815,6 +853,51 @@ std::atomic<bool> g_thread_seen{false};
 // commissioning, and that takes minutes.
 static core::ThreadDataset g_thread_dataset;
 static SemaphoreHandle_t g_thread_dataset_sem = nullptr;
+
+// matter_bridge's three hooks into the hub. They are called on the bridge's worker task,
+// which is why the sink goes through ChipRouter's fan-out (thread-safe by construction:
+// every subscriber is) and the progress only queues.
+//
+// The sink uses g_bus rather than a captured router pointer because the bridge is started
+// before app_main builds the router (the CHIP controller must be created while the internal
+// heap is still one block); anything published before then is dropped by the check.
+static void bridge_sink(void* ctx, const hubproto::Header& h, const std::uint8_t* p,
+                        std::size_t len) {
+  (void)ctx;
+  if (g_bus != nullptr) static_cast<ChipRouter*>(g_bus)->inject_inbound(h, p, len);
+}
+
+// Ask the co-processor that owns the 802.15.4 radio for its Thread network. Called on the
+// bridge's worker task, so it may block; the answer comes back through on_bus_forward below.
+static bool bridge_dataset(void* ctx, std::uint8_t* out, std::size_t cap, std::size_t& len,
+                           std::uint32_t timeout_ms) {
+  (void)ctx;
+  if (g_bus == nullptr || g_thread_dataset_sem == nullptr) return false;
+  // Forget an answer from an earlier attempt, so we never start with a stale dataset.
+  g_thread_dataset.clear();
+  while (xSemaphoreTake(g_thread_dataset_sem, 0) == pdTRUE) {
+  }
+  hubproto::Header q{};
+  q.version = hubproto::kProtocolVersion;
+  q.type = hubproto::MsgType::ThreadDatasetReq;
+  q.chip_id = kThreadChipId;
+  if (!g_bus->publish(q, nullptr, 0)) return false;
+  if (xSemaphoreTake(g_thread_dataset_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return false;
+  len = g_thread_dataset.size();
+  if (len == 0 || len > cap) return false;
+  std::memcpy(out, g_thread_dataset.data(), len);
+  return true;
+}
+
+static void bridge_progress(void* ctx, hubproto::MatterState state, hubproto::MatterCode code,
+                            std::uint16_t entity) {
+  (void)ctx;
+  if (g_matter_q == nullptr) return;  // before app_main creates the queue: nothing to tell yet
+  const MatterUpdate u{state, code, entity};
+  if (xQueueSend(g_matter_q, &u, 0) != pdTRUE) {
+    ESP_LOGW(kTag, "matter: the result queue is full, dropping a result");
+  }
+}
 #endif
 
 // Cross-chip forwarding (Phase 8 / matter-backlog step 1): the Matter
@@ -830,7 +913,6 @@ static SemaphoreHandle_t g_thread_dataset_sem = nullptr;
 void on_bus_forward(void* ctx, const hubproto::Header& h,
                     const std::uint8_t* p, std::size_t len) {
   core::Bus* bus = static_cast<core::Bus*>(ctx);
-  if (h.chip_id == kThreadChipId) g_thread_seen = true;  // the Matter chip is alive
   // Zigbee -> Matter mirror: DECLARE (so Matter can create a bridged
   // endpoint), STATE (so it can update the Matter attribute). No need to
   // mirror DECLARE_END — Matter Bridge builds endpoints incrementally as
@@ -875,18 +957,6 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     bus->publish(fwd, p, len);
     ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> Zigbee seq=%u",
              static_cast<unsigned>(h.entity_id), static_cast<unsigned>(h.seq));
-  } else if (h.type == hubproto::MsgType::MatterResult && h.chip_id == kThreadChipId) {
-    // How far the commissioning got. Queue it — the main loop owns the cache and the clients.
-    hubproto::MatterResult res{};
-    if (!hubproto::decode_matter_result(p, len, res)) {
-      ESP_LOGW(kTag, "matter: the chip sent a result of %u bytes that makes no sense",
-               static_cast<unsigned>(len));
-    } else if (g_matter_q != nullptr) {
-      const MatterUpdate u{res.state, res.code, res.entity_id};
-      if (xQueueSend(g_matter_q, &u, 0) != pdTRUE) {
-        ESP_LOGW(kTag, "matter: the result queue is full, dropping a result");
-      }
-    }
   }
 #ifdef KEYSTONE_HAVE_MATTER
   else if (h.type == hubproto::MsgType::ThreadDataset && h.chip_id == kThreadChipId) {
@@ -2863,23 +2933,10 @@ int cmd_led(int argc, char** argv) {
 }
 
 #ifdef KEYSTONE_HAVE_MATTER
-// experiment/commissioner-on-s3: the node id of the last commissioning
-// attempt, so a stuck attempt can be aborted.
-static chip::NodeId g_matter_pair_node = chip::kUndefinedNodeId;
-
-// The commissioning entry points run a deep CHIP call chain — the PAKE setup,
-// the BLE bring-up, the crypto — and all of it happens under the caller's
-// stack. The console REPL task has 8 KB, and that was not enough: the brain
-// died with "***ERROR*** A stack overflow in task console_repl has been
-// detected ***" and panic-rebooted in the middle of an attempt. So the console
-// command only checks the arguments and hands the request over; the CHIP call
-// happens on this task, which has a stack of its own.
-static constexpr std::uint32_t kMatterTaskStackBytes = 12288;
-
 // The stack of the task that creates the CHIP controller. The controller's own
 // init (client.init + setup_commissioner) runs the CHIP stack's bring-up,
 // which is a deep call chain — the same reason the commissioning has a task
-// of its own.
+// of its own (matter_bridge's worker).
 static constexpr std::uint32_t kMatterCtrlTaskStackBytes = 8192;
 
 // How long the controller task waits for the Wi-Fi interface to have a usable
@@ -2888,148 +2945,39 @@ static constexpr std::uint32_t kMatterCtrlTaskStackBytes = 8192;
 // duplicate address detection to finish — about a second in total.
 static constexpr std::uint32_t kMatterIpv6WaitMs = 10000;
 
-// How long the console waits for the co-processor's answer.
-static constexpr std::uint32_t kThreadDatasetWaitMs = 15000;
-
-struct MatterRequest {
-  enum class Kind { kNone, kPairCode, kPairBle, kPairBleThread, kCancel };
-  Kind kind = Kind::kNone;
-  chip::NodeId node_id = chip::kUndefinedNodeId;
-  std::uint32_t pincode = 0;
-  std::uint16_t disc = 0;
-  char payload[80] = {0};  // the manual code / QR text for kPairCode
-};
-
-static MatterRequest g_matter_req;
-static SemaphoreHandle_t g_matter_req_sem = nullptr;
-
-// CHIP keeps the pairing delegate registered when a discovery attempt ends
-// without a device: RendezvousCleanup() only reports OnPairingComplete once a
-// device has actually connected, so a failed scan leaves the delegate in
-// place and the next attempt is refused with "There is already a pairing
-// process" (esp_err 259). StopPairing() resets the pairer's state; clearing
-// the delegate then lets the next attempt start. Note that the radio is NOT
-// stopped by the cancel: CHIP's NimBLE layer implements CancelConnection() as
-// CHIP_ERROR_NOT_IMPLEMENTED, so the GAP scan keeps running until its 60 s
-// window expires and a scan started right after a cancel fails with
-// CHIP_ERROR_INVALID_STATE ("Failed to start a BLE scan: 3").
-// The CHIP stack lock must be held.
-static void matter_pair_abort_locked() {
-  auto& client = esp_matter::controller::matter_controller_client::get_instance();
-  auto* comm = client.get_commissioner();
-  if (comm == nullptr || comm->GetPairingDelegate() == nullptr) {
-    return;
-  }
-  if (g_matter_pair_node != chip::kUndefinedNodeId) {
-    const CHIP_ERROR err = comm->StopPairing(g_matter_pair_node);
-    printf("matter: stopped the previous attempt (%s)\n", chip::ErrorStr(err));
-  }
-  comm->RegisterPairingDelegate(nullptr);
+// The commissioning itself runs on matter_bridge's worker task: the CHIP call chain is deep
+// and used to overflow the console task's 8 KB and panic the brain. These commands only check
+// their arguments and hand the request over; the bridge logs the progress and pushes it to the
+// app.
+static bool matter_commissioner_up() {
+  if (matter_bridge::ready()) return true;
+  printf("matter: the commissioner is not up yet: %s\n", g_matter_status);
+  return false;
 }
 
-// The one task that talks to the CHIP commissioner. Everything that ends up
-// in CHIP (PairDevice, StopPairing, the crypto behind them) runs here.
-static void matter_worker_task(void* arg) {
-  (void)arg;
-  for (;;) {
-    if (xSemaphoreTake(g_matter_req_sem, portMAX_DELAY) != pdTRUE) {
-      continue;
-    }
-    const MatterRequest req = g_matter_req;
-    esp_err_t err = ESP_FAIL;
-    {
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      auto& client = esp_matter::controller::matter_controller_client::get_instance();
-      auto* comm = client.get_commissioner();
-      if (comm != nullptr) {
-        switch (req.kind) {
-          case MatterRequest::Kind::kCancel: {
-            matter_pair_abort_locked();
-            err = ESP_OK;
-            break;
-          }
-          case MatterRequest::Kind::kPairBle: {
-            // Abort the previous attempt first: CHIP refuses a second pairing
-            // while the delegate of the first one is still registered.
-            matter_pair_abort_locked();
-            g_matter_pair_node = req.node_id;
-            static std::uint8_t no_dataset[1] = {0};
-            err = esp_matter::controller::pairing_ble_thread(req.node_id, req.pincode, req.disc,
-                                                             no_dataset, 0);
-            break;
-          }
-          case MatterRequest::Kind::kPairBleThread: {
-            // The same, but with the dataset the co-processor lent us: the device
-            // can then find a Thread network to join.
-            matter_pair_abort_locked();
-            g_matter_pair_node = req.node_id;
-            if (!g_thread_dataset.valid()) {
-              err = ESP_ERR_INVALID_STATE;
-              break;
-            }
-            err = esp_matter::controller::pairing_ble_thread(
-                req.node_id, req.pincode, req.disc, g_thread_dataset.mutable_data(),
-                static_cast<std::uint8_t>(g_thread_dataset.size()));
-            break;
-          }
-          case MatterRequest::Kind::kPairCode: {
-            matter_pair_abort_locked();
-            g_matter_pair_node = req.node_id;
-            err = esp_matter::controller::pairing_code(req.node_id, req.payload);
-            break;
-          }
-          default:
-            break;
-        }
-      }
-    }
-    ESP_LOGI(kTag, "matter: worker done (%s), %u B of its stack left",
-             esp_err_to_name(err),
-             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
-  }
+static void matter_attempt_busy() {
+  printf("matter: another attempt is already running (matter_pair_cancel stops it)\n");
 }
 
-// Hand the request to the worker and return at once — the console must not
-// wait for the CHIP stack lock.
-static bool matter_enqueue(const MatterRequest& req) {
-  if (g_matter_req_sem == nullptr) {
-    printf("matter: the commissioner is not running\n");
-    return false;
-  }
-  if (!g_matter_controller_ready) {
-    printf("matter: the controller is not up yet: %s\n", g_matter_status);
-    return false;
-  }
-  g_matter_req = req;
-  xSemaphoreGive(g_matter_req_sem);
-  return true;
-}
-
-// experiment/commissioner-on-s3: minimal entry point to drive the Matter
-// controller. `matter_pair <node_id> <setup-code>` hands the setup payload
-// (manual pairing code or the MT: QR text) to esp_matter_controller. The
-// controller starts BLE discovery + PASE; for a Thread device (TIMMERFLOTTE)
-// there is no Thread transport on brain-s3 and no dataset to hand over, so the
-// commissioning will fail AFTER PASE at the network step — that is the point
-// of this test (docs/matter-backlog.md §3, option A). The log will show
-// whether SPAKE2+ with a real Matter device worked at all.
+// `matter_pair <node_id> <setup-code>`: a manual pairing code or the MT: QR text. It carries no
+// Thread network, so it can only bring up a device that is already on a network (a Wi-Fi Matter
+// device); a Thread device needs matter_pair_thread.
 int cmd_matter_pair(int argc, char** argv) {
   if (argc != 3) {
     printf("usage: matter_pair <node_id> <setup-code>\n"
            "  node_id:    decimal, the id you assign in our fabric (any >1)\n"
-           "  setup-code: 11-digit manual code (\"12345678901\") or QR payload (\"MT:...\")\n");
+           "  setup-code: 11-digit manual code (\"12345678901\") or QR payload (\"MT:...\")\n"
+           "  no Thread network is handed over: use matter_pair_thread for a Thread device\n");
     return 1;
   }
-  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
   if (node_id < 2) {
     printf("node_id must be >= 2 (1 is reserved for the commissioner itself)\n");
     return 1;
   }
-  MatterRequest req;
-  req.kind = MatterRequest::Kind::kPairCode;
-  req.node_id = node_id;
-  std::snprintf(req.payload, sizeof(req.payload), "%s", argv[2]);
-  if (!matter_enqueue(req)) {
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_code(argv[2], /*with_dataset=*/false, node_id)) {
+    matter_attempt_busy();
     return 1;
   }
   printf("matter: pairing node 0x%016llx with code '%s' queued\n",
@@ -3038,12 +2986,9 @@ int cmd_matter_pair(int argc, char** argv) {
   return 0;
 }
 
-// experiment/commissioner-on-s3, option A: the pure BLE path. The controller
-// scans BLE for a device that advertises `discriminator`, connects to it and
-// runs PASE (SPAKE2+) with `pincode` over the BLE GATT link. The Thread
-// operational dataset is empty on purpose — brain-s3 has no Thread radio, so
-// this test can only prove the BLE stack and the controller up to PASE; the
-// device will not get a fabric afterwards (docs/matter-backlog.md §3).
+// The pure BLE path: scan for a device that advertises `discriminator`, connect and run PASE
+// (SPAKE2+) with `pincode`. Without a Thread dataset a Thread device stops after PASE; this form
+// is for a device that needs no network hand-over.
 int cmd_matter_pair_ble(int argc, char** argv) {
   if (argc != 4) {
     printf("usage: matter_pair_ble <node_id> <pincode> <discriminator>\n"
@@ -3054,47 +2999,36 @@ int cmd_matter_pair_ble(int argc, char** argv) {
            "  discriminator: the 12-bit setup discriminator (0..4095)\n");
     return 1;
   }
-  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
   const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
   const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
   if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
     printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
     return 1;
   }
-  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
-         static_cast<unsigned long long>(node_id), pincode, disc);
-  MatterRequest req;
-  req.kind = MatterRequest::Kind::kPairBle;
-  req.node_id = node_id;
-  req.pincode = pincode;
-  req.disc = disc;
-  if (!matter_enqueue(req)) {
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_pin(node_id, pincode, disc, /*with_dataset=*/false)) {
+    matter_attempt_busy();
     return 1;
   }
+  printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
+         static_cast<unsigned long long>(node_id), pincode, disc);
   printf("matter: watch the log for PASE/CASE progress\n");
   return 0;
 }
 
-// experiment/commissioner-on-s3: abort a commissioning attempt that is still
-// running (the BLE scan waits ~60 s for the device).
+// Abort an attempt that is still running (the BLE scan waits ~60 s for the device).
 int cmd_matter_pair_cancel(int argc, char** argv) {
   (void)argc;
   (void)argv;
-  MatterRequest req;
-  req.kind = MatterRequest::Kind::kCancel;
-  if (!matter_enqueue(req)) {
-    return 1;
-  }
+  matter_bridge::cancel();
   printf("matter: cancelling the commissioning attempt\n");
   return 0;
 }
 
-// experiment/commissioner-on-s3: the same as matter_pair_ble, but with a Thread
-// network to hand to the device. The brain has no 802.15.4 radio, so the
-// dataset comes from the co-processor that has one: the console asks for it
-// (hubproto ThreadDatasetReq), waits for the answer and only then starts the
-// commissioning. Without a dataset the device refuses the network
-// (networkingStatus=1) and the commissioning dies at the Thread step.
+// The same as matter_pair_ble, but with the co-processor's Thread network: the bridge borrows the
+// dataset (hubproto ThreadDatasetReq) and hands it to the device over BLE. Without it the device
+// refuses the network (networkingStatus=1) and the commissioning dies at the Thread step.
 int cmd_matter_pair_thread(int argc, char** argv) {
   if (argc != 4) {
     printf("usage: matter_pair_thread <node_id> <pincode> <discriminator>\n"
@@ -3104,57 +3038,22 @@ int cmd_matter_pair_thread(int argc, char** argv) {
            "  the Thread dataset is borrowed from the co-processor (chip 0x02)\n");
     return 1;
   }
-  const chip::NodeId node_id = static_cast<chip::NodeId>(std::strtoull(argv[1], nullptr, 10));
+  const std::uint64_t node_id = std::strtoull(argv[1], nullptr, 10);
   const std::uint32_t pincode = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
   const std::uint16_t disc = static_cast<std::uint16_t>(std::strtoul(argv[3], nullptr, 10));
   if (node_id < 2 || pincode == 0 || pincode > 99999998 || disc > 0xFFF) {
     printf("bad arguments: node_id >= 2, pincode 1..99999998, discriminator 0..4095\n");
     return 1;
   }
-  if (g_bus == nullptr || g_thread_dataset_sem == nullptr) {
-    printf("matter: the commissioner is not running\n");
-    return 1;
-  }
-  // Forget an answer from an earlier attempt, so we do not start with a stale
-  // dataset.
-  g_thread_dataset.clear();
-  while (xSemaphoreTake(g_thread_dataset_sem, 0) == pdTRUE) {
-  }
-  hubproto::Header q{};
-  q.version = hubproto::kProtocolVersion;
-  q.type = hubproto::MsgType::ThreadDatasetReq;
-  q.chip_id = kThreadChipId;
-  if (!g_bus->publish(q, nullptr, 0)) {
-    printf("matter: cannot reach the co-processor (chip 0x%02x)\n", kThreadChipId);
-    return 1;
-  }
-  printf("matter: asked chip 0x%02x for its Thread dataset, waiting %u ms...\n",
-         kThreadChipId, static_cast<unsigned>(kThreadDatasetWaitMs));
-  if (xSemaphoreTake(g_thread_dataset_sem, pdMS_TO_TICKS(kThreadDatasetWaitMs)) != pdTRUE) {
-    printf("matter: no dataset in %u ms (is the co-processor alive?)\n",
-           static_cast<unsigned>(kThreadDatasetWaitMs));
-    return 1;
-  }
-  if (!g_thread_dataset.valid()) {
-    printf("matter: the co-processor sent a dataset we cannot use\n");
-    return 1;
-  }
-  printf("matter: dataset %u bytes, channel %u, network '%s', ext pan id %s\n",
-         static_cast<unsigned>(g_thread_dataset.size()),
-         static_cast<unsigned>(g_thread_dataset.channel()),
-         g_thread_dataset.network_name(),
-         g_thread_dataset.ext_pan_id());
-  MatterRequest req;
-  req.kind = MatterRequest::Kind::kPairBleThread;
-  req.node_id = node_id;
-  req.pincode = pincode;
-  req.disc = disc;
-  if (!matter_enqueue(req)) {
+  if (!matter_commissioner_up()) return 1;
+  if (!matter_bridge::commission_pin(node_id, pincode, disc, /*with_dataset=*/true)) {
+    matter_attempt_busy();
     return 1;
   }
   printf("matter: BLE commissioning node 0x%016llx, pin %u, discriminator %u queued\n",
          static_cast<unsigned long long>(node_id), pincode, disc);
-  printf("matter: watch the log for PASE/CASE progress\n");
+  printf("matter: the bridge asks chip 0x%02x for the Thread dataset; watch the log for PASE/CASE\n",
+         kThreadChipId);
   return 0;
 }
 #endif  // KEYSTONE_HAVE_MATTER
@@ -3273,24 +3172,21 @@ void app_on_state(void* /*ctx*/, std::uint16_t entity, std::uint8_t attr, const 
   if (xQueueSend(g_app_ev_q, &e, 0) != pdTRUE) g_app_resync = true;  // clients resync, no gap recovery needed
 }
 
-// How the last attempt to add a Matter device stands. The main loop owns it: the chip's answer
-// arrives in the UART task (queued) and the app asks for it (`matter.status`) or hears about it
-// (the `matter` push).
+// How the last attempt to add a Matter device stands. The main loop owns it: matter_bridge's
+// progress reports arrive on the bridge's worker task (queued) and the app asks for it
+// (`matter.status`) or hears about it (the `matter` push).
 struct MatterStatus {
   hubproto::MatterState state = hubproto::MatterState::Idle;
   hubproto::MatterCode code = hubproto::MatterCode::Ok;
   std::uint16_t entity = 0;
-  std::uint32_t deadline_ms = 0;  // when the attempt is given up on (0: nothing running)
+  std::uint32_t deadline_ms = 0;  // when a silent attempt is given up on (0: nothing running)
 };
 MatterStatus g_matter;
 
-// Has the Matter chip ever answered a MatterPair? A chip that is alive but silent
-// has no commissioner — then a second attempt is refused right away instead of
-// making the app wait another minute.
-bool g_matter_cannot = false;
-
-// How long the hub waits for the Matter chip to say something before it gives up.
-constexpr std::uint32_t kMatterTimeoutMs = 60000;
+// How long the hub waits for the commissioner to say anything before it gives up. This is an
+// inactivity limit, not the length of the attempt: every progress report (scanning, PASE,
+// adding, the Thread attach) pushes the deadline, and the BLE scan alone may run for a minute.
+constexpr std::uint32_t kMatterTimeoutMs = 180000;
 
 // Commands in flight on behalf of a client: CMD_ACK (any task) -> `ack` frame.
 struct AppPending {
@@ -3905,48 +3801,53 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     o = cm.out;
     if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
   } else if (!std::strcmp(op, "matter.commission")) {
-    // The bytes the phone read from a Matter device over Bluetooth. The phone does not
-    // interpret them any further — the Matter chip is the only one with a stack that can
-    // commission anything — so they go there, and the chip says how far it got.
+    // The bytes the phone read from a Matter device over Bluetooth. Only the QR payload (kind 2)
+    // carries the setup passcode PASE needs; the service data and the enhanced advertisement
+    // identify the device but cannot start commissioning, so they are refused with a reason the
+    // app can show. Everything that talks to CHIP happens in matter_bridge.
     const core::app::MatterRequest mreq = core::app::matter_commission_parse(reader, m.args);
     o = mreq.out;
-    if (o.ok && !g_thread_seen) {
-      o = Outcome::fail(Err::Unsupported, "the hub has no Matter chip");
-    } else if (o.ok && g_matter_cannot) {
-      // The chip is alive and never answered the last time — it has no commissioner.
-      o = Outcome::fail(Err::Unsupported, "this hub's Matter chip cannot add Matter devices");
+    if (o.ok) {
+#ifdef KEYSTONE_HAVE_MATTER
+      switch (matter_bridge::commission_payload(mreq.kind, mreq.bytes, mreq.len)) {
+        case matter_bridge::Start::kStarted:
+          break;
+        case matter_bridge::Start::kNotReady:
+          o = Outcome::fail(Err::Unsupported, "the Matter commissioner is not up yet");
+          break;
+        case matter_bridge::Start::kBusy:
+          o = Outcome::fail(Err::Busy, "another Matter device is being added");
+          break;
+        case matter_bridge::Start::kNoSetupHash:
+          o = Outcome::fail(Err::Unsupported,
+                            "this payload carries no setup passcode: scan the QR code or type its code");
+          break;
+        case matter_bridge::Start::kBadPayload:
+          o = Outcome::fail(Err::BadArgs, "the payload is not a Matter setup payload");
+          break;
+      }
+#else
+      o = Outcome::fail(Err::Unsupported, "the hub has no Matter commissioner");
+#endif
     }
     if (o.ok) {
-      std::uint8_t payload[hubproto::kMatterPairHeader + hubproto::kMatterMaxPayload] = {};
-      const auto enc =
-          hubproto::encode_matter_pair(mreq.kind, mreq.bytes, mreq.len, payload, sizeof(payload));
-      if (!enc.ok) {
-        o = Outcome::fail(Err::Internal, "the payload does not fit");
-      } else {
-        hubproto::Header h{};
-        h.version = hubproto::kProtocolVersion;
-        h.type = hubproto::MsgType::MatterPair;
-        h.chip_id = kThreadChipId;
-        bus.publish(h, payload, enc.len);
-        g_matter.state = hubproto::MatterState::Scanning;
-        g_matter.code = hubproto::MatterCode::Ok;
-        g_matter.entity = 0;
-        g_matter.deadline_ms = now + kMatterTimeoutMs;
-        ESP_LOGI(kTag, "app: matter.commission kind=%u %u byte(s) -> chip 0x%02x",
-                 static_cast<unsigned>(mreq.kind), static_cast<unsigned>(mreq.len),
-                 static_cast<unsigned>(kThreadChipId));
-        // The answer says the bytes were handed over — how the attempt goes is reported
-        // by the `matter` push, not here.
-        static char mb[64];
-        core::JsonWriter mw(mb, sizeof(mb));
-        mw.begin_object().kv("type", "res").kv("id", static_cast<std::int64_t>(in.id)).kv("ok", true)
-            .key("result").begin_object().kv("state", "started").end_object().end_object();
-        if (mw.ok()) {
-          hub_send(in.fd, mb, mw.size());
-          return;
-        }
-        o = Outcome::fail(Err::Internal, "matter reply too large");
+      g_matter.state = hubproto::MatterState::Scanning;
+      g_matter.code = hubproto::MatterCode::Ok;
+      g_matter.entity = 0;
+      g_matter.deadline_ms = now + kMatterTimeoutMs;
+      ESP_LOGI(kTag, "app: matter.commission kind=%u %u byte(s) -> the brain's own commissioner",
+               static_cast<unsigned>(mreq.kind), static_cast<unsigned>(mreq.len));
+      // The answer says the attempt was accepted — how it goes is reported by the `matter`
+      // push, not here.
+      static char mb[64];
+      core::JsonWriter mw(mb, sizeof(mb));
+      mw.begin_object().kv("type", "res").kv("id", static_cast<std::int64_t>(in.id)).kv("ok", true)
+          .key("result").begin_object().kv("state", "started").end_object().end_object();
+      if (mw.ok()) {
+        hub_send(in.fd, mb, mw.size());
+        return;
       }
+      o = Outcome::fail(Err::Internal, "matter reply too large");
     }
   } else if (!std::strcmp(op, "matter.status")) {
     // A result of its own shape: sent right away.
@@ -4550,21 +4451,12 @@ static void matter_bringup() {
            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
 
-  // The task that runs the commissioning calls. It is created here, while the
-  // internal heap is still one big block — the CHIP stack needs a large
-  // contiguous chunk later on.
-  g_matter_req_sem = xSemaphoreCreateBinary();
-  if (g_matter_req_sem == nullptr) {
-    ESP_LOGE("matter", "no memory for the commissioning queue");
-  } else if (xTaskCreate(matter_worker_task, "matter_cmd",
-                         kMatterTaskStackBytes / sizeof(StackType_t), nullptr, 5,
-                         nullptr) != pdPASS) {
-    ESP_LOGE("matter", "could not create the commissioning task");
-    vSemaphoreDelete(g_matter_req_sem);
-    g_matter_req_sem = nullptr;
-  } else {
-    ESP_LOGI("matter", "commissioning task up (%u B of stack)",
-             static_cast<unsigned>(kMatterTaskStackBytes));
+  // The task that runs the commissioning calls, reads descriptors, subscribes and sends
+  // invoke/write. It is created here, while the internal heap is still one big block — the
+  // CHIP stack needs a large contiguous chunk later on. The bridge only stores its hooks
+  // now; its first message waits for the controller (and for app_main to build the router).
+  if (!matter_bridge::start(nullptr, &bridge_sink, &bridge_dataset, &bridge_progress)) {
+    ESP_LOGE("matter", "the Matter bridge did not start: this hub cannot add Matter devices");
   }
 
   // The task that creates the controller. It waits for the Wi-Fi interface and
@@ -4643,6 +4535,7 @@ static void matter_controller_start() {
     }
   }
   g_matter_controller_ready = true;
+  matter_bridge::controller_ready();  // the worker may now talk to CHIP
   matter_set_status("up");
   ESP_LOGI("matter",
            "controller up (node 112233, fabric 1, UDP 5580): heap %u B (-%d B), "
@@ -4781,6 +4674,13 @@ extern "C" void app_main(void) {
   static EXT_RAM_BSS_ATTR core::UartTransport bus_zb(link_zb);
   static EXT_RAM_BSS_ATTR core::UartTransport bus_th(link_th);
 
+#ifdef KEYSTONE_HAVE_MATTER
+  // Deliberately NOT in PSRAM: MatterLink is polymorphic, and a constant-initialised vtable
+  // pointer in .ext_ram.bss (a NOLOAD section) never reaches RAM — the first virtual call
+  // would fault. It is one pointer wide, so internal DRAM is the right place.
+  static MatterLink matter_link;
+#endif
+
   static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
   static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
@@ -4792,6 +4692,11 @@ extern "C" void app_main(void) {
   if (!bus.bind(kThreadChipId, bus_th)) {
     ESP_LOGE(kTag, "no room for the Thread link");
   }
+#ifdef KEYSTONE_HAVE_MATTER
+  if (!bus.bind(matter_bridge::kChipId, matter_link)) {
+    ESP_LOGE(kTag, "no room for the Matter link");
+  }
+#endif
   g_bus = &bus;
 
   static EXT_RAM_BSS_ATTR core::RadioCoordinator<Registry> coord(bus, reg);
@@ -4910,6 +4815,12 @@ extern "C" void app_main(void) {
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
+#ifdef KEYSTONE_HAVE_MATTER
+  // Every Matter node that joined our fabric earlier comes back here: the bridge re-reads
+  // its descriptor and re-declares its entities, so a hub reboot does not lose the devices
+  // it added (the nodes live in the CHIP fabric, not in the core's tables).
+  matter_bridge::restore();
+#endif
   // Why did we come up? A watchdog or a panic shows up here even when the log around it
   // is lost (the USB console is the only place we can read).
   ESP_LOGI(kTag, "reset reason: %s", reset_reason_text(esp_reset_reason()));
@@ -5132,7 +5043,7 @@ extern "C" void app_main(void) {
                                      dev_ota_status_name(de.status), de.percent);
         if (w.ok()) hub_broadcast(b, w.size());
       }
-      // What the Matter chip said about the attempt to add a device — and what the app hears.
+      // What the clock says about the attempt to add a device — and what the app hears.
       {
         MatterUpdate mu;
         bool moved = false;
@@ -5142,22 +5053,29 @@ extern "C" void app_main(void) {
           g_matter.entity = mu.entity;
           if (mu.state == hubproto::MatterState::Done || mu.state == hubproto::MatterState::Failed) {
             g_matter.deadline_ms = 0;  // it is over, one way or another
+          } else {
+            // Progress, not the end: the deadline is an inactivity limit, and a long
+            // commissioning (scan, PASE, Thread attach, CASE) keeps moving.
+            g_matter.deadline_ms = t + kMatterTimeoutMs;
           }
           moved = true;
         }
-        // The chip went quiet: the attempt is given up on, so the app is not left waiting.
+        // The commissioner went quiet: the attempt is given up on, so the app is not left
+        // waiting forever.
         if (!moved && g_matter.deadline_ms != 0 &&
             static_cast<std::int32_t>(t - g_matter.deadline_ms) >= 0) {
-          const auto* ti = g_monitor != nullptr ? g_monitor->info(kThreadChipId) : nullptr;
-          const bool chip_alive = ti != nullptr && !ti->silent;
-          if (chip_alive) g_matter_cannot = true;
           g_matter.state = hubproto::MatterState::Failed;
-          g_matter.code = chip_alive ? hubproto::MatterCode::Unsupported : hubproto::MatterCode::Timeout;
+#ifdef KEYSTONE_HAVE_MATTER
+          g_matter.code = matter_bridge::ready() ? hubproto::MatterCode::Timeout
+                                                 : hubproto::MatterCode::Unsupported;
+#else
+          g_matter.code = hubproto::MatterCode::Unsupported;
+#endif
           g_matter.entity = 0;
           g_matter.deadline_ms = 0;
           moved = true;
-          ESP_LOGW(kTag, "matter: the chip did not answer (chip alive: %s)",
-                   chip_alive ? "yes" : "no");
+          ESP_LOGW(kTag, "matter: the commissioner said nothing for %u s, giving the attempt up",
+                   static_cast<unsigned>(kMatterTimeoutMs / 1000));
         }
         if (moved) {
           ESP_LOGI(kTag, "matter: %s (%s), entity 0x%04x", core::app::matter_state_name(g_matter.state),

@@ -27,6 +27,7 @@ set(EXTRA_COMPONENT_DIRS ${KS_EXTRA_COMPONENT_DIRS})
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(keystone_brain_s3)
+add_compile_options(-Wno-error)
 
 if(DEFINED ENV{ESP_MATTER_PATH})
     # Match esp-matter examples/controller's build flags. CHIP headers need

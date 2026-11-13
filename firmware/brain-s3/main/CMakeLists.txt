@@ -24,6 +24,9 @@ if(DEFINED ENV{ESP_MATTER_PATH})
     # The PAA trust store for the commissioner's attestation verification
     # (it includes CHIP headers, so it only builds with the Matter SDK).
     list(APPEND KS_SRCS matter_paa.cpp)
+    # The hub's own commissioner and the bridge from a commissioned node to hub
+    # entities (chip 0x03). Firmware-only: the core never sees CHIP.
+    list(APPEND KS_SRCS matter_bridge.cpp)
 endif()
 
 idf_component_register(SRCS ${KS_SRCS}

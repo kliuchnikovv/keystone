@@ -33,7 +33,9 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "hal/brownout_ll.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -1963,7 +1965,40 @@ void esp_zb_task(void* /*pv*/) {
 
 }  // namespace
 
+// Why did the last boot end? From the outside a watchdog, a panic and a plain
+// brownout all look the same (the USB port just disappears), so print the reason
+// while it is still in the register. Same helper as on thread-c6.
+const char* zigbee_reset_reason_name() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external pin";
+    case ESP_RST_SW: return "software reset";
+    case ESP_RST_PANIC: return "panic/exception";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "other watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_USB: return "USB";
+    case ESP_RST_JTAG: return "JTAG";
+    case ESP_RST_EFUSE: return "eFuse";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "CPU lockup";
+    default: return "unknown";
+  }
+}
+
 extern "C" void app_main(void) {
+  // The C6-DevKitC on USB draws enough peak current during Zigbee transmission to
+  // dip its 3.3 V rail. Even at level 1 (~2.58 V) the dip trips the detector, so
+  // the chip brownout-reset every ~40 s under load (E BOD: Brownout detector was
+  // triggered, rst:0x3). Disable the ana BOD and its reset path entirely: the
+  // dev boards are USB-powered and the 3.3 V rail is not what we are testing.
+  // thread-c6 does the same. A genuinely collapsing supply still hangs the chip —
+  // it just no longer reboots cleanly.
+  brownout_ll_bod_enable(false);
+  brownout_ll_ana_reset_enable(false);
+  ESP_LOGI(kTag, "reset reason: %s", zigbee_reset_reason_name());
   ESP_ERROR_CHECK(nvs_flash_init());
   status_led::init();
   g_boot_id = fw::next_boot_id();  // persisted reboot counter (SPEC Phase 5)

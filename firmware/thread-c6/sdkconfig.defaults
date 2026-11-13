@@ -27,11 +27,12 @@ CONFIG_OPENTHREAD_NETWORK_PSKC=""
 # --- keystone overrides ---
 # Main task headroom for the UART bridge and the OpenThread start-up.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
-# Lower brownout detector threshold to level 1 (~2.58 V) from the default
-# level 7 (~3.10 V). The C6-DevKitC on USB draws enough peak current during
-# Thread routing to hit the 3.10 V threshold.
-# Level 1 gives more headroom without risking NVS corruption on a USB dev board.
-CONFIG_ESP_BROWNOUT_DET_LVL_SEL_1=y
+# Brownout detector OFF (not just a lower threshold). The C6-DevKitC on USB dips
+# its 3.3 V rail during Thread/radio bursts; even level 1 (~2.58 V) tripped and the
+# chip reset with E BOD: Brownout detector was triggered. main.cpp also disables
+# the ana BOD at runtime. Cost: a collapsing supply hangs the chip instead of
+# rebooting it.
+# CONFIG_ESP_BROWNOUT_DET is not set
 
 # Border Router: SRP server + DNS-SD server + border routing are turned on by
 # the one BORDER_ROUTER flag below. Wi-Fi is the infrastructure (backbone)

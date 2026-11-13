@@ -36,14 +36,20 @@ fi
 # 5) the ESP32 platform event header uses chip::System::PacketBuffer without
 #    including the header that declares it — with esp-matter's BLE controller
 #    enabled the file does not compile at all (the thread-c6 build needs this).
+# 6) the read command prints through the chip-tool DataModelLogger, which links
+#    ~420 KB of zap-generated logging for every cluster; the brain prints the TLV
+#    itself, so the calls go and the Matter image fits the 0x1F0000 app slots.
 BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
+  # brain-s3/build is tmpfs on the Pi (see /etc/fstab) — parallel IO is cheap,
+  # keep the default -j.
   BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
 elif [[ "${APP}" == "thread-c6" ]]; then
-  # The thread chip does not build the CHIP stack any more (the Matter Bridge
-  # is gone), so it needs none of the esp-matter patches — it only needs IDF
-  # 5.5, which the image has.
-  BUILD_CMD="idf.py build"
+  # thread-c6/build lives on the SD card (too big for tmpfs on a 4 GB Pi):
+  # a full -j4 ninja saturates SD random IO and freezes SSH. MATTER_JOBS caps
+  # parallelism (default 2); override with MATTER_JOBS=4 for a dev box with SSD.
+  # `-j` is a ninja flag, not an idf.py flag — pass it after `--`.
+  BUILD_CMD="idf.py build -- -j${MATTER_JOBS:-2}"
 fi
 
 echo "==> Building ${APP} in ${IMAGE}"

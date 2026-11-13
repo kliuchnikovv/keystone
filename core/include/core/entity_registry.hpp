@@ -103,6 +103,11 @@ class EntityRegistry {
   // Note: user-assigned entity names are NOT cleared on chip resync.
   std::size_t clear_chip(std::uint8_t chip_id) noexcept;
 
+  // Remove one entity. Returns true if it was there. Used when a device re-describes
+  // itself with fewer endpoints (a Matter node we re-read): `clear_chip` would also drop the
+  // values of the entities that stay, and `declare` resets `has_value` anyway.
+  bool undeclare(std::uint16_t entity_id) noexcept;
+
  private:
   Entity* slot_for(std::uint16_t entity_id) noexcept;  // existing slot, or a free one
 
@@ -236,6 +241,18 @@ std::size_t EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::clear_chip(
     }
   }
   return removed;
+}
+
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::undeclare(
+    std::uint16_t entity_id) noexcept {
+  for (auto& e : entities_) {
+    if (e.in_use && e.entity_id == entity_id) {
+      e.in_use = false;
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace core

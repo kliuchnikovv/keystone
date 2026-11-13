@@ -162,6 +162,24 @@ TEST_CASE("clear_chip removes only that chip's entities") {
   CHECK(reg.find(0x0030) != nullptr);  // chip 0x02 untouched
 }
 
+TEST_CASE("undeclare removes one entity and leaves its siblings alone") {
+  core::EntityRegistry<> reg;
+  DeclareBytes a(0x0010, DeviceType::Light, kLightAttrs.data(), 2);
+  DeclareBytes b(0x0020, DeviceType::Sensor, kSwitchAttrs.data(), 1);
+  REQUIRE(reg.declare(0x03, a.view));
+  REQUIRE(reg.declare(0x03, b.view));
+  REQUIRE(reg.set_value(0x0010, 0x02, hubproto::Value::make_u8(77)));
+
+  CHECK(reg.undeclare(0x0020));
+  CHECK_FALSE(reg.undeclare(0x0020));  // already gone
+  CHECK_FALSE(reg.undeclare(0x9999));
+  CHECK(reg.size() == 1);
+  CHECK(reg.find(0x0010) != nullptr);
+  hubproto::Value v{};
+  CHECK(reg.get_value(0x0010, 0x02, v));  // the survivor kept its value
+  CHECK(v.as_u8() == 77);
+}
+
 TEST_CASE("declare fails when the table is full") {
   core::EntityRegistry<2, 8> reg;  // capacity 2
   DeclareBytes a(0x0001, DeviceType::Switch, kSwitchAttrs.data(), 1);
