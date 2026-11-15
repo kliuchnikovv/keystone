@@ -17,7 +17,7 @@ const DEVICE_LABELS: Record<string, string> = {
 };
 const DEVICE_GLYPHS: Record<string, GlyphName> = {
   light: 'light',
-  switch: 'switch',
+  switch: 'plug',
   sensor: 'sensor',
   occupancy: 'occupancy',
   contact: 'contact',
@@ -131,9 +131,14 @@ export function modeOptions(a: Attr): ModeOption[] | null {
   ];
 }
 
-/** Named devices first (alphabetical), then unnamed ones by id. */
+/** Sensors (devices with no switch) come first, then named devices (alphabetical),
+ * then unnamed ones by id. Sensors at the top of a room read as the room's
+ * headline numbers. */
 export function sortedDevices(entities: Entity[]): Entity[] {
   return [...entities].sort((a, b) => {
+    const aSensor = primarySwitch(a) === undefined;
+    const bSensor = primarySwitch(b) === undefined;
+    if (aSensor !== bSensor) return aSensor ? -1 : 1;
     if ((a.name === null) !== (b.name === null)) return a.name === null ? 1 : -1;
     if (a.name !== null && b.name !== null) return a.name.localeCompare(b.name);
     return a.id - b.id;
@@ -159,6 +164,23 @@ export function deviceStatus(s: HomeState, e: Entity): DeviceStatus {
 /** Devices that live on the Zigbee chip are the ones the hub can identify and remove. */
 export function canManageDevice(s: HomeState, e: Entity): boolean {
   return s.chips.some((c) => c.id === e.chip && c.label === 'zigbee');
+}
+
+/** A Matter device is one the hub commissioned over Matter (pseudo-chip 0x03,
+ * or any chip the hub labels as a Matter chip). */
+export function isMatterDevice(s: HomeState, e: Entity): boolean {
+  if (e.chip === 3) return true;
+  return s.chips.some((c) => c.id === e.chip && c.label.toLowerCase().includes('matter'));
+}
+
+/** Devices the hub can take off the network: Zigbee devices and Matter devices. */
+export function canRemoveDevice(s: HomeState, e: Entity): boolean {
+  return canManageDevice(s, e) || isMatterDevice(s, e);
+}
+
+/** Devices the hub can make blink to be found: Zigbee and Matter devices. */
+export function canIdentifyDevice(s: HomeState, e: Entity): boolean {
+  return canManageDevice(s, e) || isMatterDevice(s, e);
 }
 
 /** The Zigbee co-processor. Its devices are the ones that can be given new firmware. */

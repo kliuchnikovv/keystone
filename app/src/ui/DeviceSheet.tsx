@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { MAX_NAME_CHARS, nameProblem } from '../model/names';
+import { allRooms, stripRoomPrefix } from '../model/rooms';
 import { attrLabel, formatValue } from '../model/format';
 import {
   attrOf,
@@ -76,6 +77,7 @@ export function DeviceSheet({
 }: DeviceSheetProps) {
   const t = useTheme();
   const [renaming, setRenaming] = useState(false);
+  const [changingRoom, setChangingRoom] = useState(false);
   const [updating, setUpdating] = useState(false);
   const sw = primarySwitch(entity);
   const title = deviceTitle(entity);
@@ -181,11 +183,62 @@ export function DeviceSheet({
 
       {renaming && <RenameBox current={entity.name} onDone={() => setRenaming(false)} onSave={onRename} />}
 
+      {changingRoom && (
+        <View style={[styles.block, { borderTopColor: t.border }]}>
+          <Text style={{ color: t.muted, fontSize: 13, marginBottom: 8 }}>Choose a room</Text>
+          <View style={styles.roomPicker}>
+            {allRooms().map((room) => (
+              <Pressable
+                key={room}
+                accessibilityRole="button"
+                accessibilityLabel={`Move to ${room}`}
+                onPress={async () => {
+                  const rest = stripRoomPrefix(entity.name);
+                  // roomOf reads the first word; use the room's own trigger word (lowercase).
+                  const trigger = room.toLowerCase().split(' ')[0] ?? room.toLowerCase();
+                  const next = rest ? `${trigger} ${rest}` : trigger;
+                  const ok = await onRename(next);
+                  if (ok) { setChangingRoom(false); notify?.(`Moved to ${room}`); }
+                }}
+                style={[styles.roomChip, { borderColor: t.border, backgroundColor: t.fill }]}
+              >
+                <Text style={{ color: t.text, fontSize: 13 }}>{room}</Text>
+              </Pressable>
+            ))}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Remove room"
+              onPress={async () => {
+                const rest = stripRoomPrefix(entity.name);
+                const ok = await onRename(rest || null);
+                if (ok) { setChangingRoom(false); notify?.('Room removed'); }
+              }}
+              style={[styles.roomChip, { borderColor: t.border, backgroundColor: t.fill }]}
+            >
+              <Text style={{ color: t.muted, fontSize: 13 }}>No room</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel room change"
+              onPress={() => setChangingRoom(false)}
+              style={[styles.roomChip, { borderColor: t.border, backgroundColor: t.fill }]}
+            >
+              <Text style={{ color: t.muted, fontSize: 13 }}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       <View style={[styles.rows, { borderTopColor: t.border }]}>
         <SheetRow
           label="Rename"
           a11y={`Rename ${title}`}
           onPress={() => setRenaming(true)}
+        />
+        <SheetRow
+          label="Move to another room"
+          a11y={`Move ${title} to another room`}
+          onPress={() => setChangingRoom(true)}
         />
         {onIdentify ? (
           <SheetRow
@@ -443,6 +496,8 @@ const styles = StyleSheet.create({
   stepValue: { fontSize: 15, fontWeight: '600', minWidth: 72, textAlign: 'center' },
   rows: { marginTop: 12, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth },
   renameButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  roomPicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  roomChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   modes: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 1 },
   chipPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },

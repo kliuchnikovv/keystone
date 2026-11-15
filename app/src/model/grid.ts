@@ -20,6 +20,12 @@ export const TALL_RATIO = 1.35;
  * device as the mock's wide button, a device with several readings as a tall
  * one — it has more to say and the room to say it in. */
 export function deviceShape(e: Entity): DeviceShape {
+  const isSensor = primarySwitch(e) === undefined &&
+    (e.device === 'sensor' || e.device === 'occupancy' || e.device === 'contact');
+  // A sensor is always a short tile, even with several readings.
+  if (isSensor) return 'square';
+  // A plug is shown at sensor width (a short tile) rather than a full row.
+  if (e.device === 'switch') return 'square';
   const readings = readingAttrs(e);
   const count = (readings.first ? 1 : 0) + readings.rest.length;
   if (count >= 2) return 'tall';
@@ -80,7 +86,7 @@ export function gridLayout(items: GridItem[], width: number): { boxes: GridBox[]
       continue;
     }
     if (cell >= GRID_COLUMNS) closeRow();
-    const h = item.shape === 'square' ? column : Math.round(column * TALL_RATIO);
+    const h = item.shape === 'square' ? GRID_ROW_HEIGHT : Math.round(column * TALL_RATIO);
     current.items.push({ id: item.id, shape: item.shape, x: cell * (column + GRID_GAP), width: column, height: h });
     current.height = Math.max(current.height, h);
     cell += 1;

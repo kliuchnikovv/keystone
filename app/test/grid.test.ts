@@ -23,8 +23,8 @@ function device(id: number, kind: 'switch' | 'sensor' | 'climate', name: string 
 }
 
 describe('the shape of a device button', () => {
-  it('a switchable device is the wide button of the room mock', () => {
-    expect(deviceShape(device(1, 'switch'))).toBe('wide');
+  it('a switchable device is a compact tile like a sensor', () => {
+    expect(deviceShape(device(1, 'switch'))).toBe('square');
   });
 
   it('a sensor with one reading is a square', () => {
@@ -58,10 +58,10 @@ describe('the grid', () => {
       [{ id: 1, shape: 'square' }, { id: 2, shape: 'square' }, { id: 3, shape: 'square' }],
       width,
     );
-    expect(boxes[0]).toMatchObject({ x: 0, y: 0, width: column, height: column });
+    expect(boxes[0]).toMatchObject({ x: 0, y: 0, width: column, height: GRID_ROW_HEIGHT });
     expect(boxes[1]).toMatchObject({ x: column + GRID_GAP, y: 0 });
     expect(boxes[2]).toMatchObject({ x: (column + GRID_GAP) * 2, y: 0 });
-    expect(height).toBe(column);
+    expect(height).toBe(GRID_ROW_HEIGHT);
   });
 
   it('a fourth square starts the next row', () => {
@@ -69,7 +69,7 @@ describe('the grid', () => {
       [{ id: 1, shape: 'square' }, { id: 2, shape: 'square' }, { id: 3, shape: 'square' }, { id: 4, shape: 'square' }],
       width,
     );
-    expect(boxes[3]).toMatchObject({ x: 0, y: column + GRID_GAP });
+    expect(boxes[3]).toMatchObject({ x: 0, y: GRID_ROW_HEIGHT + GRID_GAP });
   });
 
   it('a wide button starts its own row', () => {
@@ -78,9 +78,9 @@ describe('the grid', () => {
       width,
     );
     expect(boxes[0]).toMatchObject({ id: 1, y: 0 });
-    expect(boxes[1]).toMatchObject({ id: 2, y: column + GRID_GAP, width });
+    expect(boxes[1]).toMatchObject({ id: 2, y: GRID_ROW_HEIGHT + GRID_GAP, width });
     // The third one waits for the wide button's row.
-    expect(boxes[2]).toMatchObject({ id: 3, y: column + GRID_GAP + GRID_ROW_HEIGHT + GRID_GAP });
+    expect(boxes[2]).toMatchObject({ id: 3, y: GRID_ROW_HEIGHT + GRID_GAP + GRID_ROW_HEIGHT + GRID_GAP });
   });
 
   it('a tall button makes its row taller', () => {
@@ -90,7 +90,7 @@ describe('the grid', () => {
     );
     const tall = Math.round(column * 1.35);
     expect(boxes[0]).toMatchObject({ id: 1, height: tall, y: 0 });
-    expect(boxes[1]).toMatchObject({ id: 2, height: column, y: 0 });
+    expect(boxes[1]).toMatchObject({ id: 2, height: GRID_ROW_HEIGHT, y: 0 });
     expect(height).toBe(tall);
   });
 

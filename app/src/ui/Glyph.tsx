@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 export type GlyphName =
   | 'light' | 'switch' | 'sensor' | 'occupancy' | 'contact' | 'cover' | 'lock' | 'climate' | 'button'
   | 'home' | 'automation' | 'hub' | 'history' | 'plus' | 'pencil' | 'chevron' | 'back' | 'play' | 'check'
-  | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff';
+  | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff' | 'battery' | 'humidity' | 'plug';
 
 export interface GlyphProps {
   name: GlyphName;
@@ -210,6 +210,28 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
           <Path d="M10.7 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13 13 0 0 1-1.7 2.7" {...c} />
           <Path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" {...c} />
           <Path d="M2 2l20 20" {...c} />
+        </>
+      );
+    case 'battery':
+      return (
+        <>
+          <Rect x="2" y="7" width="18" height="10" rx="2" {...c} />
+          <Rect x="4" y="9" width="11" height="6" rx="1" {...on} />
+          <Path d="M22 10v4" {...c} />
+        </>
+      );
+    case 'humidity':
+      return (
+        <>
+          <Path d="M12 2.5c-3 4-6 7.5-6 11a6 6 0 0 0 12 0c0-3.5-3-7-6-11z" {...on} />
+        </>
+      );
+    case 'plug':
+      return (
+        <>
+          <Circle cx="12" cy="12" r="9" {...c} />
+          <Circle cx="9" cy="12" r="2" {...c} />
+          <Circle cx="15" cy="12" r="2" {...c} />
         </>
       );
   }

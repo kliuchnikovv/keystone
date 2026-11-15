@@ -713,19 +713,22 @@ export class MockHub {
         this.pairCalls.push(seconds);
         return ok();
       }
-      case 'identify':
+      case 'identify': {
+        if (typeof args.entity !== 'number' || !Number.isInteger(args.entity)) return no('bad_args', 'entity');
+        const e = this.entities.find((x) => x.id === args.entity);
+        if (!e) return no('not_found', 'no such entity');
+        if (e.chip !== 1 && e.chip !== 3) return no('bad_args', 'not an identifiable device');
+        this.identifyCalls.push(e.id);
+        return ok();
+      }
       case 'unpair': {
         if (typeof args.entity !== 'number' || !Number.isInteger(args.entity)) return no('bad_args', 'entity');
         const e = this.entities.find((x) => x.id === args.entity);
         if (!e) return no('not_found', 'no such entity');
-        if (e.chip !== 1) return no('bad_args', 'not a Zigbee device');
-        if (msg.op === 'identify') {
-          this.identifyCalls.push(e.id);
-        } else {
-          this.entities = this.entities.filter((x) => x.id !== e.id);
-          this.unpairCalls.push(e.id);
-          this.resync(); // the real hub re-sends the snapshot when a device goes away
-        }
+        if (e.chip !== 1 && e.chip !== 3) return no('bad_args', 'not a removable device');
+        this.entities = this.entities.filter((x) => x.id !== e.id);
+        this.unpairCalls.push(e.id);
+        this.resync(); // the real hub re-sends the snapshot when a device goes away
         return ok();
       }
       case 'matter.commission': {

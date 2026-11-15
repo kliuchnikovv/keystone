@@ -8,8 +8,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatValue } from '../model/format';
-import { deviceIcon, deviceTitle, primarySwitch, readingAttrs, widgetValue, type DeviceStatus } from '../model/devices';
+import { attrOf, deviceIcon, deviceTitle, primarySwitch, readingAttrs, widgetValue, type DeviceStatus } from '../model/devices';
+import { stripRoomPrefix } from '../model/rooms';
 import type { DeviceShape } from '../model/grid';
+
 import type { Entity } from '../protocol/messages';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
@@ -63,6 +65,7 @@ function usePressPhase() {
 export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpen, onUnreachable, updatedText }: DeviceWidgetProps) {
   const t = useTheme();
   const title = deviceTitle(entity);
+  const displayName = stripRoomPrefix(entity.name) || title;
   const sw = primarySwitch(entity);
   const powered = sw?.value === true;
   const value = widgetValue(entity, powered);
@@ -126,6 +129,111 @@ export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpe
 
   const note = status === 'offline' ? 'offline' : status === 'unreachable' ? 'unreachable' : null;
 
+  // A sensor (no switch) is a compact tile: temperature as big numbers on top,
+  // humidity and battery below with their own icons. The device name and the
+  // "updated …" line live only in the detail sheet.
+  if (sw === undefined) {
+    const temp = attrOf(entity, 'temperature');
+    const humid = attrOf(entity, 'humidity');
+    const batt = attrOf(entity, 'battery');
+    const occupied = attrOf(entity, 'occupied');
+    const contact = attrOf(entity, 'contact');
+    const headline =
+      temp !== undefined ? formatValue(temp)
+      : occupied !== undefined ? formatValue(occupied)
+      : contact !== undefined ? formatValue(contact)
+      : value;
+    return (
+      <View style={[...shell(on ? t.accentSoft : t.fill, on ? t.accent : t.border), styles.sensorTile]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Device ${title}`}
+          accessibilityHint="Long press for details"
+          accessibilityState={{ selected: on, disabled: !reachable }}
+          onPress={toggle}
+          onLongPress={onOpen}
+          onPressIn={press.onPressIn}
+          onPressOut={press.onPressOut}
+          style={[styles.sensorInner, down && styles.pressed, held && styles.pressedHeld]}
+        >
+          <View accessible accessibilityLabel={`${title} is ${spoken}`} style={styles.sensorTop}>
+            {headline !== null && headline !== undefined && (
+              <Text style={[styles.sensorBig, { color: t.text }]} numberOfLines={1}>
+                {headline}
+              </Text>
+            )}
+          </View>
+          {(humid !== undefined || batt !== undefined) && (
+            <View style={styles.sensorRow}>
+              {humid !== undefined && (
+                <View style={styles.sensorSub}>
+                  <Glyph name="humidity" size={13} color={t.muted} />
+                  <Text style={[styles.sensorSubText, { color: t.muted }]} numberOfLines={1}>
+                    {formatValue(humid)}
+                  </Text>
+                </View>
+              )}
+              {batt !== undefined && (
+                <View style={styles.sensorSub}>
+                  <Glyph name="battery" size={13} color={t.muted} />
+                  <Text style={[styles.sensorSubText, { color: t.muted }]} numberOfLines={1}>
+                    {formatValue(batt)}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+          {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
+        </Pressable>
+      </View>
+    );
+  }
+  if (shape === 'square') {
+    // A compact tile (e.g. a plug shown at sensor width): icon, name and value
+    // stacked into a short row, no "updated …" line.
+    return (
+      <View style={[...shell(on ? t.accentSoft : t.fill, on ? t.accent : t.border), styles.compactTile]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Device ${title}`}
+          accessibilityHint="Long press for details"
+          accessibilityState={{ selected: on, disabled: !reachable }}
+          onPress={toggle}
+          onLongPress={onOpen}
+          onPressIn={press.onPressIn}
+          onPressOut={press.onPressOut}
+          style={[styles.compactInner, down && styles.pressed, held && styles.pressedHeld]}
+        >
+          <View
+            accessible
+            accessibilityLabel={`${title} is ${spoken}`}
+            style={[
+              styles.compactIcon,
+              {
+                backgroundColor: held ? t.accent : 'transparent',
+                borderColor: held ? t.accent : 'transparent',
+                borderWidth: 1,
+                borderRadius: 8,
+                padding: 4,
+              },
+            ]}
+          >
+            <Glyph name={deviceIcon(entity.device)} size={18} color={held ? t.onAccent : on ? t.accent : t.muted} />
+          </View>
+          <Text style={[styles.compactName, { color: on || held ? t.accent : t.muted }]} numberOfLines={1}>
+            {displayName}
+          </Text>
+          {value !== null && (
+            <Text style={[styles.compactValue, { color: on || held ? t.accent : t.muted }]} numberOfLines={1}>
+              {value}
+            </Text>
+          )}
+          {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
+        </Pressable>
+      </View>
+    );
+  }
+
   if (shape === 'wide') {
     // The room mock's button: icon on the left, name and reading on the right.
     return (
@@ -151,34 +259,6 @@ export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpe
             )}
             {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
           </View>
-        </Pressable>
-      </View>
-    );
-  }
-
-  if (shape === 'square') {
-    // A sensor: one thing to say, so it says it in a small square.
-    return (
-      <View style={[...shell(on ? t.accentSoft : t.fill, on ? t.accent : t.border), styles.square]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Device ${title}`}
-          accessibilityHint="Long press for details"
-          accessibilityState={{ selected: on, disabled: !reachable }}
-          onPress={toggle}
-          onLongPress={onOpen}
-          onPressIn={press.onPressIn}
-          onPressOut={press.onPressOut}
-          style={[styles.squareInner, down && styles.pressed, held && styles.pressedHeld]}
-        >
-          {icon('mid')}
-          {name}
-          {value !== null && (
-            <Text style={[styles.value, { color: on || held ? t.accent : t.muted }]} numberOfLines={1}>
-              {value}
-            </Text>
-          )}
-          {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
     );
@@ -219,11 +299,6 @@ export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpe
             </Text>
           )}
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
-          {updatedText !== null && updatedText !== undefined && (
-            <Text style={[styles.updated, { color: t.muted }]} numberOfLines={1}>
-              {updatedText}
-            </Text>
-          )}
         </View>
       </Pressable>
     </View>
@@ -255,6 +330,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconMid: { width: 38, height: 38, borderRadius: 12 },
+  readingIcon: { alignItems: 'center', justifyContent: 'center' },
+  sensorTile: { alignItems: 'center', justifyContent: 'center', padding: 8 },
+  sensorInner: { alignItems: 'center', justifyContent: 'center', gap: 2, width: '100%' },
+  sensorTop: { alignItems: 'center', justifyContent: 'center' },
+  sensorBig: { fontSize: 16, fontWeight: '700', letterSpacing: -0.5 },
+  sensorRow: { flexDirection: 'row', gap: 8, marginTop: 2, justifyContent: 'center' },
+  sensorSub: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  sensorSubText: { fontSize: 10, fontWeight: '500' },
+  compactTile: { alignItems: 'center', justifyContent: 'center', padding: 8 },
+  compactInner: { flexDirection: 'row', alignItems: 'center', gap: 6, width: '100%' },
+  compactIcon: { alignItems: 'center', justifyContent: 'center' },
+  compactName: { fontSize: 12, fontWeight: '700', flex: 1 },
+  compactValue: { fontSize: 11, fontWeight: '500' },
   iconBig: { width: 40, height: 40, borderRadius: 12 },
   text: { flex: 1, minWidth: 0, gap: 2 },
   name: { fontSize: 13, fontWeight: '700' },
