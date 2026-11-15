@@ -1190,33 +1190,337 @@ NimBLE's own ~30 KB chunk both fit as a single piece. And **peak usage
 is 3 KB above the stationary** (minimum free vs current), so the
 network's active life does not spike the floor — the 224 KB is honest.
 
-Adding `esp_matter` accessory + bridge **without** the controller (which
-stays on brain-s3) grows static DRAM by ~60–100 KB (CHIP server + NimBLE
-backend + bridge data model) and runtime heap by ~30–50 KB (CASE sessions
-in fabric B, SRP registrations, ACL, N bridged-endpoint cluster servers).
-Worst-case post-addition free heap: ~75 KB — well above the 32 KB
-headroom target. Phase 8 Stage D hit 181 KB free with a heavier config
-(controller + bridge together), which is the independent confirmation
-that F2 is not a tight fit but a comfortable one.
+**F2 Stage A, measured on the board (14.11.2026).** The Matter accessory
+really runs on this chip now: root endpoint + aggregator (Device Type
+0x000E), the CHIP server up and listening, the Border Router still leading
+`keystone-home`, and CHIP publishing its own `_matter._tcp` service into the
+Border Router's SRP server.
+
+| | Thread host only | + Matter accessory | difference |
+|---|---:|---:|---:|
+| static (.iram0.text + .dram0.data + .dram0.bss) | 199 236 B | **238 780 B** | +39 544 B |
+| heap free | 224 488 B | **157 020 B** | −67 468 B |
+| largest free block | 204 800 B | **139 264 B** | −65 536 B |
+| minimum free since boot | 221 220 B | **153 004 B** | −68 216 B |
+| flash image | ~623 KB | **1 630 KB** (slot 1.92 MB) | 13 % slot free |
+
+So the server stack costs ~40 KB of static DRAM and ~68 KB of heap, and
+still leaves **136 KB in one contiguous block** — four times the 32 KB
+headroom the budget asked for. The estimate above ("static +60–100 KB, heap
++30–50 KB") was pessimistic on the heap and about right on the static side.
+
+Two things made it fit, and they are the same two things that make the F2
+budget work:
+
+- **No Bluetooth on the accessory.** The IDF links the BLE controller and
+  the NimBLE host *whole-archive* — ~426 KB of flash — and the controller
+  wants one ~30 KB contiguous block of internal RAM. The hub's accessory
+  does not need BLE: the **brain** commissions it over the LAN (on-network
+  commissioning, mDNS discovery plus the setup code), and the phone never
+  commissions the hub directly (the hub's fabric belongs to the brain; the
+  BLE commissioner on brain-s3 is there to find *other* devices).
+- **The cluster set is trimmed to the ones the bridge needs** (24 of 139;
+  the list comes from esp-matter's own symbol list, see
+  `scripts/gen-cluster-exclusions.py`), and the whole image is built `-Os`.
+
+
 
 **Verdict:** F2 is the recommended fork. The next moves are concrete:
 
-1. Cherry-pick the Matter accessory + bridge code that lived on
-   thread-c6 before `b9e8827` (search git for `app_bridge_*`,
-   `BridgedDevice`, `create_bridged_clusters`); restore it next to the
-   current Thread host + Border Router instead of replacing it.
+1. ~~Cherry-pick the Matter accessory + bridge code that lived on
+   thread-c6 before `b9e8827`~~ — **done in a different shape**: the
+   accessory is new code (`firmware/thread-c6/main/matter_accessory.cpp`)
+   next to the current Thread host + Border Router, not a cherry-pick.
+   Stage A (root + aggregator, empty) is on the board; Stage B adds the
+   bridged endpoints.
 2. Restore `on_bus_forward` on brain-s3 so DECLARE/STATE/COMMAND for
    Matter-owned entities (chip 0x03) is mirrored to the thread-c6 bridge
    over UART, the same way Zigbee entities (chip 0x01) are mirrored today.
 3. Setup code + QR for the hub itself. Print on the brain console; later
-   the app shows it on first-run.
+   the app shows it on first-run. The commissioning path is **on-network**
+   (the brain finds the accessory over mDNS and uses the setup code) — the
+   accessory itself has no BLE.
 4. First-run flow: no admin has joined fabric B → open commissioning
    window on thread-c6 for N minutes; afterwards `matter_share`-style op
    from the app to re-open for a second admin.
 
 The RAM measurement above lives in thread-c6 as the `heap` console
 command — kept around so the budget can be checked against the next
-build, not just this one.
+build, not just this one. `status` (uptime, boot_id, reset reason) was
+added next to it.
+
+### Stage B — the bridge on the co-processor
+
+The Matter server moved to this chip (F2), so the bridge moves with it: the
+brain keeps the *registry* and the *commissioner*, the co-processor keeps the
+*data model*. The split is already in place on both sides:
+
+- **the brain** (`firmware/brain-s3/main/main.cpp::on_bus_forward`) mirrors
+  the Zigbee chip's DECLARE / STATE / UNDECLARE to this chip and forwards our
+  COMMANDs to the Zigbee chip;
+- **this chip** (`firmware/thread-c6/main/matter_bridge.cpp`) turns a DECLARE
+  into a bridged endpoint (the cluster set comes from
+  `core/matter_plan.hpp`, the same portable plan the old brain-side bridge
+  used), updates the endpoint's attributes from a STATE, drops the endpoint on
+  an UNDECLARE, and sends a COMMAND to the brain when a controller writes an
+  attribute.
+
+The endpoint ↔ entity mapping is persisted by esp-matter's `app_bridge`
+machinery (`keystone_bridged_device.cpp` carries the `(chip_id, entity_id)`
+address), so endpoint ids survive reboots and Apple Home keeps its rooms.
+The address is taken from the entity id's high byte (0x01xx = the Zigbee
+chip), because the brain rewrites the chip id of the mirrored frames to ours
+— the frame's own chip id no longer says who owns the entity.
+
+The bridge is a separate translation unit (`matter_bridge.cpp`) and only
+exists in the Matter build; the plain Thread host does not compile it.
+
+**On the hardware (14.11.2026):** the image with the bridge is 0x1bf290
+(1.83 MB, 134 KB of the 1.92 MB slot free — the bridge costs ~121 KB, mostly
+the CHIP cluster implementations of the lamp / sensor / thermostat / EPM / EEM
+endpoints). After flashing it:
+
+```
+matter_bridge: added ElectricalPowerMeasurement cluster to ep 2
+matter_bridge: added ElectricalEnergyMeasurement cluster to ep 2
+matter_bridge: bridge up under aggregator endpoint 1
+matter_bridge:   bridge slot 0: endpoint 2 -> device entity 0x0100
+matter_bridge: bridge table: 1 of 20 slots used
+matter_bridge: STATE -> Matter ep=2 OnOff=0
+matter_bridge: STATE -> Matter ep=2 ActivePower=0 mW
+matter_bridge: STATE -> Matter ep=2 CumulativeEnergyImported=0 Wh
+```
+
+The endpoint was restored from NVS (the app_bridge table of the earlier
+bridge) and the states of the plug (entity 0x0100) arrive as ordinary Matter
+attribute updates. The metered plug got the switch + EPM + EEM cluster set —
+the "a plug is a plug" rule of `core/zcl_profile.hpp` at work.
+
+**Not verified yet:** the write path (a Matter controller writes an attribute
+→ the bridge turns it into a COMMAND → the brain forwards it to the Zigbee
+chip). The code is the port of the old bridge's (hardware-verified then), but
+no controller has written to the new accessory yet — the brain's own bridge
+only reads. Two things are needed for a test: the brain has to re-read the
+accessory's descriptor (it does that at its own boot, so the brain needs a
+restart after the endpoints exist) and something has to write — a phone in
+Apple Home, or a small console command on the brain.
+
+**Can Apple Home see the hub? Yes — as a second administrator.** The
+accessory has no BLE (that is deliberate: −426 KB of flash), so the phone
+cannot commission it from scratch. But the fabric of the accessory belongs to
+the *brain* (it commissioned it over the network), and the brain can open a
+commissioning window on it for another admin:
+
+```
+matter_share 0x0300 300
+matter_bridge: opening commissioning window on node 0x0000000000001234 (entity 0x0300), timeout 300 s
+controller: Open enhanced commissioning window finished
+matter: entity 0x0300 is open for commissioning
+matter: enter this setup code in Apple Home / Google Home:
+```
+
+The phone then adds the hub over DNS-SD (the Border Router reflects the
+accessory's SRP record onto Wi-Fi) and types the 11-digit code — after that
+Apple Home shows the hub as one accessory with the plug inside it. Two
+obstacles stand in front of the test:
+
+1. **The chip reboots every ~40–250 s** (the Pi's USB current cap — see
+   below), and a reboot closes the commissioning window, so the window has to
+   be opened again right before the phone tries.
+2. **The brain models the accessory's own parts as hub entities.** The
+   accessory's bridged endpoint (the plug) became entity **0x0300** — the
+   same id the TIMMERFLOTTE sensor already had (`node 0x1234 -> 1 entities,
+   first 0x0300`). In the F2 architecture the bridged endpoints are mirrors of
+   the registry entities the hub already has (0x01xx), so the hub's own
+   accessory must not produce a second copy of the plug; the brain should keep
+   the node (it needs it for the share and for reads) but not turn its parts
+   into entities. The id formula collides because the restore path and the
+   commissioning path number their slots independently.
+
+**Verified in Apple Home (14.11.2026).** The accessory can open the window
+*itself* — the brain's Matter worker waits for a CASE session with the chip,
+and while the chip keeps rebooting that worker never answers, so the brain
+was stuck with "another Matter operation is in progress". A console command on
+the chip does it without the brain:
+
+```
+thread> matter_share 300
+chip[DIS]: Advertise commission parameter vendorID=65521 productID=32768 discriminator=3840/15 cm=1 cp=0 jf=0
+commissioning window open for 300 s
+add the hub in Apple Home and type the setup code 3497-0112-332
+```
+
+The phone adds the hub with that code (the accessory runs on the esp-matter
+test DAC, so the manual code is the well-known `3497-0112-332`), and the hub
+appears in Apple Home. **The whole F2 chain works, write path included:**
+
+```
+chip[ZCL]: Toggle ep2 on/off from state 1 to 0          <- the phone wrote the attribute
+matter_bridge: COMMAND -> entity=0x0100 attr=0x01 value=0   <- the bridge -> the brain
+#13  -180 s  command  matter  0x0100  on_off = off      <- the brain's event log (source: matter)
+matter_bridge: STATE -> Matter ep=2 OnOff=0              <- and the state comes back
+```
+
+So: **Apple Home → the hub (an accessory on the co-processor) → the plug (a
+bridged endpoint) → the bridge → the brain → the Zigbee chip → the device**,
+and the state travels the other way. The phone is a second administrator
+(`1:0000000058F7461F` in the accessory's fabric); the brain stays the first.
+
+**And a host problem worth fixing first:** both C6s reboot together every
+3–5 minutes. This is the Pi5's USB current cap (600 mA per port,
+`usb_max_current_enable` is not set in `/boot/firmware/config.txt`): the
+thread chip shows `rst:0x8 (TG1_WDT_HPSYS)` — the chip hangs on the power dip
+and the watchdog resets it — and the zigbee chip goes with it. Raising the
+cap to 1.6 A (`usb_max_current_enable=1` + a Pi reboot) should stop it.
+
+
+
+The Stage A image kept crash-looping (boot_id 14→35, ~21 restarts in 10
+minutes). The panic handler dies while printing its own backtrace, so the
+console only ever showed "Load access fault" — the trace had to come from the
+flash.
+
+**Reading the dump.** `esp-coredump info_corefile` refused it because the
+positional argument of the tool is the *program* ELF, not the core file; the
+dump goes through `--core`:
+
+```bash
+esp-coredump info_corefile --core /dump/coredump.bin --core-format raw /build/keystone_thread_c6.elf
+```
+
+(Before that the dump was written into `build/`, which belongs to the
+container's root and is not writable from the host — `scripts/coredump-inspect.py`
+parses the raw format without the tool: tasks, stacks, the trap frame.)
+
+**What the frame says.** The task that died is `@CHIP` (the CHIP event task,
+8 KB stack, only 560 B used — no stack overflow):
+
+| | |
+|---|---|
+| `mepc` | `0x4205e648` — `chip::app::SimpleSubscriptionResumptionStorage::Init`, its prologue |
+| `mcause` | **2 — illegal instruction** |
+| `mtval` | `0x8484` — a compressed `c.fsd`, i.e. an *FPU* instruction, which the ESP32-C6 does not have |
+| `ra`, `sp` | both `0x40857a40` — a stack address, not a code address |
+| caller's return-address slot | garbage (`0x2d0f`) |
+
+The chain on the stack is `esp_matter_chip_init_task` →
+`CommonCaseDeviceServerInitParams::InitializeStaticResourcesBeforeServerInit`
+→ `SimpleSubscriptionResumptionStorage::Init`.
+
+**Reading:** the CPU did not fault on a memory access — it *jumped* to
+garbage and tried to execute it. The register frame shows why: the return
+address of the running function is a stack address, and the return address
+that should have been pushed by the call is garbage. **The @CHIP task's stack
+was overwritten before the call**, and the corrupted return address sent the
+CPU into the middle of unrelated bytes.
+
+What is *not* the cause: a stack overflow (560 B of 8192 B used), the
+subscription-resumption storage itself (the crash is in its prologue, before
+any of its work), and the KVS delegate (its vtable pointer is written by the
+constructor of `defaultInitParams`, which the disassembly shows running
+before the call). The dump's `mepc`/`mtval` pair is not self-consistent
+(`mepc` points at a valid `sw ra,76(sp)`), so the trap frame was probably
+written across two consecutive exceptions — the first one being the real
+fault, the second one (illegal instruction) the panic handler taking while
+it was already dying.
+
+**Where it points:** the corruption happens in the CHIP init path, right
+after the Border Router's mDNS/DNS-SD comes up — the same overlap the code
+comment in `main.cpp` describes ("the router brings its DNS-SD/SRP
+reflection up while the Matter stack is registering its own commissionable
+service in the same mDNS daemon"). Waiting for `g_br_started` delayed the
+crash but did not remove it.
+
+**State after the analysis:** the chip is stable (the NVS was erased in the
+meantime — boot_id restarted at 1 — and with a clean NVS the crash does not
+reproduce; it did once more, right after the commissioning). The dump is
+kept at `firmware/thread-c6/coredump.bin` (gitignored) and
+`scripts/coredump-inspect.py` reads it without the esp-matter image.
+
+### Commissioning the hub's own accessory (14.11.2026, verified)
+
+The brain's custom attestation trust store held only the IKEA PAA (it was
+built for a sensor), while the hub's own accessory runs on the **test DAC**
+(vendor 0xFFF1 / product 0x8000), so the commissioning died at
+`AttestationVerification` with `CHIP_ERROR_FAILED_DEVICE_ATTESTATION`. The
+store is now a table of three roots (IKEA PAA G1 + the two Chip-Test ones,
+`firmware/brain-s3/main/matter_paa.cpp`).
+
+With that, the on-network commissioning of the accessory (which has no BLE
+of its own — the brain finds it over mDNS and hands it the setup code) goes
+through the whole chain:
+
+```
+chip[SC]: Received Sigma2 msg
+chip[SC]: Success status report received. Session was established
+chip[CTL]: Received CommissioningComplete response, errorCode=0
+pairing_command: Commissioning success with node B9208C6B9B867EED-2
+```
+
+Console: `matter_pair <node_id> <setup-code>` on the brain — the test DAC's
+manual code is `34970112332`. The operational session then runs over the
+Thread network through the border router (the CASE exchange goes to the
+BR's link-local, `fe80::aeeb:e6ff:feda:fc08%st1`).
+
+
+
+The Matter build is the same app with an overlay,
+`firmware/thread-c6/sdkconfig.defaults.matter`, applied by
+`scripts/matter-build.sh thread-c6`. Four of those settings are not
+obvious and each one cost a build:
+
+- `CONFIG_ENABLE_ROUTE_HOOK=n` — CHIP's route hook and the OpenThread
+  Border Router's define the same two lwIP hooks; with both in the link
+  the ELF fails with "multiple definition". esp-matter's own Border Router
+  example sets the same thing.
+- `CONFIG_THREAD_NETWORK_COMMISSIONING_DRIVER=n` — with both the Thread
+  and the Wi-Fi network commissioning drivers on, their endpoint ids
+  default to the same value, and esp-matter's init callback creates the
+  Network Commissioning cluster twice → `VerifyOrDie` → panic on every
+  boot. This chip *is* the Thread network, so it needs no Thread driver.
+- `CONFIG_OPENTHREAD_SRP_CLIENT=n` — CHIP advertises over Thread SRP when
+  the SRP client is on, but the SRP *server* belongs to the Border Router
+  and already owns the domain: "domain name or RRset is duplicated", and
+  the commissionable node was never advertised.
+- `CONFIG_LWIP_IPV6_NUM_ADDRESSES=12` — IDF's OpenThread lwIP netif does
+  not compile with fewer.
+
+Plus the two project-wide ones: the overlay has to be passed as
+`-DSDKCONFIG_DEFAULTS=` (IDF applies defaults only when it *creates*
+`sdkconfig`, and a stale `CMakeCache` silently ignores the env var), and
+the image is built `-Os` (the CHIP library follows the `is_debug` GN
+argument, which esp-matter maps to
+`CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE`).
+
+**Open:** a rare race at the Border Router's start — `Load access fault`
+right after "Border Router is up", after which the watchdog resets the
+chip (the panic handler cannot even print its dump). It did not recur in
+280 s of watching and the chip then stayed up for 23 minutes, but it is
+not fixed yet.
+
+Two things were learned on the way to it:
+
+- **A crash dump in flash needs the *binary* format.** The panic handler
+  writes with the interrupts off, and the task watchdog is fed by the idle
+  task — so the ELF dump (64 KB) tripped the watchdog in the middle of the
+  write, and the chip reset with a half-written (in fact empty) dump and a
+  dead console. The binary dump is small enough to land before the
+  watchdog does.
+- **The chip crash-loops are not harmless.** The chip's own recovery rule
+  ("boot_id > 50 ⇒ erase NVS") fired during one of those loops, and with
+  the NVS went the Thread dataset and the network's identity (PAN id,
+  keys, mesh-local, OMR prefix) — the network was re-formed from scratch
+  and everything commissioned into it was orphaned. The stability of the
+  Matter build is therefore a correctness issue, not a cosmetic one.
+
+**The fix under test:** the Matter stack must not start while the Border
+Router is still coming up. Both used to wait for the same Wi-Fi IP and
+then start in the same second; the router brings up its DNS-SD/SRP
+reflection while the Matter stack registers its own commissionable service
+in the same mDNS daemon, and the two collide. `main.cpp` now waits for
+the router's `g_br_started` flag (up to 15 s) before calling
+`matter_accessory_start()`.
+
 
 Non-goals / known limits:
 
@@ -1229,8 +1533,9 @@ Non-goals / known limits:
   skip the bridge and multi-admin it. The bridge is the default path, not
   the only one.
 
-Status: **planned, not started**. The RAM measurement is the first move;
-it decides between F1 and the harder forks.
+Status: **Stage A done** (14.11.2026, hardware): the accessory and the
+Border Router run together on the C6, the image fits the slot, and the RAM
+budget holds with room to spare. Stage B (bridged endpoints) is next.
 
 ## Grand order-of-work (rough)
 

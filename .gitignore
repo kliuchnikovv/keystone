@@ -13,6 +13,10 @@ firmware/*/sdkconfig.bod
 firmware/*/managed_components/
 firmware/*/dependencies.lock
 
+# A crash dump read off a co-processor (scripts/flash-thread-c6-matter.sh
+# --coredump): a local artefact of one crash, never in git.
+firmware/*/coredump.bin
+
 # Loose build logs captured at the repo root
 /build*.log
 

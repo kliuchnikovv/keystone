@@ -8,6 +8,7 @@ Usage:
   scripts/kcon.py --watch               # just follow the log
 """
 import argparse
+import errno
 import re
 import sys
 import threading
@@ -20,6 +21,35 @@ ANSI = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]")
 
 def strip_ansi(buf: bytes) -> str:
     return ANSI.sub(b"", buf).decode("utf-8", "replace")
+
+
+class _ConsolePort(serial.Serial):
+    """A serial port that never touches the RTS/DTR lines.
+
+    The C6's console is the USB-Serial-JTAG peripheral, and on some kernels
+    its driver does not implement the TIOCMBIC/TIOCMBIS ioctls: pyserial then
+    fails to *open* the port with EPROTO ("Protocol error"), even though
+    reading and writing work fine. The lines are useless to us anyway — a
+    pulse on RTS resets the chip — so skip them and open the port anyway.
+    """
+
+    def _update_rts_state(self) -> None:
+        pass
+
+    def _update_dtr_state(self) -> None:
+        pass
+
+
+def open_console(port: str, baud: int) -> serial.Serial:
+    """Open the console, falling back to a port that leaves RTS/DTR alone."""
+    try:
+        return serial.Serial(port, baud, timeout=0.2)
+    except OSError as err:
+        if err.errno not in (errno.EPROTO, errno.EINVAL, errno.ENOTTY):
+            raise
+        print(f"note: {port} does not support the RTS/DTR ioctls ({err}); "
+              f"opening it without touching them", file=sys.stderr)
+        return _ConsolePort(port, baud, timeout=0.2)
 
 
 def drain(s: serial.Serial, seconds: float) -> str:
@@ -44,7 +74,7 @@ def main() -> int:
     ap.add_argument("--interactive", action="store_true")
     args = ap.parse_args()
 
-    s = serial.Serial(args.port, args.baud, timeout=0.2)
+    s = open_console(args.port, args.baud)
     # Do not touch DTR/RTS. Deasserting DTR resets the brain (the S3 wires it
     # to EN), and a pulse on RTS resets the C6s - either way the command would
     # be swallowed by the boot log. pyserial's default (both asserted) is what

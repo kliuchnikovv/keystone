@@ -7,6 +7,13 @@ set -euo pipefail
 IMAGE="${ESP_MATTER_IMAGE:-espressif/esp-matter:release-v1.6_idf_v5.5.5}"
 APP="${1:-thread-c6}"
 
+# --keep: do not wipe the build dir, so an interrupted build resumes instead
+# of starting from scratch (a full Matter build is ~20 min).
+if [[ "${2:-}" == "--keep" ]]; then
+  export KS_CLEAN=0
+  echo "==> keeping the build dir (incremental build)"
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="firmware/${APP}"
 
@@ -43,13 +50,36 @@ BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
   # brain-s3/build is tmpfs on the Pi (see /etc/fstab) — parallel IO is cheap,
   # keep the default -j.
-  BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' idf.py build"
+  BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' build"
 elif [[ "${APP}" == "thread-c6" ]]; then
   # thread-c6/build lives on the SD card (too big for tmpfs on a 4 GB Pi):
   # a full -j4 ninja saturates SD random IO and freezes SSH. MATTER_JOBS caps
   # parallelism (default 2); override with MATTER_JOBS=4 for a dev box with SSD.
   # `-j` is a ninja flag, not an idf.py flag — pass it after `--`.
-  BUILD_CMD="idf.py build -- -j${MATTER_JOBS:-2}"
+  #
+  # The platform-event header patch (5) is needed on this chip too: with
+  # esp-matter's BLE controller enabled the file does not compile without it.
+  # The SDKCONFIG_DEFAULTS overlay turns on BLE + Matter-side lwIP + the bridge
+  # data model; the base sdkconfig.defaults keeps the Thread host as it is.
+  #
+  # The overlay is passed as a cmake define, not as an environment variable:
+  # that is the form IDF's own test-suite uses (tools/test_build_system/
+  # test_sdkconfig.py), and it survives in the CMake cache — the env var is
+  # read only while cmake configures, so it is silently lost whenever the
+  # build directory is configured by something else.
+  #
+  # `rm -f sdkconfig` first: IDF applies sdkconfig.defaults* only when it
+  # *creates* sdkconfig. An existing one keeps its old values and the .matter
+  # overlay is silently ignored — that is exactly how CONFIG_MBEDTLS_HKDF_C
+  # stayed off and the link failed with "undefined reference: mbedtls_hkdf".
+  # The file is untracked and is regenerated from the tracked defaults.
+  BUILD_CMD="rm -f sdkconfig sdkconfig.old && python3 /project/scripts/matter-patches.py --app thread-c6 && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' build -- -j${MATTER_JOBS:-2}"
+  # A stale CMake cache can keep a sources list from an earlier layout (the
+  # build/ dir once resurrected a deleted .cpp). KS_CLEAN=0 keeps the build dir
+  # for a faster incremental build while chasing link errors.
+  if [[ "${KS_CLEAN:-1}" != "0" ]]; then
+    BUILD_CMD="rm -rf build && ${BUILD_CMD}"
+  fi
 fi
 
 echo "==> Building ${APP} in ${IMAGE}"
