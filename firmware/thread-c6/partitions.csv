@@ -10,3 +10,7 @@ phy_init,        data, phy,    ,          0x1000,
 ota_0,           app,  ota_0,  0x20000,   0x1E0000,
 ota_1,           app,  ota_1,  0x200000,  0x1E0000,
 fctry,           data, nvs,    0x3E0000,  0x6000,
+# A crash dump of the last panic, so the rare "Load access fault" at the Border
+# Router's start can be read instead of guessed at. The tail of the flash was
+# unused; this takes 64 KB of it.
+coredump,        data, coredump, 0x3F0000, 0x10000,

@@ -2,6 +2,11 @@
 ## The chip runs OpenThread as an FTD with BORDER_ROUTER enabled; the backbone
 ## is Wi-Fi (STA). mDNS reflects SRP services from the Thread side onto Wi-Fi
 ## so the CHIP commissioner on the brain finds the device by DNS-SD.
+##
+## When the esp-matter build adds the CHIP stack, its config/esp32/chip CMakeLists
+## unconditionally links `espressif/esp_rcp_update` for the OpenThread host path
+## (it exists to update an external radio co-processor image; the C6 has native
+## 802.15.4, so nothing calls into it, but the link still has to resolve).
 dependencies:
   idf:
     version: ">=5.2"
@@ -9,6 +14,8 @@ dependencies:
     version: ">=2.5.0"
   espressif/mdns:
     version: "^1.5"
+  espressif/esp_rcp_update:
+    version: "~1"
   espressif/cmake_utilities:
     version: "^1"
     rules:

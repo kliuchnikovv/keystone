@@ -1,0 +1,268 @@
+# Overlay applied on top of sdkconfig.defaults when ESP_MATTER_PATH is set
+# (scripts/matter-build.sh: SDKCONFIG_DEFAULTS=".../sdkconfig.defaults;.../sdkconfig.defaults.matter").
+# Nothing here should contradict the Thread host configuration in the base file —
+# this layer only turns ON what Matter needs.
+
+# --- Code size: the image has to fit into the 1.92 MB OTA slot ---
+# At IDF's default (-Og) the Matter image was 0x21d050 — 244 KB over the slot.
+# -Os buys that back; the plain Thread-host build (PlatformIO / idf.py without
+# this overlay) is untouched, because it does not read this file.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+# The CHIP library is built by GN, not by IDF's compiler driver, and its
+# optimization follows the "is_debug" GN argument. esp-matter's chip component
+# maps that argument to CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE
+# (config/esp32/components/chip/CMakeLists.txt:36) — with it set, the CHIP
+# library is compiled release-style (-Os, NDEBUG), which is what the vendor's
+# own release images do. CHIP's internal assert()s are compiled out; its
+# VerifyOrReturnError checks are not.
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
+
+# --- Let the task watchdog say what it caught ---
+# Without this the watchdog just resets the chip: the boot log shows
+# "PRO CPU has been reset by WDT" and nothing else, because the panic handler
+# is not invoked (CONFIG_ESP_TASK_WDT_PANIC defaults to n). With it, the
+# watchdog prints the offending task and its stack.
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# --- A crash dump in flash ---
+# The rare "Load access fault" at the Border Router's start cannot be read
+# from the console: the panic handler faults while printing its own dump, so
+# nothing reaches the USB log. The dump partition (64 KB in the tail of the
+# flash) keeps the crash, and esp-coredump can decode it afterwards.
+#
+# The *binary* format, not ELF: the handler writes with the interrupts off,
+# and the task watchdog is fed by the idle task — a big dump would trip the
+# watchdog in the middle of the write and the chip would reset with a
+# half-written dump (which is exactly what the ELF format gave us).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_BIN=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+# The test event trigger wants a delegate the app does not have; without it
+# CHIP logs "mTestEventTriggerDelegate is null" on every boot.
+CONFIG_ENABLE_TEST_EVENT_TRIGGER=n
+
+# --- No Bluetooth on this chip ---
+# The hub's own Matter accessory is commissioned by the *brain*, over the LAN
+# (on-network commissioning: the brain finds the accessory through mDNS and
+# uses the setup code). The phone never commissions the hub directly, so the
+# accessory needs no BLE of its own.
+#
+# It is not only simpler, it is what makes the image fit: the IDF links the
+# BLE controller and the NimBLE host whole-archive, which costs ~426 KB of
+# flash, and the controller wants one ~30 KB contiguous block of internal RAM
+# — on a chip that also runs the Thread host and the Matter server, that is
+# the scarcest resource there is.
+#
+# The BLE commissioner on the brain-s3 is unaffected: it uses its own radio to
+# find *other* devices (a sensor, a lamp), not the hub.
+CONFIG_BT_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=n
+
+# --- CHIP's own shell in the Matter server ---
+CONFIG_ENABLE_CHIP_SHELL=n
+
+# --- Network commissioning: the Wi-Fi driver only ---
+# With BOTH the Thread and the Wi-Fi network commissioning drivers on, their
+# endpoint ids default to the same value (0), and esp-matter's init callback
+# then creates the Network Commissioning cluster twice for that endpoint —
+# the second Create() trips CHIP's VerifyOrDie(!IsConstructed()) and the chip
+# panics on every boot:
+#   ESPMatterNetworkCommissioningClusterServerInitCallback
+#     -> LazyRegisteredServerCluster<NetworkCommissioningCluster>::Create
+# This chip does not need the Thread driver: it *is* the Thread network (the
+# Border Router forms keystone-home itself), so there is no dataset to
+# commission it into. Same setting as esp-matter's own Border Router example.
+CONFIG_THREAD_NETWORK_COMMISSIONING_DRIVER=n
+
+# --- mDNS: the platform one, not CHIP's own ---
+# CHIP ships a minimal mDNS of its own, but this chip already runs the
+# espressif/mdns component (the Border Router publishes _meshcop and the SRP
+# records through it). Two mDNS stacks on UDP 5353 fight over the same
+# socket, so CHIP is told to use the platform mDNS — that is what esp-matter's
+# own Border Router example does.
+CONFIG_USE_MINIMAL_MDNS=n
+
+# --- No SRP *client*: the SRP server belongs to the Border Router ---
+# CHIP's DNS-SD on ESP32 advertises over Thread SRP when the SRP client is
+# enabled (DnssdImpl.cpp:43). But the SRP *server* here is the Border
+# Router's, and it already owns the domain — so CHIP's own registration came
+# back with "domain name or RRset is duplicated" and the commissionable node
+# was never advertised:
+#   chip[DL]: advertising srp service: 94AB3CD7614CC9CE._matterc._udp
+#   chip[DIS]: Failed to advertise commissionable node: 1c
+# With the SRP client off, CHIP advertises over the platform mDNS on Wi-Fi
+# instead — which is where the commissioner (the brain) looks for it anyway.
+# Same setting as esp-matter's own Border Router example.
+CONFIG_OPENTHREAD_SRP_CLIENT=n
+
+# --- lwIP + IPv6 ---
+# Matter needs IPv6 autoconfig, an extra unique-local address per fabric
+# (MAX_FABRIC + 1: one per fabric + a link-local), and the route hooks the
+# OpenThread SLAAC path already relies on.
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
+# IDF's OpenThread lwIP netif (the "ot" interface) refuses to compile with
+# fewer than 12 IPv6 addresses:
+#   esp_openthread_lwip_netif.c: #error CONFIG_LWIP_IPV6_NUM_ADDRESSES should be
+#   set to 12
+# The base sdkconfig.defaults.esp32c6 already says 12 — keep it that way.
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=12
+CONFIG_LWIP_HOOK_IP6_ROUTE_DEFAULT=y
+CONFIG_LWIP_HOOK_ND6_GET_GW_DEFAULT=y
+
+# --- CHIP's own IPv6 route hook stays off ---
+# With the two LWIP_HOOK_*_DEFAULT above on, CHIP's CONFIG_ENABLE_ROUTE_HOOK
+# (Kconfig:232, default y) becomes visible and CHIP compiles
+# src/platform/ESP32/route_hook/ESP32RouteTable.c — which defines
+# lwip_hook_ip6_route and lwip_hook_nd6_get_gw. The OpenThread Border Router
+# component defines the same two hooks, so the ELF link dies with
+# "multiple definition". The BR owns the routes into the Thread mesh; CHIP's
+# table only exists to learn routes from RIO options, and on this chip the BR
+# hook is the one that matters.
+CONFIG_ENABLE_ROUTE_HOOK=n
+
+# --- mbedTLS: HKDF for session derivation ---
+# mbedTLS in IDF 5.5 has HKDF off by default; CHIP's key derivation calls
+# mbedtls_hkdf, so without this the link fails with "undefined reference".
+# Note: defaults only apply when sdkconfig is (re)generated — the Matter build
+# removes the stale sdkconfig first (scripts/matter-build.sh).
+CONFIG_MBEDTLS_HKDF_C=y
+
+# --- Matter Bridge data model ---
+# Root (1) + aggregator (1) + N bridged endpoints. 22 → 20 bridged devices, enough
+# for a home's plugs, lamps, sensors and buttons while staying frugal with NVS.
+CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=22
+CONFIG_ESP_MATTER_AGGREGATOR_ENDPOINT_COUNT=1
+
+# --- Matter OTA Requestor is off for now: on a Thread BR it pulls esp_rcp_update
+# (Radio Co-Processor image update), a managed component we do not need. The hub
+# is updated over hubproto / OTA from the brain today. Turn this back on when
+# Matter-side OTA of the hub is in scope.
+CONFIG_ENABLE_OTA_REQUESTOR=n
+
+# --- Softap is not needed on the Thread BR ---
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# --- Matter clusters: only the ones the hub needs
+# The Matter data model compiles a cluster server for every supported
+# cluster; the full set does not fit into the 1.92 MB OTA slot. Everything
+# is switched off except the clusters the hub's bridge needs (SPEC § 6.1):
+# on/off, level, colour, temperature/humidity/illuminance, occupancy,
+# boolean state, thermostat, electrical power/energy, bridged device basic
+# information — plus the clusters a Matter server cannot do without
+# (access control, operational credentials, commissioning).
+# Regenerate with scripts/gen-cluster-exclusions.py.
+CONFIG_SUPPORT_ACCOUNT_LOGIN_CLUSTER=n
+CONFIG_SUPPORT_ACTIONS_CLUSTER=n
+CONFIG_SUPPORT_ACTIVATED_CARBON_FILTER_MONITORING_CLUSTER=n
+CONFIG_SUPPORT_AIR_QUALITY_CLUSTER=n
+CONFIG_SUPPORT_APPLICATION_BASIC_CLUSTER=n
+CONFIG_SUPPORT_APPLICATION_LAUNCHER_CLUSTER=n
+CONFIG_SUPPORT_AUDIO_OUTPUT_CLUSTER=n
+CONFIG_SUPPORT_BASIC_INFORMATION_CLUSTER=n
+CONFIG_SUPPORT_BOOLEAN_STATE_CONFIGURATION_CLUSTER=n
+CONFIG_SUPPORT_CAMERA_AV_SETTINGS_USER_LEVEL_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_CAMERA_AV_STREAM_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_CARBON_DIOXIDE_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_CARBON_MONOXIDE_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_CHANNEL_CLUSTER=n
+CONFIG_SUPPORT_CHIME_CLUSTER=n
+CONFIG_SUPPORT_CLOSURE_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_CLOSURE_DIMENSION_CLUSTER=n
+CONFIG_SUPPORT_COMMISSIONER_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_COMMODITY_METERING_CLUSTER=n
+CONFIG_SUPPORT_COMMODITY_PRICE_CLUSTER=n
+CONFIG_SUPPORT_COMMODITY_TARIFF_CLUSTER=n
+CONFIG_SUPPORT_CONTENT_APP_OBSERVER_CLUSTER=n
+CONFIG_SUPPORT_CONTENT_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_CONTENT_LAUNCHER_CLUSTER=n
+CONFIG_SUPPORT_DEVICE_ENERGY_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_DEVICE_ENERGY_MANAGEMENT_MODE_CLUSTER=n
+CONFIG_SUPPORT_DIAGNOSTIC_LOGS_CLUSTER=n
+CONFIG_SUPPORT_DISHWASHER_ALARM_CLUSTER=n
+CONFIG_SUPPORT_DISHWASHER_MODE_CLUSTER=n
+CONFIG_SUPPORT_DOOR_LOCK_CLUSTER=n
+CONFIG_SUPPORT_ECOSYSTEM_INFORMATION_CLUSTER=n
+CONFIG_SUPPORT_ELECTRICAL_GRID_CONDITIONS_CLUSTER=n
+CONFIG_SUPPORT_ENERGY_EVSE_CLUSTER=n
+CONFIG_SUPPORT_ENERGY_EVSE_MODE_CLUSTER=n
+CONFIG_SUPPORT_ENERGY_PREFERENCE_CLUSTER=n
+CONFIG_SUPPORT_ETHERNET_NETWORK_DIAGNOSTICS_CLUSTER=n
+CONFIG_SUPPORT_FAN_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_FAULT_INJECTION_CLUSTER=n
+CONFIG_SUPPORT_FIXED_LABEL_CLUSTER=n
+CONFIG_SUPPORT_FLOW_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_FORMALDEHYDE_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_GENERAL_DIAGNOSTICS_CLUSTER=n
+CONFIG_SUPPORT_GROUPCAST_CLUSTER=n
+CONFIG_SUPPORT_GROUP_KEY_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_HEPA_FILTER_MONITORING_CLUSTER=n
+CONFIG_SUPPORT_HUMIDISTAT_CLUSTER=n
+CONFIG_SUPPORT_ICD_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_JOINT_FABRIC_ADMINISTRATOR_CLUSTER=n
+CONFIG_SUPPORT_JOINT_FABRIC_DATASTORE_CLUSTER=n
+CONFIG_SUPPORT_KEYPAD_INPUT_CLUSTER=n
+CONFIG_SUPPORT_LAUNDRY_DRYER_CONTROLS_CLUSTER=n
+CONFIG_SUPPORT_LAUNDRY_WASHER_CONTROLS_CLUSTER=n
+CONFIG_SUPPORT_LAUNDRY_WASHER_MODE_CLUSTER=n
+CONFIG_SUPPORT_LOCALIZATION_CONFIGURATION_CLUSTER=n
+CONFIG_SUPPORT_LOW_POWER_CLUSTER=n
+CONFIG_SUPPORT_MEDIA_INPUT_CLUSTER=n
+CONFIG_SUPPORT_MEDIA_PLAYBACK_CLUSTER=n
+CONFIG_SUPPORT_MESSAGES_CLUSTER=n
+CONFIG_SUPPORT_METER_IDENTIFICATION_CLUSTER=n
+CONFIG_SUPPORT_MICROWAVE_OVEN_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_MICROWAVE_OVEN_MODE_CLUSTER=n
+CONFIG_SUPPORT_MODE_SELECT_CLUSTER=n
+CONFIG_SUPPORT_NITROGEN_DIOXIDE_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_OPERATIONAL_STATE_CLUSTER=n
+CONFIG_SUPPORT_OPERATIONAL_STATE_OVEN_CLUSTER=n
+CONFIG_SUPPORT_OPERATIONAL_STATE_RVC_CLUSTER=n
+CONFIG_SUPPORT_OTA_SOFTWARE_UPDATE_PROVIDER_CLUSTER=n
+CONFIG_SUPPORT_OTA_SOFTWARE_UPDATE_REQUESTOR_CLUSTER=n
+CONFIG_SUPPORT_OVEN_MODE_CLUSTER=n
+CONFIG_SUPPORT_OZONE_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_PM10_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_PM1_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_PM2_5_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_POWER_SOURCE_CLUSTER=n
+CONFIG_SUPPORT_POWER_SOURCE_CONFIGURATION_CLUSTER=n
+CONFIG_SUPPORT_POWER_TOPOLOGY_CLUSTER=n
+CONFIG_SUPPORT_PRESSURE_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_PROXIMITY_RANGING_CLUSTER=n
+CONFIG_SUPPORT_PUMP_CONFIGURATION_AND_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_PUSH_AV_STREAM_TRANSPORT_CLUSTER=n
+CONFIG_SUPPORT_RADON_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_REFRIGERATOR_ALARM_CLUSTER=n
+CONFIG_SUPPORT_REFRIGERATOR_AND_TEMPERATURE_CONTROLLED_CABINET_MODE_CLUSTER=n
+CONFIG_SUPPORT_RVC_CLEAN_MODE_CLUSTER=n
+CONFIG_SUPPORT_RVC_RUN_MODE_CLUSTER=n
+CONFIG_SUPPORT_SAMPLE_MEI_CLUSTER=n
+CONFIG_SUPPORT_SERVICE_AREA_CLUSTER=n
+CONFIG_SUPPORT_SMOKE_CO_ALARM_CLUSTER=n
+CONFIG_SUPPORT_SOFTWARE_DIAGNOSTICS_CLUSTER=n
+CONFIG_SUPPORT_SOIL_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_TARGET_NAVIGATOR_CLUSTER=n
+CONFIG_SUPPORT_TEMPERATURE_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_THERMOSTAT_USER_INTERFACE_CONFIGURATION_CLUSTER=n
+CONFIG_SUPPORT_THREAD_BORDER_ROUTER_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_THREAD_NETWORK_DIAGNOSTICS_CLUSTER=n
+CONFIG_SUPPORT_THREAD_NETWORK_DIRECTORY_CLUSTER=n
+CONFIG_SUPPORT_TIMER_CLUSTER=n
+CONFIG_SUPPORT_TIME_FORMAT_LOCALIZATION_CLUSTER=n
+CONFIG_SUPPORT_TIME_SYNCHRONIZATION_CLUSTER=n
+CONFIG_SUPPORT_TLS_CERTIFICATE_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_TLS_CLIENT_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_TVOC_CONCENTRATION_MEASUREMENT_CLUSTER=n
+CONFIG_SUPPORT_UNIT_LOCALIZATION_CLUSTER=n
+CONFIG_SUPPORT_UNIT_TESTING_CLUSTER=n
+CONFIG_SUPPORT_USER_LABEL_CLUSTER=n
+CONFIG_SUPPORT_VALVE_CONFIGURATION_AND_CONTROL_CLUSTER=n
+CONFIG_SUPPORT_WAKE_ON_LAN_CLUSTER=n
+CONFIG_SUPPORT_WATER_HEATER_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_WATER_HEATER_MODE_CLUSTER=n
+CONFIG_SUPPORT_WEB_RTC_TRANSPORT_PROVIDER_CLUSTER=n
+CONFIG_SUPPORT_WEB_RTC_TRANSPORT_REQUESTOR_CLUSTER=n
+CONFIG_SUPPORT_WIFI_NETWORK_DIAGNOSTICS_CLUSTER=n
+CONFIG_SUPPORT_WIFI_NETWORK_MANAGEMENT_CLUSTER=n
+CONFIG_SUPPORT_WINDOW_COVERING_CLUSTER=n
+CONFIG_SUPPORT_ZONE_MANAGEMENT_CLUSTER=n

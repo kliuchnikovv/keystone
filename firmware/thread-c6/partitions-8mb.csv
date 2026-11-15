@@ -1,0 +1,21 @@
+# Partition table for the Thread/Matter co-processor (ESP32-C6) on an 8 MB
+# module. Same layout as esp-matter's own Border Router example
+# (examples/thread_border_router/partitions.csv), minus the rcp_fw partition:
+# the C6 runs its 802.15.4 radio natively, there is no RCP image to update.
+#
+# The Matter image is ~2.1 MB — it does not fit into the 4 MB layout's two
+# 1.92 MB OTA slots. On 8 MB each slot is 3.44 MB, which leaves room for the
+# bridge's clusters.
+#
+# The first four partitions keep their offsets from the 4 MB layout, so an NVS
+# written by the Thread-host-only image (the Thread dataset!) stays valid.
+#
+# Name,        Type, SubType,  Offset,    Size,     Flags
+esp_secure_cert, 0x3F, ,       0xd000,    0x2000,   encrypted
+nvs,             data, nvs,    0x10000,   0xC000,
+nvs_keys,        data, nvs_keys, 0x1C000, 0x1000,   encrypted
+otadata,         data, ota,    0x1D000,   0x2000,
+phy_init,        data, phy,    0x1F000,   0x1000,
+ota_0,           app,  ota_0,  0x20000,   0x370000,
+ota_1,           app,  ota_1,  0x390000,  0x370000,
+fctry,           data, nvs,    0x700000,  0x6000,

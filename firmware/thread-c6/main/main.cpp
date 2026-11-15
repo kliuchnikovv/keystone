@@ -68,6 +68,17 @@
 #include "hubproto/version.hpp"
 #include "status_led.hpp"
 
+#ifdef CHIP_HAVE_CONFIG_H
+// The Matter bridge: the registry entities the brain announces become
+// bridged Matter endpoints under our aggregator (docs/matter-backlog.md § 10).
+#include "matter_bridge.hpp"
+// The accessory (root + aggregator) and the bridge under it.
+extern "C" void matter_accessory_start(core::Bus* bus, std::uint8_t boot_id);
+// Open a commissioning window on the accessory for another administrator
+// (a phone in Apple Home). See matter_accessory.cpp.
+extern "C" int matter_open_commissioning_window(std::uint16_t seconds);
+#endif
+
 namespace {
 
 const char* kTag = "thread-c6";
@@ -1002,6 +1013,17 @@ void on_bus_message(void* /*ctx*/, const hubproto::Header& h,
       ESP_LOGW(kTag, "the brain asked us to commission a Matter device — we cannot");
       return;
     }
+    case hubproto::MsgType::Declare:
+    case hubproto::MsgType::State:
+    case hubproto::MsgType::Undeclare: {
+      // The brain mirrors the Zigbee chip's declarations and states to us (we
+      // are the Matter side of the hub now): the bridge turns them into
+      // bridged endpoints (matter_bridge.cpp).
+#ifdef CHIP_HAVE_CONFIG_H
+      matter_bridge::on_bus_message(h, payload, len);
+#endif
+      return;
+    }
     default:
       return;
   }
@@ -1082,6 +1104,36 @@ static int cmd_heap(int, char**) {
   return 0;
 }
 
+const char* thread_reset_reason_name();
+
+#ifdef CHIP_HAVE_CONFIG_H
+// `matter_share <sec>` — open a commissioning window so another admin (a
+// phone in Apple Home) can join the hub's fabric. The accessory has no BLE,
+// so the phone finds it over DNS-SD and types the setup code.
+static int cmd_matter_share(int argc, char** argv) {
+  if (argc != 2) {
+    printf("usage: matter_share <seconds 60..900>\n");
+    return 1;
+  }
+  const std::uint32_t sec = std::strtoul(argv[1], nullptr, 10);
+  if (sec < 60 || sec > 900) {
+    printf("seconds must be 60..900\n");
+    return 1;
+  }
+  return matter_open_commissioning_window(static_cast<std::uint16_t>(sec));
+}
+#endif
+
+// How long the chip has been up, and which boot this is. The brain sees the
+// same numbers over UART, but with a delay — when a watchdog resets the chip
+// mid-boot, this says how far it got.
+static int cmd_status(int, char**) {
+  printf("status: uptime %u s, boot_id %u, reset reason: %s\n",
+         static_cast<unsigned>(esp_timer_get_time() / 1000000),
+         static_cast<unsigned>(g_boot_id), thread_reset_reason_name());
+  return 0;
+}
+
 static void start_console() {
   esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   repl_cfg.prompt = "thread>";
@@ -1116,8 +1168,19 @@ static void start_console() {
       {"reboot",       "Reboot the chip", nullptr, cmd_reboot, nullptr, nullptr},
       {"heap",         "Show free heap (now / lowest since boot / largest block)",
                                                         nullptr, cmd_heap, nullptr, nullptr},
+      {"status",       "Show uptime, boot_id and why the last boot ended",
+                                                        nullptr, cmd_status, nullptr, nullptr},
   };
   for (const auto& c : cmds) esp_console_cmd_register(&c);
+#ifdef CHIP_HAVE_CONFIG_H
+  {
+    esp_console_cmd_t share_cmd{};
+    share_cmd.command = "matter_share";
+    share_cmd.help = "Open a commissioning window for another admin (a phone in Apple Home)";
+    share_cmd.func = cmd_matter_share;
+    esp_console_cmd_register(&share_cmd);
+  }
+#endif
   esp_console_start_repl(repl);
 }
 
@@ -1240,6 +1303,27 @@ extern "C" void app_main() {
   wifi_bringup_init();
   thread_start();
   wifi_bringup_connect();
+
+#ifdef CHIP_HAVE_CONFIG_H
+  // The Matter accessory and its bridge (docs/matter-backlog.md § 10 F2).
+  // The accessory is the root + aggregator; the bridge turns the registry
+  // entities the brain announces into bridged endpoints under it.
+  //
+  // But not before the Border Router is up. The two start at the same moment
+  // otherwise (both wait for the Wi-Fi IP), and the chip then died with a
+  // "Load access fault" right after "Border Router is up" — the router brings
+  // its DNS-SD/SRP reflection up while the Matter stack is registering its
+  // own commissionable service in the same mDNS daemon, and the two collide.
+  // Waiting for the router takes the overlap away.
+  for (int wait_ms = 0; wait_ms < 15000 && !g_br_started; wait_ms += 100) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  if (!g_br_started) {
+    ESP_LOGW(kTag, "the Border Router is not up yet; starting the Matter stack anyway");
+  }
+  matter_accessory_start(g_bus, g_boot_id);
+
+#endif
 
   bus.publish(header(hubproto::MsgType::Hello), nullptr, 0);
 
