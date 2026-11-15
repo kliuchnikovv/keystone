@@ -2,6 +2,7 @@
 // and a name — so a room is read off the name (`kitchen_plug`, `Living room lamp`).
 // Anything we do not recognise stays unassigned rather than being guessed into a room.
 import type { Entity } from '../protocol/messages';
+import { primarySwitch } from './devices';
 
 /** A leading word of a device name that names the room it lives in. */
 const ROOM_WORDS: Record<string, string> = {
@@ -78,10 +79,44 @@ export function groupByRoom(entities: Entity[]): Room[] {
   }
   return [...byRoom.entries()]
     .sort((a, b) => (a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0])))
-    .map(([room, devices]) => ({ room: room === '' ? null : room, devices }));
+    .map(([room, devices]) => ({
+      room: room === '' ? null : room,
+      devices: [...devices].sort((a, b) => {
+        const aSensor = primarySwitch(a) === undefined;
+        const bSensor = primarySwitch(b) === undefined;
+        if (aSensor !== bSensor) return aSensor ? -1 : 1;
+        if (a.name !== null && b.name !== null) return a.name.localeCompare(b.name);
+        if (a.name === null !== (b.name === null)) return a.name === null ? 1 : -1;
+        return a.id - b.id;
+      }),
+    }));
 }
 
 /** How many rooms have at least one device. */
 export function roomCount(entities: Entity[]): number {
   return new Set(entities.map(roomOf).filter((r): r is string => r !== null)).size;
+}
+
+/** Every room name the app knows how to read off a device name, sorted. */
+export function allRooms(): string[] {
+  return [...new Set(Object.values(ROOM_WORDS).concat(Object.values(ROOM_PHRASES)))].sort();
+}
+
+/** The part of a device name that is not the leading room, if any. */
+export function stripRoomPrefix(name: string | null): string {
+  if (!name) return '';
+  const words = name.split(/[\\s_]+/).filter((w) => w.length > 0);
+  if (words.length === 0) return '';
+  // Two-word room?
+  if (words.length >= 2) {
+    const first = words[0];
+    const second = words[1];
+    if (first !== undefined && second !== undefined) {
+      const phrase = `${first.toLowerCase()} ${second.toLowerCase()}`;
+      if (ROOM_PHRASES[phrase] !== undefined) return words.slice(2).join(' ');
+    }
+  }
+  const head = words[0];
+  if (head !== undefined && ROOM_WORDS[head.toLowerCase()] !== undefined) return words.slice(1).join(' ');
+  return name;
 }

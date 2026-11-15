@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Platform } from 'react-native';
-import { canManageDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, climateTiles, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
+import { canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
 import { deviceShape, gridLayout } from '../model/grid';
 import { groupByRoom, roomCount } from '../model/rooms';
 import { useEntityActivity } from '../hooks/useEntityActivity';
@@ -37,7 +37,7 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
 
         {rooms.map((room) => {
           const summary = roomSummary(room.devices);
-          const tiles = climateTiles(room.devices);
+          // (climate tiles removed: sensor widgets now carry the readings)
           return (
             <View key={room.room ?? ''} style={styles.room}>
               <View style={styles.sectionHead}>
@@ -54,7 +54,7 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
                 </View>
               )}
 
-              {tiles.length > 0 && <ClimateCard tiles={tiles} />}
+              {/* sensor widgets now carry the readings; climate tiles removed as duplicate */}
 
               <DeviceGrid
                 devices={room.devices}
@@ -112,9 +112,13 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
             if (ok) commands.notify(name === null ? 'Name removed' : 'Device renamed');
             return ok;
           }}
-          {...(canManageDevice(home, open)
+          {...(canIdentifyDevice(home, open)
             ? {
                 onIdentify: async () => (await commands.request('identify', { entity: open.id })) !== null,
+              }
+            : {})}
+          {...(canRemoveDevice(home, open)
+            ? {
                 onRemove: () => setRemovingId(open.id),
               }
             : {})}
@@ -221,35 +225,6 @@ function Greeting({ home }: { home: HomeState }) {
             </Text>
           </View>
         )}
-      </View>
-    </View>
-  );
-}
-
-/** The room's climate as tiles: what the sensors say, and nothing more. */
-function ClimateCard({ tiles }: { tiles: ReturnType<typeof climateTiles> }) {
-  const t = useTheme();
-  const tone = (kind: 'warm' | 'cool' | 'good') => (kind === 'warm' ? t.accent : kind === 'cool' ? t.cool : t.good);
-  return (
-    <View style={[styles.climate, { backgroundColor: t.glass, borderColor: t.glassBorder, borderRadius: t.cardRadius }]}>
-      <View style={styles.climateHead}>
-        <Glyph name="climate" size={15} color={t.muted} />
-        <Text style={[styles.climateTitle, { color: t.muted }]}>Climate</Text>
-      </View>
-      <View style={styles.tiles}>
-        {tiles.map((tile) => (
-          <View
-            key={tile.label}
-            style={[styles.tile, { backgroundColor: t.fill, borderColor: t.border }]}
-          >
-            <Text style={[styles.tileValue, { color: t.text }]} numberOfLines={1}>
-              {tile.value}
-            </Text>
-            <Text style={[styles.tileLabel, { color: tone(tile.kind) }]} numberOfLines={1}>
-              {tile.label}
-            </Text>
-          </View>
-        ))}
       </View>
     </View>
   );
