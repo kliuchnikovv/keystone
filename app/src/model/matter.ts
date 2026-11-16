@@ -374,9 +374,11 @@ export function matterWords(attempt: MatterAttempt): string {
     case 'done':
       return 'The device is in the hub now.';
     case 'scanning':
+      return 'Looking for the device…';
     case 'commissioning':
+      return 'Commissioning the device…';
     case 'adding':
-      return 'The hub is adding the device…';
+      return 'Adding the device to the hub…';
     case 'idle':
       return '';
     case 'failed':

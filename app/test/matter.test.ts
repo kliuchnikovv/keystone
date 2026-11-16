@@ -174,9 +174,9 @@ describe('what the app hands the hub', () => {
 
 describe('what the hub says about the attempt', () => {
   it('says the attempt is running', () => {
-    expect(matterWords({ state: 'scanning', code: 'ok' })).toBe('The hub is adding the device…');
-    expect(matterWords({ state: 'commissioning', code: 'ok' })).toBe('The hub is adding the device…');
-    expect(matterWords({ state: 'adding', code: 'ok' })).toBe('The hub is adding the device…');
+    expect(matterWords({ state: 'scanning', code: 'ok' })).toBe('Looking for the device…');
+    expect(matterWords({ state: 'commissioning', code: 'ok' })).toBe('Commissioning the device…');
+    expect(matterWords({ state: 'adding', code: 'ok' })).toBe('Adding the device to the hub…');
     expect(matterBusy({ state: 'adding', code: 'ok' })).toBe(true);
   });
 
