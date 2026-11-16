@@ -5,7 +5,7 @@
 // device without Bluetooth never shows up here. The hub's own network says what can
 // join the home.
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
 import { useBleScan } from '../hooks/useBleScan';
 import { useJoinWindow } from '../hooks/useJoinWindow';
@@ -104,6 +104,18 @@ export function FindDevicesScreen({
 
       <ScrollView contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
         {attempt ? <AttemptNote attempt={attempt} /> : null}
+        {attempt?.state === 'done' ? (
+          <View style={[styles.attempt, { borderColor: t.good, backgroundColor: t.card }]}>
+            <Glyph name="check" size={15} color={t.good} />
+            <Text style={{ color: t.text, fontSize: 12.5, lineHeight: 18, flex: 1 }}>
+              The device is in the hub now.
+              {attempt.entity
+                ? ` It shows up as ${home.entities.find((e) => e.id === attempt.entity)?.name ?? 'a new device'}.`
+                : ''}
+            </Text>
+            <Button size="mini" label="Done" onPress={onClose} />
+          </View>
+        ) : null}
 
         <Text style={[styles.section, { color: t.muted }]}>NEAR YOU</Text>
         <NearbySection
@@ -131,7 +143,11 @@ function AttemptNote({ attempt }: { attempt: MatterEvent }) {
   const working = matterBusy(attempt);
   return (
     <View style={[styles.attempt, { borderColor: failed ? t.warn : t.border, backgroundColor: t.card }]}>
-      <Glyph name={failed ? 'signal' : working ? 'chip' : 'check'} size={15} color={failed ? t.warn : t.accent} />
+      {working ? (
+        <ActivityIndicator size="small" color={t.accent} />
+      ) : (
+        <Glyph name={failed ? 'signal' : 'check'} size={15} color={failed ? t.warn : t.good} />
+      )}
       <Text style={{ color: failed ? t.warn : t.text, fontSize: 12.5, lineHeight: 18, flex: 1 }}>{text}</Text>
     </View>
   );
@@ -201,7 +217,7 @@ function ScannedRow({
         </Text>
       ) : (
         <View style={styles.actions}>
-          <Button size="mini" label="Add to the hub" disabled={busy} onPress={onAdd} />
+          <Button size="mini" label={busy ? 'Adding…' : 'Add to the hub'} disabled={busy} onPress={onAdd} />
           <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
             The hub adds the device — it has to reach it over the network.
           </Text>
@@ -324,7 +340,7 @@ function NearbyRow({
         </Text>
       ) : (
         <View style={styles.actions}>
-          <Button size="mini" label="Add to the hub" disabled={busy} onPress={onAdd} />
+          <Button size="mini" label={busy ? 'Adding…' : 'Add to the hub'} disabled={busy} onPress={onAdd} />
           {matter.source === 'service' ? (
             <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%' }}>
               Only the discriminator was read from the air — if the hub cannot add it, use the QR code on the device.
