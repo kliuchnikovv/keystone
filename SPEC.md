@@ -169,6 +169,15 @@ offset size field       meaning
                                (the brain has no 802.15.4 radio, so the
                                commissioner borrows the co-processor's
                                network); see docs/matter-backlog.md §3
+0x64 IDENTIFY     chip→brain   "make the device behind entity X noticeable":
+                               the bytes are IdentifyTime (u16, seconds) and
+                               the entity is in the header. A Matter
+                               controller's "Identify" arrives at the bridge,
+                               which cannot reach the device; the brain routes
+                               it to the Zigbee coordinator or to its own
+                               commissioner by the entity's owner (the high
+                               byte). See the Blink section of
+                               docs/matter-backlog.md
 ```
 
 ### 4.4 Lifecycle

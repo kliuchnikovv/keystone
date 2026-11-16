@@ -599,4 +599,21 @@ bool decode_thread_dataset(const std::uint8_t* in, std::size_t len,
   return true;
 }
 
+EncodeResult encode_identify(std::uint16_t seconds, std::uint8_t* out,
+                             std::size_t cap) noexcept {
+  if (seconds == 0 || out == nullptr || cap < kIdentifyPayloadSize) return {false, 0};
+  out[0] = static_cast<std::uint8_t>(seconds & 0xFF);
+  out[1] = static_cast<std::uint8_t>((seconds >> 8) & 0xFF);
+  return {true, kIdentifyPayloadSize};
+}
+
+bool decode_identify(const std::uint8_t* in, std::size_t len,
+                     std::uint16_t& seconds) noexcept {
+  if (in == nullptr || len != kIdentifyPayloadSize) return false;
+  const std::uint16_t s = static_cast<std::uint16_t>(in[0] | (in[1] << 8));
+  if (s == 0) return false;
+  seconds = s;
+  return true;
+}
+
 }  // namespace hubproto

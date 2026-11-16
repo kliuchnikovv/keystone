@@ -52,6 +52,14 @@ esp_err_t attribute_update_cb(esp_matter::attribute::callback_type_t type, std::
                               std::uint32_t cluster_id, std::uint32_t attribute_id,
                               esp_matter_attr_val_t* val, void* priv);
 
+// A Matter controller asked the endpoint to identify itself (Apple Home's
+// "Identify"). For a bridged device the blink happens on the real device, and
+// this chip cannot reach it: the request goes to the brain as an IDENTIFY
+// frame, which routes it to the chip that owns the entity. Returns false when
+// the endpoint is not a bridged device (the hub's own root endpoint) or the
+// link to the brain is down.
+bool identify_endpoint(std::uint16_t endpoint_id, std::uint16_t seconds);
+
 // esp-matter calls these when it creates or drops a bridged device.
 app_bridged_device_t* alloc_bridged(esp_matter::node_t* node, std::uint16_t endpoint);
 void free_bridged(app_bridged_device_t* device);

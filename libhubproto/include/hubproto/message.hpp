@@ -42,6 +42,11 @@ enum class MsgType : std::uint8_t {
   // dataset and hands it to the device over BLE (docs/matter-backlog.md §3).
   ThreadDatasetReq = 0x62,  // brain→chip   "give me your active Thread dataset"
   ThreadDataset    = 0x63,  // chip→brain   the dataset, as Thread TLVs
+  // A Matter controller (Apple Home...) asked the hub's bridge to identify a
+  // bridged device. The co-processor knows which entity the endpoint mirrors
+  // but cannot reach the device; the brain can — Zigbee through the
+  // coordinator, Matter through its own commissioner. See payload.hpp.
+  Identify = 0x64,  // chip→brain   header.entity_id = the entity; payload = IdentifyTime, seconds
 };
 
 // Reserved identities (SPEC §4.2).

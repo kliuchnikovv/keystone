@@ -15,7 +15,7 @@ TEST_CASE("the Thread dataset messages sit at the documented codes") {
   CHECK(static_cast<std::uint8_t>(MsgType::ThreadDataset) == 0x63);
   CHECK(is_known_type(0x62));
   CHECK(is_known_type(0x63));
-  CHECK_FALSE(is_known_type(0x64));
+  CHECK_FALSE(is_known_type(0x65));
 }
 
 TEST_CASE("THREAD_DATASET carries the length and the TLVs, and round-trips") {

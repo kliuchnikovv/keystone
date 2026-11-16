@@ -468,4 +468,24 @@ EncodeResult encode_thread_dataset(const std::uint8_t* bytes, std::size_t len,
 bool decode_thread_dataset(const std::uint8_t* in, std::size_t len,
                            ThreadDatasetView& out) noexcept;
 
+// ---- Identify ---------------------------------------------------------------
+// A Matter controller (Apple Home, ...) asked the hub's Matter bridge to make a
+// bridged device noticeable — the "Identify" action in its UI. The co-processor
+// knows *which* hub entity the endpoint mirrors but not how to reach it: a
+// Zigbee device is identified by the coordinator, a Matter device by the brain's
+// own commissioner. So the request travels to the brain, which routes it by the
+// entity's owner (the high byte of the entity id, the same rule COMMAND
+// forwarding uses).
+//
+// The payload is the IdentifyTime the controller asked for, in seconds (Matter's
+// maximum is 65535). Zero is refused: a controller stops an identify with a new
+// Identify command, not with a separate message type.
+inline constexpr std::size_t   kIdentifyPayloadSize = 2;
+inline constexpr std::uint16_t kIdentifyMaxSeconds = 65535;
+
+EncodeResult encode_identify(std::uint16_t seconds, std::uint8_t* out,
+                             std::size_t cap) noexcept;
+bool decode_identify(const std::uint8_t* in, std::size_t len,
+                     std::uint16_t& seconds) noexcept;
+
 }  // namespace hubproto

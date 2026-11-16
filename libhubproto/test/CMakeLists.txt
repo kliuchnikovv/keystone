@@ -10,6 +10,7 @@ add_executable(hubproto_tests
   test_payload_ota.cpp
   test_payload_matter.cpp
   test_payload_thread_dataset.cpp
+  test_payload_identify.cpp
   test_payload_chip_self.cpp
   test_units.cpp
   test_frame.cpp)

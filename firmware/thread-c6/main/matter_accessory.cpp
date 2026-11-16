@@ -34,8 +34,35 @@ namespace {
 
 constexpr const char* kTag = "matter_accessory";
 
-esp_err_t identification_cb(esp_matter::identification::callback_type_t, uint16_t, uint8_t,
-                            uint8_t, void*) {
+// The Identify cluster is created by every device type the bridge builds, and
+// the controller's "Identify" (Apple Home's action of that name) lands here.
+// For a bridged device the blink has to happen on the physical device, which is
+// on the other side of the brain: matter_bridge::identify_endpoint() sends the
+// request over the bus. For the hub's own endpoint there is nothing to reach
+// yet — the C6's LED is not driven from here — so it is only logged.
+constexpr std::uint16_t kIdentifyFallbackSeconds = 10;
+
+// The IdentifyTime the controller asked for (Apple Home sends 60 s). The
+// callback does not carry it, so read the attribute the cluster has just set.
+std::uint16_t identify_seconds(uint16_t endpoint_id) {
+  esp_matter::attribute_t* attr = esp_matter::attribute::get(endpoint_id, 0x0003, 0x0000);
+  esp_matter_attr_val_t v = esp_matter_invalid(nullptr);
+  if (attr != nullptr && esp_matter::attribute::get_val_internal(attr, &v) == ESP_OK &&
+      v.type == ESP_MATTER_VAL_TYPE_UINT16 && v.val.u16 > 0) {
+    return v.val.u16;
+  }
+  return kIdentifyFallbackSeconds;
+}
+
+esp_err_t identification_cb(esp_matter::identification::callback_type_t type, uint16_t endpoint_id,
+                            uint8_t /*effect_id*/, uint8_t /*effect_variant*/, void*) {
+  // STOP arrives when IdentifyTime runs out; the device has its own timer and
+  // the brain's identify is one-shot, so there is nothing to cancel.
+  if (type != esp_matter::identification::START) return ESP_OK;
+  if (!matter_bridge::identify_endpoint(endpoint_id, identify_seconds(endpoint_id))) {
+    ESP_LOGI(kTag, "identify: endpoint %u is not a bridged device (nothing to blink)",
+             static_cast<unsigned>(endpoint_id));
+  }
   return ESP_OK;
 }
 

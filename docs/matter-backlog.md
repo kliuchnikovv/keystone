@@ -1574,26 +1574,38 @@ What is built:
 4. **The app.** The sheet offers "Blink" for a Zigbee device and for a Matter
    one; the hub answers with a real result: `unsupported` when the device has
    no Identify cluster, `busy` when the commissioner is occupied.
-5. **The event.** The Matter path does not write a `pairing` event yet (the
-   Zigbee one does, so the History tab shows "Tinfoil is blinking").
+5. **The event.** An identify writes a `pairing` event, so the History tab
+   shows "Tinfoil is blinking" — both the app path and the controller path
+   (which the Zigbee one always did through the chip-meta COMMAND).
+6. **Identify from Apple Home.** The Identify cluster is created by every device
+   type the bridge builds (all of them declare it, `server="true"`), so a
+   controller already sees it and its "Identify" already reached
+   `identification_cb` — which returned `ESP_OK` and did nothing. Now it sends
+   the new bus message **IDENTIFY (0x64, chip→brain, `header.entity_id` = the
+   entity, payload = IdentifyTime in seconds)**;
+   `firmware/thread-c6/main/matter_bridge.cpp::identify_endpoint()` finds the
+   entity behind the endpoint through the app_bridge table (the same
+   `keystone::BridgedDevice::addr()` the STATE/COMMAND paths use) and the brain
+   routes it by the entity's owner — the rule COMMAND forwarding already uses.
+   The hub's own root endpoint is not a bridged device: nothing to blink, so it
+   is only logged (the C6's LED is not driven from the identify yet).
 
 Still missing:
 
-- **Identify from Apple Home.** When the controller asks the *bridge* to
-  identify a bridged device, `firmware/thread-c6/main/matter_accessory.cpp`'s
-  `identification_cb` returns `ESP_OK` and does nothing. Making it blink means
-  a new command on the chip↔brain bus (`libhubproto`) — the bridge knows which
-  bus entity an endpoint stands for, the brain knows how to reach the device.
-  Not built; the bus protocol has no identify command today.
-- **Verified on hardware.** The invoke has never been sent to a real Matter
-  device (the TIMMERFLOTTE has the cluster, but nobody has invoked it since the
-  ServerList fix). The first thing to try after a flash is
-  `identify <id>` in the console and `Blink` in the app.
+- **Verified on hardware.** Neither path has been tried on a real setup since
+  the ServerList fix: the invoke has never reached the TIMMERFLOTTE, and Apple
+  Home's Identify has never sent an IDENTIFY frame. The first thing to try after
+  a flash is `identify <id>` in the console, `Blink` in the app, and the
+  accessory's "Identify" in Apple Home.
 - **Removing a Matter device.** `unpair` is Zigbee-only, so the sheet must not
   offer "Remove device" for a Matter one (it did, briefly: the hub answered
   `bad_args`). Dropping a Matter device means removing it from the fabric the
   hub's controller holds — `DeviceController::RemoveDevice`, plus forgetting
   its slots and the bridged endpoint — which is a separate piece of work.
+- **Identifying the hub itself.** Apple Home can also identify the bridge
+  accessory (the root endpoint); the C6 has a WS2812 on GPIO 8 and `status_led`
+  knows how to drive it, so blinking it for the IdentifyTime would close the
+  last hole. Not built.
 
 ### The Matter devices are inside the hub (15.11.2026, verified)
 
@@ -1783,8 +1795,10 @@ budget holds with room to spare. Stage B (bridged endpoints) is next.
    is built and routed by the owner of the entity (see "Blink (identify) a
    Matter device" above), and the Descriptor read now looks for Identify in
    the **ServerList** (fixed 15.11.2026 — it was looking in the ClientList and
-   never found it). Not verified on hardware. Identify *from* Apple Home is
-   still a no-op (`identification_cb` in `thread-c6/main/matter_accessory.cpp`).
+   never found it). Identify *from* Apple Home now travels back to the brain as
+   bus message **0x64 IDENTIFY** (`identification_cb` →
+   `matter_bridge::identify_endpoint()`; see "Blink (identify) a Matter device"
+   above). Not verified on hardware.
 7. NVS-restore limitation: EEM/EPM clusters are only added on fresh endpoint
    creation (`g_pending_has_metering/energy` flags set before
    `app_bridge_create_new_device()`). NVS-restored endpoints get only

@@ -943,8 +943,12 @@ static void bridge_progress(void* ctx, hubproto::MatterState state, hubproto::Ma
 //     by hand).
 //   - COMMAND from Matter → forwarded to Zigbee, so an Apple Home write
 //     reaches the real device.
+//   - IDENTIFY from Matter → routed to whichever chip owns the entity, so a
+//     controller's "Identify" blinks the real device (see below).
 // ChipRouter fan_out fires only for messages coming IN over a UART, not for
 // our own publish() calls, so no loop.
+void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::uint16_t arg);
+
 void on_bus_forward(void* ctx, const hubproto::Header& h,
                     const std::uint8_t* p, std::size_t len) {
   core::Bus* bus = static_cast<core::Bus*>(ctx);
@@ -1005,6 +1009,41 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
     ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> %s seq=%u",
              static_cast<unsigned>(h.entity_id), to_matter ? "Matter" : "Zigbee",
              static_cast<unsigned>(h.seq));
+  } else if (h.type == hubproto::MsgType::Identify && h.chip_id == kThreadChipId) {
+    // A Matter controller (Apple Home...) pressed "Identify" on a bridged
+    // accessory: the co-processor cannot reach the device, the brain can. The
+    // owner of the entity is its high byte, the same rule the COMMAND
+    // forwarding above uses (0x01xx = Zigbee, 0x03xx = a Matter device the
+    // hub commissions itself).
+    std::uint16_t seconds = 10;
+    if (!hubproto::decode_identify(p, len, seconds)) {
+      ESP_LOGW(kTag, "identify from Matter: %u-byte payload, ignored", static_cast<unsigned>(len));
+    } else if (g_reg != nullptr && g_reg->find(h.entity_id) == nullptr) {
+      ESP_LOGW(kTag, "identify from Matter: entity 0x%04x is not in the registry",
+               static_cast<unsigned>(h.entity_id));
+    } else if ((h.entity_id >> 8) == kMatterChipId) {
+#ifdef KEYSTONE_HAVE_MATTER
+      if (!matter_bridge::can_identify(h.entity_id)) {
+        ESP_LOGW(kTag, "identify from Matter: entity 0x%04x has no Identify cluster",
+                 static_cast<unsigned>(h.entity_id));
+      } else if (!matter_bridge::identify(h.entity_id, seconds)) {
+        ESP_LOGW(kTag, "identify from Matter: the commissioner is busy");
+      } else {
+        ev_plain(core::EventKind::Pairing, static_cast<std::uint8_t>(core::PairingEv::Identify), 0,
+                 h.entity_id);
+        ESP_LOGI(kTag, "identify from Matter: entity 0x%04x (Matter), %u s",
+                 static_cast<unsigned>(h.entity_id), static_cast<unsigned>(seconds));
+      }
+#else
+      ESP_LOGW(kTag, "identify from Matter: this hub has no Matter commissioner");
+#endif
+    } else {
+      // A Zigbee device: the coordinator sends the ZCL Identify command and the
+      // device blinks for its own 10 s (the requested time is a Matter notion).
+      send_chip_meta(*bus, kZigbeeChipId, core::app::kMetaIdentify, h.entity_id);
+      ESP_LOGI(kTag, "identify from Matter: entity 0x%04x -> Zigbee",
+               static_cast<unsigned>(h.entity_id));
+    }
   }
 #ifdef KEYSTONE_HAVE_MATTER
   else if (h.type == hubproto::MsgType::ThreadDataset && h.chip_id == kThreadChipId) {
@@ -3998,6 +4037,11 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
         o = Outcome::fail(Err::Unsupported, "this device has no Identify cluster");
       } else if (!matter_bridge::identify(cm.arg, 10)) {
         o = Outcome::fail(Err::Busy, "the Matter commissioner is busy");
+      } else {
+        // The Zigbee path writes this event from send_chip_meta; the Matter one
+        // would otherwise be invisible in the History tab.
+        ev_plain(core::EventKind::Pairing, static_cast<std::uint8_t>(core::PairingEv::Identify), 0,
+                 cm.arg);
       }
 #else
       o = Outcome::fail(Err::Unsupported, "this hub has no Matter commissioner");

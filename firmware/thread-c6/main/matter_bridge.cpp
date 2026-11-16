@@ -815,6 +815,27 @@ esp_err_t attribute_update_cb(esp_matter::attribute::callback_type_t type, std::
   return ESP_OK;
 }
 
+// A controller (Apple Home...) asked this endpoint to identify itself. The blink
+// happens on the physical device, and this chip has no way to reach it: the
+// brain owns the registry and knows whether the entity is a Zigbee device or one
+// its own commissioner talks to. So the request goes back over the bus.
+bool identify_endpoint(std::uint16_t endpoint_id, std::uint16_t seconds) {
+  if (g_bus == nullptr) return false;
+  app_bridged_device_t* bd = app_bridge_get_device(endpoint_id);
+  if (bd == nullptr) return false;  // the hub's own endpoint, not a bridged device
+  const keystone::BridgedAddr addr = static_cast<keystone::BridgedDevice*>(bd)->addr();
+  if (addr.entity_id == 0) return false;
+  std::uint8_t payload[hubproto::kIdentifyPayloadSize] = {};
+  const hubproto::EncodeResult enc = hubproto::encode_identify(seconds, payload, sizeof(payload));
+  if (!enc.ok) return false;
+  const hubproto::Header h = header(hubproto::MsgType::Identify, addr.entity_id);
+  g_bus->publish(h, payload, enc.len);
+  ESP_LOGI(kTag, "identify: endpoint %u -> entity 0x%04x (chip 0x%02x), %u s",
+           static_cast<unsigned>(endpoint_id), addr.entity_id, static_cast<unsigned>(addr.chip_id),
+           static_cast<unsigned>(seconds));
+  return true;
+}
+
 void on_bus_message(const hubproto::Header& h, const std::uint8_t* payload, std::size_t len) {
   switch (h.type) {
     case hubproto::MsgType::Declare: {
