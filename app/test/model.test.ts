@@ -241,10 +241,11 @@ describe('canIdentifyDevice', () => {
 });
 
 describe('canRemoveDevice', () => {
-  it('offers Remove for a Zigbee device only — the hub cannot drop a Matter one yet', () => {
+  it('offers Remove for a Zigbee device and for a Matter one', () => {
     const state = reduce(initialState, { type: 'snapshot', entities: defaultEntities(), chips: defaultChips(), rules: [], schedules: [], timers: [] });
     const zb = state.entities[0]!;
     expect(canRemoveDevice(state, zb)).toBe(true);
-    expect(canRemoveDevice(state, { ...zb, chip: MATTER_CHIP_ID })).toBe(false);
+    expect(canRemoveDevice(state, { ...zb, chip: MATTER_CHIP_ID })).toBe(true);
+    expect(canRemoveDevice(state, { ...zb, chip: 2 })).toBe(false); // the co-processor's own mirror
   });
 });

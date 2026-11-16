@@ -140,6 +140,7 @@ enum class Op : std::uint8_t {
   kShareOpen,            // open a commissioning window on a commissioned node (multi-admin)
   kShareResult,          // SDK's commissioning_window_opener callback — manual code or failure
   kIdentify,             // make a device identify itself (the Identify command)
+  kUnpair,               // take a device out of the fabric (the app's Remove device)
 };
 
 struct Request {
@@ -457,7 +458,7 @@ void fail_attempt(hubproto::MatterCode code) {
 // The device joined our fabric, but nothing on it is something the hub models (a Matter-only
 // appliance, an over-the-air updater, …). Release the slot for the next device instead of
 // keeping a reservation that would never declare anything; the node itself stays on the CHIP
-// fabric (the hub cannot unpair it yet — see docs/matter-backlog.md).
+// fabric until the person removes it (Remove device -> handle_unpair).
 void forget_slot(std::uint8_t slot) {
   if (slot >= kSlots) return;
   g_nodes[slot] = RuntimeNode{};
@@ -872,6 +873,55 @@ void handle_identify(const Request& req) {
   }
 }
 
+// Take a device out of the fabric (the app's Remove device). Every entity of the node gets
+// an UNDECLARE: the core forgets them — the pseudo-chip must not wait for a HELLO, because
+// unlike a co-processor it has nothing to re-announce with — and the Thread co-processor
+// drops the bridged endpoints, so Apple Home does not keep a ghost accessory. This happens
+// before CHIP is asked to unpair: the hub's own state must not wait for a device that may
+// already be offline or factory reset.
+void handle_unpair(const Request& req) {
+  RuntimeNode* node = nullptr;
+  if (find_entity(req.entity, &node) == nullptr || node == nullptr) {
+    ESP_LOGW(kTag, "unpair: entity 0x%04x is not a Matter device",
+             static_cast<unsigned>(req.entity));
+    return;
+  }
+  const std::uint64_t node_id = node->node_id;
+  const std::uint8_t entity_count = node->entity_count;
+  for (std::uint8_t e = 0; e < entity_count; ++e) {
+    const hubproto::Header h = header(hubproto::MsgType::Undeclare, node->entities[e].id);
+    publish(h, nullptr, 0);
+    publish_mirror(h, nullptr, 0);
+  }
+  // Forget the node: its entity ids are handed to the next device that joins, so a
+  // restored node would be a different one.
+  for (auto& n : g_nodes) {
+    if (n.used && n.node_id == node_id) {
+      n = RuntimeNode{};
+      break;
+    }
+  }
+  save_slots();
+
+  auto& client = esp_matter::controller::matter_controller_client::get_instance();
+  auto* commissioner = client.get_commissioner();
+  if (commissioner == nullptr) {
+    ESP_LOGW(kTag, "unpair: no commissioner, node 0x%016llx stays on the fabric",
+             static_cast<unsigned long long>(node_id));
+    return;
+  }
+  CHIP_ERROR err;
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    err = commissioner->UnpairDevice(node_id);
+  }
+  // Asynchronous: CHIP sends RemoveFabric and drops the session on its own task. The
+  // hub is already clean either way, which is what the person sees.
+  ESP_LOGI(kTag, "unpair: node 0x%016llx, %u entities, fabric removal %s",
+           static_cast<unsigned long long>(node_id), static_cast<unsigned>(entity_count),
+           err == CHIP_NO_ERROR ? "sent" : chip::ErrorStr(err));
+}
+
 void handle_command(const Request& req) {
   RuntimeNode* node = nullptr;
   RuntimeEntity* entity = nullptr;
@@ -1263,6 +1313,10 @@ void worker(void*) {
         handle_identify(req);
         break;
 
+      case Op::kUnpair:
+        handle_unpair(req);
+        break;
+
       case Op::kAttribute:
         handle_attribute(req);
         break;
@@ -1506,6 +1560,33 @@ bool identify(std::uint16_t entity_id, std::uint16_t seconds) {
     return false;
   }
   return true;
+}
+
+RemoveResult unpair(std::uint16_t entity_id, std::uint16_t* entities, std::size_t capacity,
+                    std::size_t& count) {
+  count = 0;
+  if (!ready()) return RemoveResult::kNotReady;
+  if (g_attempt_active.load() || g_share_active.load()) return RemoveResult::kBusy;
+
+  // The entity table lives on the worker task; this runs on the caller's. A stale read
+  // here only means the device is already gone (kUnknownEntity) or that the list handed
+  // back is a little out of date — the worker re-finds the node itself.
+  RuntimeNode* node = nullptr;
+  if (find_entity(entity_id, &node) == nullptr || node == nullptr) {
+    return RemoveResult::kUnknownEntity;
+  }
+  for (std::uint8_t i = 0; i < node->entity_count && count < capacity; ++i) {
+    entities[count++] = node->entities[i].id;
+  }
+
+  Request req;
+  req.op = Op::kUnpair;
+  req.entity = entity_id;
+  if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+    count = 0;
+    return RemoveResult::kNotReady;
+  }
+  return RemoveResult::kQueued;
 }
 
 bool can_identify(std::uint16_t entity_id) {

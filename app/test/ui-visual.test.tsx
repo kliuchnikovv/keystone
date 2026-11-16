@@ -76,7 +76,7 @@ describe('Device button', () => {
     expect(screen.getByLabelText('Remove plug1')).toBeTruthy();
     // The removal asks first, in words.
     fireEvent.click(screen.getByLabelText('Remove plug1'));
-    expect(await screen.findByText('This will take it off the Zigbee network and from Apple Home.')).toBeTruthy();
+    expect(await screen.findByText('This will remove it from the hub and from Apple Home.')).toBeTruthy();
   });
 
   it('nudges the brightness with the big buttons', async () => {

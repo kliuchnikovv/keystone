@@ -176,13 +176,13 @@ export function isMatterDevice(s: HomeState, e: Entity): boolean {
   return s.chips.some((c) => c.id === e.chip && c.label.toLowerCase().includes('matter'));
 }
 
-/** Devices the hub can take off the network: Zigbee devices only, today.
+/** Devices the hub can take off the network: Zigbee and Matter devices.
  *
- * A Matter device belongs to the fabric the hub's own controller holds, and the
- * hub cannot drop one from it yet (`unpair` answers `bad_args`), so the sheet
- * must not offer "Remove device" for one. */
+ * A Matter device belongs to the fabric the hub's own controller holds; the hub
+ * takes it out of it with the same "unpair" command (the commissioner removes
+ * the node, the bridge drops its bridged endpoint). */
 export function canRemoveDevice(s: HomeState, e: Entity): boolean {
-  return canManageDevice(s, e);
+  return canManageDevice(s, e) || isMatterDevice(s, e);
 }
 
 /** Devices the hub can make blink to be found: Zigbee and Matter devices.

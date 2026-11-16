@@ -154,6 +154,15 @@ void RadioCoordinator<Registry, MaxChips>::handle(const hubproto::Header& h,
       c->ready = true;
       break;
     }
+    case hubproto::MsgType::Undeclare: {
+      // One entity left (a device was removed), not the whole chip: drop just it, and
+      // only when the chip that says so owns it. Zigbee re-announces with HELLO after a
+      // leave, but a pseudo-chip (the Matter nodes the brain commissions itself) has no
+      // coordinator to re-query — clearing the chip would take its other devices with it.
+      const auto* e = reg_.find(h.entity_id);
+      if (e != nullptr && e->chip_id == chip) reg_.undeclare(h.entity_id);
+      break;
+    }
     default:
       break;  // STATE/COMMAND/CMD_ACK/HEARTBEAT need no coordinator action
   }

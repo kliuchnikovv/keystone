@@ -708,10 +708,9 @@ ChipMeta pair_meta(const Reader& r, int args, std::uint8_t zigbee_chip) {
 
 /** `unpair {entity}` / `identify {entity}`: a device on the Zigbee chip (not a chip, not a Matter mirror).
  *
- * `identify` also works for a Matter device — the hub's own commissioner sends the
- * Identify command there — so the Matter chip is passed as well (0 = there is
- * none). The caller routes by the chip the answer names. `unpair` stays
- * Zigbee-only: the hub cannot yet take a Matter device out of the fabric.
+ * Both also work for a Matter device — the hub's own commissioner sends the Identify
+ * command and takes the device out of the fabric — so the Matter chip is passed as
+ * well (0 = there is none). The caller routes by the chip the answer names.
  */
 template <typename Reg, typename Reader>
 ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t attr,
@@ -725,7 +724,8 @@ ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t att
     return {Outcome::fail(Err::NotFound, "no such entity"), 0, 0, 0};
   }
   if (ent->chip_id != zigbee_chip) {
-    if (attr == kMetaIdentify && matter_chip != 0 && ent->chip_id == matter_chip) {
+    const bool matter_op = attr == kMetaIdentify || attr == kMetaUnpair;
+    if (matter_op && matter_chip != 0 && ent->chip_id == matter_chip) {
       return {Outcome::done(), matter_chip, attr, static_cast<std::uint16_t>(e)};
     }
     return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, 0, 0};

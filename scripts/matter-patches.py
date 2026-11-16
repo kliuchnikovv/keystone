@@ -172,6 +172,92 @@ DML_EVENT_OLD = "        error = DataModelLogger::LogEvent(event_header, data);\
 DML_EVENT_NEW = "        error = CHIP_NO_ERROR;  // keystone: see scripts/matter-patches.py\n"
 
 
+# --- 7) only the clusters the brain actually talks to ----------------------
+#
+# CHIP's generated cluster-objects.cpp includes the implementation of *every*
+# cluster in the Matter spec (Attributes/Commands/Events/Structs .ipp). That is
+# ~240 KB of flash for clusters the hub never touches — the brain is a
+# commissioner: it reads the Descriptor of a device, identifies it, and talks
+# to the fabric.
+#
+# The cluster list the SDK's own controller path reaches into:
+#   - Access Control (CASE), Operational Credentials (the fabric table; the
+#     fabric removal reads CurrentFabricIndex through it), Group Key
+#     Management, Network Identity Management — the fabric itself;
+#   - General Commissioning, Network Commissioning, Administrator Commissioning
+#     — commissioning and the multi-admin window;
+#   - Icd Management — the sleepy devices;
+#   - Time Synchronization, Basic Information — what a device says about itself;
+#   - Descriptor, Identify — what the keystone bridge reads and invokes;
+#   - Diagnostic Logs, Fixed Label, Unit Testing, Binding — esp_matter's client
+#     code reaches into them unconditionally;
+#   - the OTA Software Update provider/requestor — esp_matter_controller
+#     registers the OTA delegates unconditionally;
+#   - Bridged Device Basic Information — the hub's own bridge accessory.
+# The few clusters with a single symbol left (a struct the diagnostics code
+# names) are kept as well, so nothing the SDK links against disappears.
+#
+# The patch only drops the #include lines: the header keeps every declaration,
+# so the code still compiles, and the linker drops whatever was never used.
+CLUSTER_OBJECTS_CPP = (ROOT / "connectedhomeip/connectedhomeip/zzz_generated/app-common/"
+                       "app-common/zap-generated/cluster-objects.cpp")
+KEEP_CLUSTERS = {
+    "AccessControl",
+    "AdministratorCommissioning",
+    "AudioOutput",
+    "BasicInformation",
+    "Binding",
+    "BridgedDeviceBasicInformation",
+    "CameraAvStreamManagement",
+    "CommissionerControl",
+    "CommodityTariff",
+    "Descriptor",
+    "DiagnosticLogs",
+    "EnergyEvse",
+    "EthernetNetworkDiagnostics",
+    "FixedLabel",
+    "GeneralCommissioning",
+    "GeneralDiagnostics",
+    "GroupKeyManagement",
+    "IcdManagement",
+    "Identify",
+    "JointFabricAdministrator",
+    "NetworkCommissioning",
+    "NetworkIdentityManagement",
+    "OperationalCredentials",
+    "OtaSoftwareUpdateProvider",
+    "OtaSoftwareUpdateRequestor",
+    "TimeSynchronization",
+    "UnitTesting",
+    "WiFiNetworkDiagnostics",
+}
+
+
+def prune_clusters():
+    """Drop the generated cluster implementations the brain never uses."""
+    if APP != BRAIN:
+        print("  skip  cluster objects: only the commissioner (brain-s3) needs them")
+        return
+    if not CLUSTER_OBJECTS_CPP.exists():
+        raise SystemExit(f"  FAIL  cluster objects: {CLUSTER_OBJECTS_CPP} not found")
+    text = CLUSTER_OBJECTS_CPP.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    kept, dropped = [], 0
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#include <clusters/"):
+            name = stripped[len("#include <clusters/"):].split("/")[0]
+            if name not in KEEP_CLUSTERS:
+                dropped += 1
+                continue
+        kept.append(line)
+    if dropped == 0:
+        print("  skip  cluster objects: already pruned")
+        return
+    CLUSTER_OBJECTS_CPP.write_text("".join(kept), encoding="utf-8")
+    print(f"  patch cluster objects: dropped {dropped} cluster include(s)")
+
+
 def patch(path, old, new, what, apps=ALL):
     if APP not in apps:
         print(f"  skip  {what} (not needed by {APP})")
@@ -202,6 +288,7 @@ def main():
     patch(SUBSCRIBE_CMD, DML_INCLUDE_OLD, DML_INCLUDE_NEW, "subscribe command: no DataModelLogger include", (BRAIN,))
     patch(SUBSCRIBE_CMD, DML_ATTR_OLD, DML_ATTR_NEW, "subscribe command: no DataModelLogger::LogAttribute", (BRAIN,))
     patch(SUBSCRIBE_CMD, DML_EVENT_OLD, DML_EVENT_NEW, "subscribe command: no DataModelLogger::LogEvent", (BRAIN,))
+    prune_clusters()
 
 
 if __name__ == "__main__":

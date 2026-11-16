@@ -150,6 +150,12 @@ offset size field       meaning
 0x01 HELLO        chip→brain   "I booted; here is my chip_id and boot_id"
 0x02 DECLARE      chip→brain   one entity + its capability descriptor
 0x03 DECLARE_END  chip→brain   "I have declared all my entities"
+0x04 UNDECLARE    chip→brain   the entity in the header is gone (a device was
+                               removed): the brain forgets exactly that entity,
+                               and only if the chip that says so owns it. The
+                               Matter bridge uses it when a device is taken out
+                               of the fabric — the pseudo-chip has no
+                               coordinator to re-announce itself with
 0x10 STATE        chip→brain   an entity's attribute value(s) changed
 0x20 COMMAND      brain→chip   set attribute Y on entity X
 0x21 CMD_ACK      chip→brain   result of COMMAND seq=K (ok / fail / no-response)

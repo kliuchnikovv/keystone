@@ -143,11 +143,34 @@ describe('Adding, finding and removing devices', () => {
     await longPress(card('plug1'));
     fireEvent.click(await screen.findByLabelText('Remove plug1'));
     expect(hub.unpairCalls).toEqual([]); // the hub is asked first
-    expect(await screen.findByText('This will take it off the Zigbee network and from Apple Home.')).toBeTruthy();
+    expect(await screen.findByText('This will remove it from the hub and from Apple Home.')).toBeTruthy();
     fireEvent.click(await screen.findByLabelText('Remove device'));
     await waitFor(() => expect(screen.queryByText('plug1')).toBeNull());
     expect(hub.unpairCalls).toEqual([0x0100]);
     expect(screen.getByText('lamp')).toBeTruthy(); // the others stay
+  });
+
+  it('a Matter device can be removed too', async () => {
+    hub.entities = [
+      ...hub.entities,
+      {
+        id: 0x0300,
+        name: 'tinfoil',
+        room: null,
+        chip: 3, // the Matter pseudo-chip: the hub's own commissioner holds it
+        device: 'sensor',
+        attrs: [{ id: 0x10, name: 'temperature', vt: 'i16', flags: ['r', 'rep'], value: 240 }],
+      },
+    ];
+    hub.resync();
+    renderHome();
+    await screen.findByLabelText('Device tinfoil');
+    await longPress(card('tinfoil'));
+    fireEvent.click(await screen.findByLabelText('Remove tinfoil'));
+    expect(await screen.findByText('This will remove it from the hub and from Apple Home.')).toBeTruthy();
+    fireEvent.click(await screen.findByLabelText('Remove device'));
+    await waitFor(() => expect(screen.queryByLabelText('Device tinfoil')).toBeNull());
+    expect(hub.unpairCalls).toEqual([0x0300]);
   });
 });
 

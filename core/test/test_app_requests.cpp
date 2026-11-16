@@ -501,7 +501,7 @@ TEST_CASE("unpair and identify target a Zigbee device only") {
   CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
 }
 
-TEST_CASE("identify also works for a Matter device (the commissioner sends the command)") {
+TEST_CASE("identify and unpair also work for a Matter device (the commissioner does it)") {
   Home h;
   declare(h.reg, 2, 0x0200, hubproto::DeviceType::Switch, {{0x01, ValueType::Bool, 0x07}});  // the Matter mirror
   declare(h.reg, 3, 0x0300, hubproto::DeviceType::Sensor, {{0x10, ValueType::I16, 0x05}});  // a Matter device
@@ -517,14 +517,17 @@ TEST_CASE("identify also works for a Matter device (the commissioner sends the c
   auto i = meta(R"({"entity":768})", kMetaIdentify);
   CHECK(i.out.ok);
   CHECK((i.chip == 3 && i.attr == kMetaIdentify && i.arg == 0x0300));
-  // But it cannot be unpaired (the hub cannot take a Matter device out of the fabric yet).
-  CHECK(meta(R"({"entity":768})", kMetaUnpair).out.err == Err::BadArgs);
-  // Without the Matter chip the same device is refused.
+  // And it can be taken out of the fabric by the same commissioner.
+  auto u = meta(R"({"entity":768})", kMetaUnpair);
+  CHECK(u.out.ok);
+  CHECK((u.chip == 3 && u.attr == kMetaUnpair && u.arg == 0x0300));
+  // Without the Matter chip both are refused.
   Reader r;
   const std::string frame = R"({"type":"req","id":1,"op":"identify","args":{"entity":768}})";
   const ClientMsg m = decode_client(r, frame.data(), frame.size());
   REQUIRE(m.kind == ClientMsg::Kind::Req);
   CHECK(device_meta(h.reg, r, m.args, kMetaIdentify, 1).out.err == Err::BadArgs);
+  CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
 }
 
 TEST_CASE("device.ota takes a Zigbee device, an http url and a sha256") {

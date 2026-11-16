@@ -50,7 +50,14 @@ BUILD_CMD="idf.py build"
 if [[ "${APP}" == "brain-s3" ]]; then
   # brain-s3/build is tmpfs on the Pi (see /etc/fstab) — parallel IO is cheap,
   # keep the default -j.
-  BUILD_CMD="python3 /project/scripts/matter-patches.py --app brain-s3 && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' build"
+  #
+  # `rm -f sdkconfig` for the same reason as thread-c6: IDF applies
+  # sdkconfig.defaults* only when it *creates* sdkconfig, so an existing file
+  # keeps its old values and the .matter overlay is silently ignored — the CA
+  # bundle would stay the full 69 KB one and the image would not fit the app
+  # partition. The file is untracked and is regenerated from the tracked
+  # defaults.
+  BUILD_CMD="rm -f sdkconfig sdkconfig.old && python3 /project/scripts/matter-patches.py --app brain-s3 && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.matter' build"
 elif [[ "${APP}" == "thread-c6" ]]; then
   # thread-c6/build lives on the SD card (too big for tmpfs on a 4 GB Pi):
   # a full -j4 ninja saturates SD random IO and freezes SSH. MATTER_JOBS caps

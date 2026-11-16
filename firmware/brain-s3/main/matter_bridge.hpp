@@ -139,6 +139,27 @@ bool command(std::uint16_t seq, const std::uint8_t* payload, std::size_t len);
 // the log).
 bool identify(std::uint16_t entity_id, std::uint16_t seconds);
 
+// Take a Matter device out of the hub's fabric (the app's Remove device).
+//
+// The worker publishes an UNDECLARE for every entity of the node (the core
+// forgets them, the Thread co-processor drops the bridged endpoints) and forgets
+// the node, then asks the commissioner to remove it from the fabric. The local
+// cleanup is immediate and does not depend on the device answering: a device
+// that is offline or factory reset must still leave the hub and Apple Home.
+//
+// `entities` receives the entity ids of the node (at most `capacity`), `count`
+// how many there are — the caller cleans the hub's own memory of them (desired
+// values, names, rooms). A node with more entities than `capacity` still leaves;
+// the extras are simply not reported back.
+enum class RemoveResult : std::uint8_t {
+  kQueued,          // the worker will do it
+  kNotReady,        // the commissioner is not up (yet)
+  kBusy,            // a commissioning or share is in progress
+  kUnknownEntity,   // no Matter entity with this id
+};
+RemoveResult unpair(std::uint16_t entity_id, std::uint16_t* entities, std::size_t capacity,
+                    std::size_t& count);
+
 // Does the device have the Identify cluster at all? The answer comes from the
 // descriptor (the ServerList — Identify is a server cluster on the device that
 // blinks), so the hub can tell the person "this device cannot blink" instead

@@ -147,7 +147,7 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
       <ConfirmDialog
         visible={removing !== null}
         title={removing ? `Remove ${deviceTitle(removing)}?` : 'Remove device?'}
-        body="This will take it off the Zigbee network and from Apple Home."
+        body="This will remove it from the hub and from Apple Home."
         confirmLabel="Remove device"
         danger
         onCancel={() => setRemovingId(null)}

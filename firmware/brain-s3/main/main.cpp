@@ -3740,6 +3740,54 @@ void note_unpair(std::uint16_t entity, std::uint32_t now) {
   if (free_slot != nullptr) *free_slot = PendingUnpair{true, entity, now};
 }
 
+// The hub's own memory of a Matter device dies with it: the desired values, the name and
+// the room. The entity ids of the Matter pseudo-chip (0x03xx) are handed to the next node
+// that joins, so a stale entry would attach itself to a different device. (Zigbee names are
+// kept on purpose: a re-paired device gets its id back and should get its name back too.)
+void forget_matter_entities(const std::uint16_t* ids, std::size_t n) {
+  if (ids == nullptr || n == 0) return;
+  bool names_changed = false;
+  bool rooms_changed = false;
+  {
+    xSemaphoreTakeRecursive(g_rec_mu, portMAX_DELAY);
+    for (std::size_t i = 0; i < n; ++i) {
+      if (g_rec->desired().clear_entity(ids[i]) > 0) g_rec->note_dirty();
+      if (g_reg->names().clear_name(ids[i])) names_changed = true;
+      if (g_reg->rooms().clear_room(ids[i])) rooms_changed = true;
+    }
+    xSemaphoreGiveRecursive(g_rec_mu);
+  }
+  persist_desired();
+  if (names_changed) persist_names(g_reg->names());
+  if (rooms_changed) persist_rooms(g_reg->rooms());
+}
+
+#ifdef KEYSTONE_HAVE_MATTER
+// The app's and the console's `unpair` for a Matter device: the bridge takes the node out
+// of the fabric and undeclares its entities; the hub's own memory of them is cleaned here,
+// synchronously — the app's next snapshot must not show a device that is already gone.
+core::app::Outcome matter_unpair(std::uint16_t entity) {
+  std::uint16_t ids[8] = {};
+  std::size_t count = 0;
+  switch (matter_bridge::unpair(entity, ids, sizeof(ids) / sizeof(ids[0]), count)) {
+    case matter_bridge::RemoveResult::kQueued:
+      break;
+    case matter_bridge::RemoveResult::kNotReady:
+      return core::app::Outcome::fail(core::app::Err::Unsupported, "no Matter commissioner");
+    case matter_bridge::RemoveResult::kBusy:
+      return core::app::Outcome::fail(core::app::Err::Busy, "the Matter commissioner is busy");
+    case matter_bridge::RemoveResult::kUnknownEntity:
+      return core::app::Outcome::fail(core::app::Err::NotFound, "no such entity");
+  }
+  forget_matter_entities(ids, count);
+  // The Zigbee path writes this event from send_chip_meta; the Matter one would otherwise
+  // be invisible in the History tab.
+  ev_plain(core::EventKind::Pairing, static_cast<std::uint8_t>(core::PairingEv::Unpair), 0,
+           entity);
+  return core::app::Outcome::done();
+}
+#endif  // KEYSTONE_HAVE_MATTER
+
 // A chip-meta COMMAND: entity = the chip's self entity, attr = the op (core::app::kMeta*), the
 // u16 value its argument. Mirrored in zigbee-c6 handle_meta.
 void send_chip_meta(core::Bus& bus, std::uint8_t chip, std::uint8_t attr, std::uint16_t arg) {
@@ -4021,8 +4069,8 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "pair") || !std::strcmp(op, "unpair") || !std::strcmp(op, "identify")) {
     // Zigbee chip operations, fire-and-forget like the console: the result is seen as an entity
     // appearing (pair), going away (unpair) or a device blinking (identify).
-    // The identify of a *Matter* device goes another way: the hub's own
-    // commissioner invokes the Identify cluster (the Matter way of blinking).
+    // A *Matter* device goes another way: the hub's own commissioner invokes the Identify
+    // cluster (the Matter way of blinking) and takes the device out of the fabric.
     const bool identify = !std::strcmp(op, "identify");
     const core::app::ChipMeta cm =
         !std::strcmp(op, "pair")
@@ -4043,6 +4091,14 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
         ev_plain(core::EventKind::Pairing, static_cast<std::uint8_t>(core::PairingEv::Identify), 0,
                  cm.arg);
       }
+#else
+      o = Outcome::fail(Err::Unsupported, "this hub has no Matter commissioner");
+#endif
+    } else if (o.ok && !identify && cm.chip == kMatterChipId) {
+      // Remove a Matter device: the hub's own commissioner takes it out of the fabric and
+      // the bridge undeclares its entities, so Apple Home does not keep a ghost accessory.
+#ifdef KEYSTONE_HAVE_MATTER
+      o = matter_unpair(cm.arg);
 #else
       o = Outcome::fail(Err::Unsupported, "this hub has no Matter commissioner");
 #endif
@@ -5786,6 +5842,24 @@ extern "C" void app_main(void) {
 #else
             std::snprintf(r->out, r->out_cap,
                           "identify 0x%04x: this hub has no Matter commissioner\n",
+                          static_cast<unsigned>(id));
+#endif
+            break;
+          }
+          // Remove a Matter device: the hub's own commissioner takes it out of the fabric
+          // and the bridge undeclares its entities (Apple Home must not keep a ghost).
+          if (r->kind == REQ_UNPAIR && e->chip_id == kMatterChipId) {
+#ifdef KEYSTONE_HAVE_MATTER
+            const core::app::Outcome o = matter_unpair(id);
+            if (!o.ok) {
+              std::snprintf(r->out, r->out_cap, "unpair 0x%04x: %s\n", static_cast<unsigned>(id),
+                            o.msg);
+            } else {
+              std::snprintf(r->out, r->out_cap, "unpair 0x%04x -> Matter (removed)\n",
+                            static_cast<unsigned>(id));
+            }
+#else
+            std::snprintf(r->out, r->out_cap, "unpair 0x%04x: no Matter commissioner\n",
                           static_cast<unsigned>(id));
 #endif
             break;

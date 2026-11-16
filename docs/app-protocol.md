@@ -5,7 +5,8 @@ brain** (handshake, snapshot, live events, commands, and the management requests
 rules, schedules, timers, scenes and pair/unpair/identify; TLS with certificate pinning;
 mDNS). **Not verified on a phone:** the native module that pins the certificate and browses
 mDNS on iOS/Android (`app/modules/keystone-net`) is written but nothing here can build it.
-An actual `unpair` has not been run on a device either (§5). The hub serves no UI and no
+An actual `unpair` has not been run on a device either (§5); the Matter removal (the
+commissioner takes the node out of the fabric) is built but not verified on hardware. The hub serves no UI and no
 static files; it only speaks this protocol. The client is a React Native (Expo) app that
 also builds for the web, in [`app/`](../app/).
 
@@ -185,7 +186,7 @@ so they also update the desired state (reconciler).
 | `scene.del` | `name` | `not_found` if there is no such scene |
 | `scene.apply` | `name` | sends every action as an ordinary command (so desired state and reconciliation see it) and answers `result: {sent, skipped}` once they are queued, not when the devices acked. An action whose entity has since gone, turned read-only or changed type, or that the command queue refused, is `skipped` rather than an error. Scenes change only through these ops, so clients just receive the new snapshot (`scenes` is a snapshot section; there is no scene event) |
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
-| `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
+| `unpair` | `entity` | removes the device from the hub and from Apple Home. A **Zigbee** device gets Leave on the coordinator; the chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). A **Matter** device is taken out of the fabric by the hub's own commissioner: the bridge undeclares the device's entities (the app's snapshot loses them at once) and the commissioner removes the node from the fabric — `unsupported` if the hub has no Matter commissioner, `busy` if it is in the middle of commissioning something. A chip entity or an unknown id is `not_found`, an entity of the Matter co-processor's own mirror `bad_args` |
 | `identify` | `entity` | makes the device blink for ~10 s. A **Zigbee** device gets a chip-meta COMMAND to the coordinator (fire-and-forget, as with `unpair`); a **Matter** device is invoked by the hub's own commissioner — `res ok` means the invoke went out, `unsupported` that the device has no Identify cluster or the hub has no Matter chip, `busy` that the commissioner is in the middle of something |
 | `device.ota` | `entity`, `url` (`http(s)`), `sha256` (64 hex digits) | pushes a vendor `.ota` file to a **Zigbee device** (lamp, dimmer): the hub downloads it and hands it to the coordinator, which serves it over the OTA Upgrade cluster (docs/ota.md). `res ok` means the update started; the progress arrives as `device_ota` events. Only Zigbee devices: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args`, a second running update `busy` |
 | `matter.commission` | `kind` (0 = service data, 1 = advertisement, 2 = QR code), `payload` (hex bytes) | asks the hub to add a Matter device the phone found. Fire-and-forget like `pair`: `ok {state:"started"}` means the bytes were handed to the Matter chip; how it goes is reported by the `matter` event (§5.3). `bad_args` when the payload is not the shape the kind promises, `unsupported` when the hub has no Matter chip — or when its Matter chip is alive and has no commissioner (the hub asks once, learns this, and refuses straight away after that) |
@@ -347,7 +348,7 @@ ask again when a push does not join what it has; one that has seen none (an olde
 | `scene` | a scene was applied | `ref` (its id), `scene` (its name, unless it was deleted since), `what`: `console` `app` `rule` `schedule` `timer` |
 | `chip` | a co-processor changed health | `ref` (chip id), `what`: `lost` `resumed` `rebooted` `flapping`, `value` (seconds silent, or the reboot count) |
 | `reconcile` | the hub found a device differing from what it last set (`corrected`: a corrective command follows) or changed outside the hub (`adopted`) | `entity`, `attr`, `value` (what the device has), `what` |
-| `pairing` | the Zigbee network | `what`: `opened` (`ref` = seconds), `unpair` / `identify` (`entity`) |
+| `pairing` | the Zigbee network | `what`: `opened` (`ref` = seconds), `unpair` / `identify` (`entity`) — `unpair` also covers a Matter device that left the fabric |
 
 **Live push.** About 250 ms after events are recorded the hub sends every authenticated client one message with
 what is new, newest first, each event in the shape above:

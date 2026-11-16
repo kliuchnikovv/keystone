@@ -15,6 +15,10 @@ under the Matter stack lock. Deliberately tied to the explicit request, not to "
 DECLARE frame must never delete an endpoint people have put in rooms and automations. Not covered: a device
 that leaves by itself (factory reset) and an unpair pending across a brain reboot.
 
+Removing a **Matter** device (one the hub's own commissioner holds) is a separate path: the bridge undeclares
+the device's entities and asks the commissioner to remove the node from the fabric — see "Removing a Matter
+device" below.
+
 ## Device types on the bridge
 
 Every hub entity becomes one bridged endpoint; `core/matter_plan.hpp` (host-tested) picks the Matter
@@ -1555,8 +1559,8 @@ What is built:
 1. **The route follows the owner of the entity.** `device_meta()` takes the
    Matter chip as well; `identify` on an entity of chip 0x03 does not go to the
    Zigbee meta but to `matter_bridge::identify()` (`main.cpp`, the `identify`
-   op). `unpair` stays Zigbee-only: the hub cannot take a Matter device out of
-   the fabric yet.
+   op). `unpair` on the same chip goes to `matter_bridge::unpair()` (see
+   "Removing a Matter device" below).
 2. **The CHIP call.** `core/matter_entity.hpp::to_matter_identify()` builds the
    invoke: `SendKind::kInvoke`, cluster 0x0003, command 0x00, one field
    `IdentifyTime` (u16). The cluster is enabled in the Matter build
@@ -1597,15 +1601,84 @@ Still missing:
   Home's Identify has never sent an IDENTIFY frame. The first thing to try after
   a flash is `identify <id>` in the console, `Blink` in the app, and the
   accessory's "Identify" in Apple Home.
-- **Removing a Matter device.** `unpair` is Zigbee-only, so the sheet must not
-  offer "Remove device" for a Matter one (it did, briefly: the hub answered
-  `bad_args`). Dropping a Matter device means removing it from the fabric the
-  hub's controller holds — `DeviceController::RemoveDevice`, plus forgetting
-  its slots and the bridged endpoint — which is a separate piece of work.
+- **Removing a Matter device.** Built (16.11.2026), not yet verified on
+  hardware: `matter_bridge::unpair()` takes the node out of the fabric and
+  undeclares its entities. See the section below.
 - **Identifying the hub itself.** Apple Home can also identify the bridge
   accessory (the root endpoint); the C6 has a WS2812 on GPIO 8 and `status_led`
   knows how to drive it, so blinking it for the IdentifyTime would close the
   last hole. Not built.
+
+### Removing a Matter device (16.11.2026, built — not yet on hardware)
+
+The app's **Remove device** used to be Zigbee-only: a Matter device belongs to
+the fabric the hub's own commissioner holds, and the hub could not drop one
+from it. It can now.
+
+**The route.** `device_meta()` (`core/app_requests.hpp`) accepts `unpair` for a
+Matter entity as well (it used to answer `bad_args` for everything but
+Identify) and names the Matter chip (0x03) in the answer. The app op and the
+console's `unpair` then call `matter_bridge::unpair()` instead of sending a
+chip-meta COMMAND.
+
+**What the bridge does** (`firmware/brain-s3/main/matter_bridge.cpp`):
+
+1. The worker finds the node that owns the entity and publishes an
+   **UNDECLARE** for every entity of that node — into the hub bus (the core
+   forgets them: `RadioCoordinator` now handles an incoming UNDECLARE and drops
+   exactly that entity, and only when the chip that says so owns it) and into
+   the mirror (thread-c6 removes the bridged endpoint, so Apple Home does not
+   keep a ghost accessory).
+2. The node is forgotten: the slot is cleared and the NVS table is saved, so a
+   reboot does not bring it back.
+3. Under the CHIP stack lock the worker calls
+   `DeviceCommissioner::UnpairDevice(node_id)` — the SDK's
+   `AutoCurrentFabricRemover` sends RemoveFabric and drops the session. It is
+   asynchronous and its errors are only logged: the hub's own state is already
+   clean, and a device that is offline or factory reset must still leave the
+   hub and the app.
+
+**The hub's memory.** Matter entity ids (0x03xx) are handed to the next node
+that joins, so the desired values, the name and the room of the removed device
+are cleaned and persisted right away (`forget_matter_entities()` in
+`main.cpp`). Zigbee names are kept on purpose: a re-paired device gets its id
+back and should get its name back too.
+
+**The app.** `canRemoveDevice` now answers yes for a Matter device as well,
+and the confirmation says "This will remove it from the hub and from Apple
+Home." — true for both kinds of device.
+
+Still missing: a run on real hardware (the TIMMERFLOTTE in the fabric).
+
+### The image had to fit again: the removal's 6 KB (16.11.2026)
+
+Taking a device out of the fabric needs one thing the hub did not have before:
+`DeviceCommissioner::UnpairDevice()` — the SDK's `AutoCurrentFabricRemover`,
+which sends RemoveFabric to the device and drops the session. It is a small
+call, and the code it drags in (`CurrentFabricRemover`) was in the image
+already — but the call itself plus the new code around it grew the brain's
+image by ~6.4 KB, and the app partition of the S3-Zero is 1.875 MB with the
+Matter controller in it: **the image stopped fitting by 3.9 KB** (0x1F0F60 in
+a 0x1F0000 slot).
+
+Three things brought it back, in the order they were found:
+
+1. **Only the clusters the commissioner needs** (`scripts/matter-patches.py`,
+   patch 7). CHIP's generated `cluster-objects.cpp` includes the
+   implementation of *every* cluster in the Matter spec; the hub is a
+   commissioner and serves no cluster of its own. The patch drops the
+   `#include` lines of the ~110 clusters nobody here talks to (the header keeps
+   every declaration, so the code still compiles and the linker drops what was
+   never used): `cluster-objects.cpp.o` went from 244 KB to 76 KB.
+2. **The common CA bundle** (`sdkconfig.defaults.matter`). The full Mozilla
+   root store is 69 KB of flash; the "common" subset — the roots that actually
+   sign the certificates a hub meets — is half the size with ~99% coverage.
+3. **Less code and fewer strings in the removal itself**: one log line instead
+   of four, one lookup helper instead of a copy of the slot search.
+
+The lesson from the flash map (`scripts/flash-breakdown.py`): the image's
+segments are padded, so a few hundred bytes of code can cost a whole 4 KB
+block — worth measuring the map before hunting for bigger savings.
 
 ### The Matter devices are inside the hub (15.11.2026, verified)
 

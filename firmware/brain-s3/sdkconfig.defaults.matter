@@ -106,6 +106,13 @@ CONFIG_CUSTOM_ATTESTATION_TRUST_STORE=y
 # The vendor's own path pins this off until verified.
 CONFIG_SUPPORT_GROUPCAST_CLUSTER=n
 
+# Code size: the full Mozilla CA bundle is ~69 KB of flash, and the app partition
+# is 1.875 MB with the Matter controller in it. The "common" subset (the CA roots
+# that actually sign the certificates a hub meets — Let's Encrypt, DigiCert,
+# GlobalSign, Amazon, Google, Apple, …) is half the size with ~99% coverage;
+# the full set is kept for the desktop build, which has room.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
 # RAM optimisation: move the Matter library BSS and heap into PSRAM (this is
 # exactly the knob the vendor's RAM-optimised S3 config uses, and the reason
 # this experiment needed PSRAM enabled first — see 0a04976). The Zero's PSRAM

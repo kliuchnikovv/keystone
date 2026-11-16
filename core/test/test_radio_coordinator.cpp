@@ -312,3 +312,62 @@ TEST_CASE("the pseudo-chip's DECLARE survives the QUERY it triggers") {
   CHECK(reg.find(0x0300) != nullptr);
   CHECK(reg.find(0x0300)->chip_id == 0x03);
 }
+
+// UNDECLARE names one entity that left (a device was removed). Zigbee re-announces
+// with HELLO after a leave, but the Matter pseudo-chip has no coordinator to
+// re-query — clearing the chip would take its other devices with it, so the core
+// drops just the named entity, and only when the chip that says so owns it.
+
+TEST_CASE("UNDECLARE drops just the entity the owning chip names") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  chip.publish(mk(MsgType::Hello, 0x01, 1), nullptr, 0);
+  publish_declare(chip, 0x01, 0x0010, DeviceType::Light, kLight.data(), 2);
+  chip.publish(mk(MsgType::DeclareEnd, 0x01, 1), nullptr, 0);
+
+  chip.publish(mk(MsgType::Hello, 0x03, 1), nullptr, 0);
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+  publish_declare(chip, 0x03, 0x0301, DeviceType::Sensor, kSensor.data(), 3);
+  chip.publish(mk(MsgType::DeclareEnd, 0x03, 1), nullptr, 0);
+  REQUIRE(reg.size() == 3);
+
+  Header u = mk(MsgType::Undeclare, 0x03, 1);
+  u.entity_id = 0x0300;
+  chip.publish(u, nullptr, 0);
+
+  CHECK(reg.find(0x0300) == nullptr);   // the one that left
+  CHECK(reg.find(0x0301) != nullptr);   // its sibling stays
+  CHECK(reg.find(0x0010) != nullptr);   // another chip is untouched
+  CHECK(coord.chip_ready(0x03));        // not a chip-wide resync
+}
+
+TEST_CASE("UNDECLARE from a chip that does not own the entity is ignored") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  chip.publish(mk(MsgType::Hello, 0x03, 1), nullptr, 0);
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+  chip.publish(mk(MsgType::DeclareEnd, 0x03, 1), nullptr, 0);
+  REQUIRE(reg.size() == 1);
+
+  // chip 1 claims the Matter device's entity id; chip 1 does not own it.
+  chip.publish(mk(MsgType::Hello, 0x01, 1), nullptr, 0);
+  Header u = mk(MsgType::Undeclare, 0x01, 1);
+  u.entity_id = 0x0300;
+  chip.publish(u, nullptr, 0);
+  CHECK(reg.find(0x0300) != nullptr);
+
+  // An unknown id is harmless too.
+  u.entity_id = 0x0FFF;
+  chip.publish(u, nullptr, 0);
+  CHECK(reg.size() == 1);
+}
