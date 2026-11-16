@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "core/entity_names.hpp"
+#include "core/entity_rooms.hpp"
 #include "hubproto/payload.hpp"
 
 namespace core {
@@ -38,6 +39,7 @@ class EntityRegistry {
  public:
   using Entity = EntityT<MaxAttrs>;
   using Names = EntityNames<MaxEntities, MaxNameLen>;
+  using Rooms = EntityRooms<MaxEntities>;
 
   /** How long a name may be, in bytes (without the terminator). Buffers that hold a
    * name have to be at least this big - the compiler checks that, too. */
@@ -68,6 +70,18 @@ class EntityRegistry {
   // Names management
   Names& names() noexcept { return names_; }
   const Names& names() const noexcept { return names_; }
+
+  // Rooms: where a device lives ("Kitchen"). Unlike the names, a room is shared
+  // by as many devices as the person likes.
+  Rooms& rooms() noexcept { return rooms_; }
+  const Rooms& rooms() const noexcept { return rooms_; }
+  bool set_room(std::uint16_t entity_id, const char* room) noexcept {
+    return rooms_.set_room(entity_id, room);
+  }
+  bool clear_room(std::uint16_t entity_id) noexcept { return rooms_.clear_room(entity_id); }
+  const char* room_of(std::uint16_t entity_id) const noexcept {
+    return rooms_.get_room(entity_id);
+  }
 
   const char* name_of(std::uint16_t entity_id) const noexcept {
     return names_.get_name(entity_id);
@@ -113,6 +127,7 @@ class EntityRegistry {
 
   Entity entities_[MaxEntities] = {};
   Names  names_{};
+  Rooms  rooms_{};
 };
 
 // ---- implementation -------------------------------------------------------

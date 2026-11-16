@@ -43,7 +43,7 @@ const gotoAutomations = async () => {
 describe('Renaming a device', () => {
   it('gives a device a name, which every client then sees', async () => {
     await openApp();
-    expect(screen.getByText('Motion sensor 0x0102')).toBeTruthy();
+    expect(screen.getByLabelText('Device Motion sensor 0x0102')).toBeTruthy();
     await longPress(screen.getByLabelText('Device Motion sensor 0x0102'));
     click('Rename Motion sensor 0x0102');
     type('Name', 'hall_motion');
@@ -80,6 +80,40 @@ describe('Renaming a device', () => {
     click('Remove name');
     await waitFor(() => expect(screen.getByLabelText('Device Light 0x0101')).toBeTruthy());
     expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBeNull();
+  });
+});
+
+describe('Rooms', () => {
+  it('moves a device into a room, which the hub keeps and every client then sees', async () => {
+    await openApp();
+    await longPress(screen.getByLabelText('Device lamp'));
+    click('Move lamp to another room');
+    click('Move to Kitchen');
+    await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0101)!.room).toBe('Kitchen'));
+    // The device is renamed nowhere: a room is not a name.
+    expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBe('lamp');
+    await waitFor(() => expect(screen.getByText('Kitchen')).toBeTruthy());
+    expect(screen.getByText('Unassigned')).toBeTruthy();
+  });
+
+  it('takes a device out of its room', async () => {
+    await openApp();
+    await longPress(screen.getByLabelText('Device plug1'));
+    click('Move plug1 to another room');
+    click('Move to Office');
+    await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0100)!.room).toBe('Office'));
+    click('Move plug1 to another room'); // the picker closes after a choice
+    click('Remove room');
+    await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0100)!.room).toBeNull());
+  });
+
+  it('marks the room the device is in when the picker opens', async () => {
+    hub.entities[0]!.room = 'Hallway';
+    await openApp();
+    await longPress(screen.getByLabelText('Device plug1'));
+    click('Move plug1 to another room');
+    expect(screen.getByLabelText('Move to Hallway (current room)')).toBeTruthy();
+    expect(screen.getByLabelText('Move to Kitchen')).toBeTruthy();
   });
 });
 

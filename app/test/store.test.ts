@@ -55,7 +55,7 @@ describe('reduce', () => {
 
   it('compares xy values by content', () => {
     const xy: Entity = {
-      id: 7, name: null, chip: 1, device: 'light',
+      id: 7, name: null, room: null, chip: 1, device: 'light',
       attrs: [{ id: 3, name: 'color_xy', vt: 'xy', flags: ['r', 'w'], value: [100, 200] }],
     };
     const a = reduce(initialState, { type: 'entity', op: 'add', entity: xy });
@@ -69,7 +69,7 @@ describe('reduce', () => {
     const b = reduce(a, { type: 'entity', op: 'add', entity: renamed });
     expect(b.entities).toHaveLength(3);
     expect(findEntity(b, 0x0100)!.name).toBe('kitchen');
-    const fresh: Entity = { id: 0x0200, name: null, chip: 2, device: 'switch', attrs: [] };
+    const fresh: Entity = { id: 0x0200, name: null, room: null, chip: 2, device: 'switch', attrs: [] };
     expect(reduce(b, { type: 'entity', op: 'add', entity: fresh }).entities).toHaveLength(4);
     const c = reduce(b, { type: 'entity', op: 'remove', id: 0x0100 });
     expect(c.entities.map((e) => e.id)).toEqual([0x0101, 0x0102]);

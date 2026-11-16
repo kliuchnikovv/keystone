@@ -35,7 +35,14 @@ enum Cluster : std::uint32_t {
   kOccupancy          = 0x0406,
   kBooleanState       = 0x0045,
   kPowerSource        = 0x002F,
+  // The Identify cluster: the device makes itself noticeable (a LED blinks, a
+  // display shows something). It is a *server* cluster — the device blinks, not
+  // the controller — so the Descriptor's ServerList says which endpoint has it.
+  kIdentifyCluster    = 0x0003,
 };
+
+// The Identify command: IdentifyTime (u16, seconds).
+inline constexpr std::uint32_t kIdentifyCommand = 0x00;
 
 // One hub attribute and where it lives on a Matter endpoint.
 //
@@ -466,6 +473,28 @@ inline WritePlan to_matter(std::uint8_t attr, const hubproto::Value& v,
     default:
       return WritePlan{};
   }
+}
+
+// ---- "make this device noticeable" ---------------------------------------------------------
+//
+// The Identify cluster (0x0003) — the Matter way of blinking: the controller
+// invokes Identify on the endpoint that has the cluster, and the device does
+// whatever "identifying" means for it (a LED blinks, a display shows something)
+// for the given number of seconds.
+//
+// The endpoint is not the one the hub's entity maps to: Identify is a *server*
+// cluster, so the Descriptor's ServerList says where it lives. The caller
+// fills the endpoint in; the plan here carries the cluster, the command and
+// the time.
+inline WritePlan to_matter_identify(std::uint16_t seconds) noexcept {
+  WritePlan plan;
+  plan.kind = SendKind::kInvoke;
+  plan.endpoint = 0;
+  plan.cluster = kIdentifyCluster;
+  plan.id = kIdentifyCommand;
+  plan.field_count = 1;
+  plan.fields[0] = MatterField{0, hubproto::Value::make_u16(seconds)};
+  return plan;
 }
 
 }  // namespace core::matter

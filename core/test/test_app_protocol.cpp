@@ -245,7 +245,7 @@ TEST_CASE("encode_state renders every value type as JSON-native") {
   CHECK(st(Value::make_f32(1.5f)) == R"({"type":"state","entity":256,"attr":1,"value":1.5})");
 }
 
-TEST_CASE("write_entity: names, flags, unknown attributes and unreported values") {
+TEST_CASE("write_entity: names, rooms, flags, unknown attributes and unreported values") {
   Registry reg;
   declare(reg, 1, 0x0100, hubproto::DeviceType::Switch,
           {{0x01, ValueType::Bool, 0x07}, {0x13, ValueType::U16, 0x05}, {0x77, ValueType::U8, 0x01}});
@@ -255,14 +255,19 @@ TEST_CASE("write_entity: names, flags, unknown attributes and unreported values"
   write_entity(w, *reg.find(0x0100), "plug1");
   REQUIRE(w.ok());
   CHECK(std::string(w.c_str()) ==
-        R"({"id":256,"name":"plug1","chip":1,"device":"switch","attrs":[)"
+        R"({"id":256,"name":"plug1","room":null,"chip":1,"device":"switch","attrs":[)"
         R"({"id":1,"name":"on_off","vt":"bool","flags":["r","w","rep"],"value":true},)"
         R"({"id":19,"name":"power_w","vt":"u16","flags":["r","rep"],"value":null},)"
         R"({"id":119,"name":"0x77","vt":"u8","flags":["r"],"value":null}]})");
 
   JsonWriter w2(buf, sizeof(buf));
   write_entity(w2, *reg.find(0x0100), nullptr);  // unnamed
-  CHECK(std::string(w2.c_str()).find(R"("name":null,"chip")") != std::string::npos);
+  CHECK(std::string(w2.c_str()).find(R"("name":null,"room":null,"chip")") != std::string::npos);
+
+  // A device in a room: the room travels with it.
+  JsonWriter w3(buf, sizeof(buf));
+  write_entity(w3, *reg.find(0x0100), "plug1", "Kitchen");
+  CHECK(std::string(w3.c_str()).find(R"("room":"Kitchen")") != std::string::npos);
 }
 
 TEST_CASE("encoded entities and events parse back as valid JSON with the right shape") {

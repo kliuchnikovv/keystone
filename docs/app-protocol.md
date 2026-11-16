@@ -86,7 +86,7 @@ a client must treat part 0 as "start over" at any time:
 ```jsonc
 { "type": "snapshot", "part": 0, "last": true,
   "entities": [
-    { "id": 256, "name": "plug1", "chip": 1, "device": "switch",
+    { "id": 256, "name": "plug1", "room": "Kitchen", "chip": 1, "device": "switch",
       "attrs": [
         { "id": 1,  "name": "on_off",    "vt": "bool", "flags": ["r","w","rep"], "value": true },
         { "id": 19, "name": "power_w",   "vt": "u16",  "flags": ["r","rep"],     "value": 3 },
@@ -103,6 +103,13 @@ a client must treat part 0 as "start over" at any time:
 
 `value: null` = never reported. Chip self-entities (`device: "chip"`) are **not**
 in `entities`; their data is in `chips[].telemetry`.
+
+`name` is what the device is called (`null` when the person never named it);
+`room` is where it lives (`null` when the person never said). The two are
+independent: a room is shared by as many devices as the person likes, it is not
+unique, and it is set by `room.set` (§5) — not by the name. A client that
+finds `room: null` may fall back to the room a name suggests (`kitchen_plug`),
+but the hub never does.
 
 Incremental events (no `id`, pushed as they happen):
 
@@ -164,6 +171,7 @@ so they also update the desired state (reconciler).
 | op | args | notes |
 |---|---|---|
 | `name.set` / `name.clear` | `entity`, `name` | names `[a-z][a-z0-9_]{0,22}` (start with a letter, so never mistaken for a numeric id), unique; chips cannot be named |
+| `room.set` / `room.clear` | `entity`, `room` | where the device lives: up to 15 characters, letters, digits, single spaces and a little punctuation (`- _ . , & ' ( )`), at least one letter, no space at either edge (`bad_args` names the field); the same room may be given to any number of devices, and a device keeps the room it was in when it is renamed. Kept in NVS, so it survives a reboot and a re-pairing. Chips are not devices, so they have no room (`not_found`) — a Matter device does, and it hangs off the pseudo-chip like any other. `room.clear` takes only `entity`; taking a device out of a room it was not in is `ok` |
 | `rule.add` | rule (§6) | `res.result.index`. `then` must be writable (`read_only` otherwise); `when` and `and` may be any attribute, a chip's telemetry included; values are checked against the attribute's type and range |
 | `rule.del` | `index` | later rules shift down |
 | `schedule.add` | `time` `"HH:MM"` or `"sunrise"`/`"sunset"` with an optional offset `"sunset+30"` (±180 min, see below), `days` (default daily) **or** `date` `"YYYY-MM-DD"` (a one-off, see below), `entity`, `action` — or `scene` instead of the last two | `action`: `on`/`off`/`toggle`; the entity needs a writable on/off. `index` is the slot number, as in the console's `unschedule n` (slots are reused, so indexes can have gaps) |
@@ -178,7 +186,7 @@ so they also update the desired state (reconciler).
 | `scene.apply` | `name` | sends every action as an ordinary command (so desired state and reconciliation see it) and answers `result: {sent, skipped}` once they are queued, not when the devices acked. An action whose entity has since gone, turned read-only or changed type, or that the command queue refused, is `skipped` rather than an error. Scenes change only through these ops, so clients just receive the new snapshot (`scenes` is a snapshot section; there is no scene event) |
 | `pair` | `seconds` (optional, 1..254, default 180) | opens the Zigbee network for joining. Fire-and-forget: `res ok` means the command was sent to the Zigbee chip; a device that joins simply appears (the hub re-sends the snapshot). The hub does not report the window, so a client keeps its own countdown |
 | `unpair` | `entity` | sends Leave to the device and drops it; the Zigbee chip then re-HELLOs so the brain forgets the entity (the snapshot is re-sent). Only devices on the Zigbee chip: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args` |
-| `identify` | `entity` | makes the device blink for ~10 s (same rules as `unpair`) |
+| `identify` | `entity` | makes the device blink for ~10 s. A **Zigbee** device gets a chip-meta COMMAND to the coordinator (fire-and-forget, as with `unpair`); a **Matter** device is invoked by the hub's own commissioner — `res ok` means the invoke went out, `unsupported` that the device has no Identify cluster or the hub has no Matter chip, `busy` that the commissioner is in the middle of something |
 | `device.ota` | `entity`, `url` (`http(s)`), `sha256` (64 hex digits) | pushes a vendor `.ota` file to a **Zigbee device** (lamp, dimmer): the hub downloads it and hands it to the coordinator, which serves it over the OTA Upgrade cluster (docs/ota.md). `res ok` means the update started; the progress arrives as `device_ota` events. Only Zigbee devices: a chip entity or an unknown id is `not_found`, a Matter-side entity `bad_args`, a second running update `busy` |
 | `matter.commission` | `kind` (0 = service data, 1 = advertisement, 2 = QR code), `payload` (hex bytes) | asks the hub to add a Matter device the phone found. Fire-and-forget like `pair`: `ok {state:"started"}` means the bytes were handed to the Matter chip; how it goes is reported by the `matter` event (§5.3). `bad_args` when the payload is not the shape the kind promises, `unsupported` when the hub has no Matter chip — or when its Matter chip is alive and has no commissioner (the hub asks once, learns this, and refuses straight away after that) |
 | `matter.status` | — | where the attempt stands: `result: {state, entity, code, message}` (§5.3) |

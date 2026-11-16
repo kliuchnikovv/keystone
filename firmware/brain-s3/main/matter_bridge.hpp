@@ -41,6 +41,18 @@ inline constexpr std::uint16_t kFirstEntityId = 0x0300;
 using Sink = void (*)(void* ctx, const hubproto::Header& h, const std::uint8_t* payload,
                       std::size_t len);
 
+// The same frames, but on their way to the co-processor that carries the hub's
+// Matter bridge (chip 0x02): the Matter devices the hub controls belong
+// inside the hub, next to the Zigbee ones, so a controller sees one device
+// with everything in it.
+//
+// The mirror must not pass through the hub core: the registry overwrites the
+// owner of an entity on every DECLARE, so a mirrored DECLARE would take the
+// entity away from the Matter pseudo-chip. main.cpp points this at
+// ChipRouter's publish(), which goes straight into the co-processor's UART.
+using Mirror = void (*)(void* ctx, const hubproto::Header& h, const std::uint8_t* payload,
+                       std::size_t len);
+
 // Borrow the Thread network's operational dataset from the co-processor that has the
 // radio (chip 0x02). Called on the worker task, which may block for `timeout_ms`.
 using DatasetFn = bool (*)(void* ctx, std::uint8_t* out, std::size_t cap, std::size_t& len,
@@ -53,6 +65,10 @@ using ProgressFn = void (*)(void* ctx, hubproto::MatterState state, hubproto::Ma
 
 // Create the worker queue/task. Called early, while the internal heap is one block.
 bool start(void* ctx, Sink sink, DatasetFn dataset, ProgressFn progress);
+
+// Where the mirror of the Matter frames goes (see Mirror above). Set it after
+// start(); until then the Matter devices are not wrapped by the hub's bridge.
+void set_mirror(void* ctx, Mirror mirror);
 
 // The CHIP controller/commissioner exists (set after setup_commissioner()).
 void controller_ready();
@@ -116,5 +132,17 @@ ShareResult share(std::uint16_t entity_id, std::uint16_t timeout_s);
 // invoke/write. Returns false when the entity/attribute is not a Matter binding (the
 // dispatcher then reports Unreachable without pretending).
 bool command(std::uint16_t seq, const std::uint8_t* payload, std::size_t len);
+
+// Make a Matter device identify itself: the Identify command (the Matter way of
+// blinking) on the endpoint that has the cluster. Returns false when the request
+// could not be queued — the device may still not have one (the worker says so in
+// the log).
+bool identify(std::uint16_t entity_id, std::uint16_t seconds);
+
+// Does the device have the Identify cluster at all? The answer comes from the
+// descriptor (the ServerList — Identify is a server cluster on the device that
+// blinks), so the hub can tell the person "this device cannot blink" instead
+// of pretending.
+bool can_identify(std::uint16_t entity_id);
 
 }  // namespace matter_bridge

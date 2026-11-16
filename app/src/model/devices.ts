@@ -166,19 +166,30 @@ export function canManageDevice(s: HomeState, e: Entity): boolean {
   return s.chips.some((c) => c.id === e.chip && c.label === 'zigbee');
 }
 
+/** The Matter pseudo-chip: the devices the hub itself commissioned (no UART of their own). */
+export const MATTER_CHIP_ID = 3;
+
 /** A Matter device is one the hub commissioned over Matter (pseudo-chip 0x03,
  * or any chip the hub labels as a Matter chip). */
 export function isMatterDevice(s: HomeState, e: Entity): boolean {
-  if (e.chip === 3) return true;
+  if (e.chip === MATTER_CHIP_ID) return true;
   return s.chips.some((c) => c.id === e.chip && c.label.toLowerCase().includes('matter'));
 }
 
-/** Devices the hub can take off the network: Zigbee devices and Matter devices. */
+/** Devices the hub can take off the network: Zigbee devices only, today.
+ *
+ * A Matter device belongs to the fabric the hub's own controller holds, and the
+ * hub cannot drop one from it yet (`unpair` answers `bad_args`), so the sheet
+ * must not offer "Remove device" for one. */
 export function canRemoveDevice(s: HomeState, e: Entity): boolean {
-  return canManageDevice(s, e) || isMatterDevice(s, e);
+  return canManageDevice(s, e);
 }
 
-/** Devices the hub can make blink to be found: Zigbee and Matter devices. */
+/** Devices the hub can make blink to be found: Zigbee and Matter devices.
+ *
+ * Whether a Matter device actually has the Identify cluster is the hub's answer
+ * (`identify` fails with "unsupported" when it does not), so this only says the
+ * command is worth offering. */
 export function canIdentifyDevice(s: HomeState, e: Entity): boolean {
   return canManageDevice(s, e) || isMatterDevice(s, e);
 }

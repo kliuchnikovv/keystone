@@ -396,6 +396,13 @@ brings it to **0x1de350** — 7344 B free. The switch lives in the Matter-only
 overlay (`sdkconfig.defaults.matter`), so the normal PlatformIO build of the
 brain stays untouched.
 
+**The bridge ate the rest of the slot (15.11.2026).** With the Matter bridge
+(`matter_bridge.cpp`, ~120 KB of cluster tables) the image is **0x1ef340 of
+0x1f0000 — 0xcc0 (3 KB) free**, and IDF prints its "partition nearly full"
+warning. It still links and is flashable, but there is no room left for the next
+feature on this 4 MB part: the choice from the F-list is now real, not
+theoretical — **F1'** (shrink the image) or **F5'** (an 8 MB S3 module).
+
 **PASE reached — two more traps in CHIP's ESP32 NimBLE backend (05.11.2026,
 hardware-verified).** The radio was alive and the parameters were right, yet
 every attempt still died before PASE — and the brain rebooted on the way out.
@@ -1366,6 +1373,103 @@ bridged endpoint) → the bridge → the brain → the Zigbee chip → the devic
 and the state travels the other way. The phone is a second administrator
 (`1:0000000058F7461F` in the accessory's fabric); the brain stays the first.
 
+### The host, the network and what the reboots really were (15.11.2026)
+
+**The USB power was the reason both C6s disappeared together.** `dmesg` on the
+Pi says it plainly:
+
+```
+hwmon hwmon3: Undervoltage detected!
+usb 1-2: USB disconnect, device number 13
+usb 3-2: USB disconnect, device number 112
+```
+
+Two boards, two buses, the same millisecond: the Pi5 caps each USB port at
+600 mA by default (`usb_max_current_enable` in
+`/boot/firmware/config.txt`), and the C6s spike past that. The chip does not
+crash — it hangs on the brownout and the watchdog resets it
+(`rst:0x8 (TG1_WDT_HPSYS)`), which is why it looked like a firmware crash.
+With `usb_max_current_enable=1` (1.6 A per port) and a Pi reboot: **zero
+undervoltage events**, and the chips stopped flapping.
+
+**The Thread network does not re-form on a reboot.** The partition id in the
+log changes every boot, which looked like a new network — it is not. The
+partition id is the id of the *fork partition* (it changes when the device
+becomes the leader); the identity of the network is the extended PAN id and
+the master key, and both survive:
+
+```
+before the reboot: ext pan id f3bc70d87aae6127   ml prefix fda60447:3582:7fd3::/64
+after  the reboot: ext pan id f3bc70d87aae6127   ml prefix fda60447:3582:7fd3::/64
+```
+
+The crash-loop wipe (`boot_id > 50 ⇒ erase NVS`) keeps the network too: the
+dataset is read out before the wipe and written back after it.
+
+**What is left: the accessory does not publish itself over mDNS after a
+reboot.** The boot log says:
+
+```
+mdns_responder: mdns_service_remove_for_host(1592): Service doesn't exist
+chip[DIS]: Failed to remove advertised services: 5000105
+```
+
+CHIP asks the platform mDNS to drop the services it thinks it has, the
+responder does not have them (it was just restarted), and CHIP treats the
+error as fatal — so the accessory stays invisible and the brain cannot
+resolve it (`Timeout waiting for mDNS resolution`). This is where the
+"commissioning window" tests become flaky: the window opens, but the device
+does not answer to its own name. The fix belongs in the CHIP side (tolerate
+the removal error) — the same place as the other patches in
+`scripts/matter-patches.py`.
+
+**Tools that came out of it:**
+
+- `scripts/kcon.py` survives a reboot: it reopens the port when the read
+  fails *and* when the port goes quiet (after the USB re-enumeration the old
+  handle reads nothing but does not raise), and `--follow-seconds` keeps the
+  log open after a command — that is how the boot log is caught now.
+- `scripts/flash-thread-c6-matter.sh --reboot-log` reboots the co-processor
+  and catches its boot log (the port is looked up by MAC again — it changes
+  when the USB re-enumerates), `--chip-cmd` sends a command to its console,
+  `--nvs` reads the NVS partition off the chip.
+- `scripts/nvs-inspect.py` reads an NVS partition image (namespaces, keys,
+  how full the pages are) — that is how the dataset was found in the NVS.
+
+### The brain must not model the hub's own bridge (15.11.2026)
+
+With the Matter server on the co-processor, the brain reads the *accessory's*
+descriptor and turns its parts into hub entities. That is wrong twice over:
+the accessory's parts are the bridged endpoints of the devices the hub
+already has (0x01xx…), so the app would show every device twice — and the
+entity id it computed (0x0300) was the id of a real Matter device (the
+TIMMERFLOTTE sensor), so one of them silently took the other's place.
+
+The tell is the aggregator: the accessory's descriptor contains an endpoint
+with the Matter device type **0x000E** (aggregator). A node with one is the
+hub's own bridge:
+
+- the brain keeps the node (it needs it: the commissioning window for a
+  second administrator is opened on the *node*, and the reads go there), but
+  models nothing of it;
+- the entity ids are handed out from one space — the two paths that create
+  them (a node commissioned in this session, a node restored from NVS) number
+  their slots independently, so the ids are probed for a free one instead of
+  computed;
+- a node that is "modelled but has no entities" must not be read again and
+  again — the restore loop looks for the nodes it has not modelled yet, not
+  for the ones without entities.
+
+**Note on the commissioning path:** the accessory is already in a fabric
+(the brain's), so a fresh `matter_pair` on the brain ends in
+`CHIP_ERROR_FABRIC_EXISTS` (0x7E) — and before the window is open it does
+not even answer the PASE (it only acks the message). To commission it again:
+`matter_share 300` on the co-processor (the window), then `matter_pair` on the
+brain. To start over from scratch: `factoryreset` on the co-processor (it
+erases the fabric; the Thread network survives — the dataset is read out
+before the wipe and written back after it).
+
+
 **And a host problem worth fixing first:** both C6s reboot together every
 3–5 minutes. This is the Pi5's USB current cap (600 mA per port,
 `usb_max_current_enable` is not set in `/boot/firmware/config.txt`): the
@@ -1436,6 +1540,116 @@ meantime — boot_id restarted at 1 — and with a clean NVS the crash does not
 reproduce; it did once more, right after the commissioning). The dump is
 kept at `firmware/thread-c6/coredump.bin` (gitignored) and
 `scripts/coredump-inspect.py` reads it without the esp-matter image.
+
+### Blink (identify) a Matter device — built, not yet verified on hardware
+
+The Zigbee side has it: `identify <id>` on the brain's console (and
+`identify {entity}` in the app) sends a chip-meta COMMAND to the coordinator,
+which sends the ZCL Identify command — the plug blinks for 10 s. A Matter
+device has the same idea: the **Identify cluster (0x0003)**, whose `Identify`
+command (0x00) carries `IdentifyTime` (u16, seconds) and makes the device
+identify itself (a LED blinks, the display shows something).
+
+What is built:
+
+1. **The route follows the owner of the entity.** `device_meta()` takes the
+   Matter chip as well; `identify` on an entity of chip 0x03 does not go to the
+   Zigbee meta but to `matter_bridge::identify()` (`main.cpp`, the `identify`
+   op). `unpair` stays Zigbee-only: the hub cannot take a Matter device out of
+   the fabric yet.
+2. **The CHIP call.** `core/matter_entity.hpp::to_matter_identify()` builds the
+   invoke: `SendKind::kInvoke`, cluster 0x0003, command 0x00, one field
+   `IdentifyTime` (u16). The cluster is enabled in the Matter build
+   (`SUPPORT_IDENTIFY_CLUSTER` is in the KEEP list of
+   `scripts/gen-cluster-exclusions.py`).
+3. **Which endpoint.** Identify is a **server** cluster on the device that
+   blinks (Matter device types declare it `client="false" server="true"`), so
+   the Descriptor read looks in the **ServerList** — and flags the endpoint
+   while decoding the list, so a server list longer than the buffer cannot hide
+   it. The endpoint may differ from the one the hub's entity maps to (a
+   measurement endpoint); that is why the bridge remembers it per node.
+   *(Fixed 15.11.2026: the first version looked in the ClientList, which made
+   every device look like it had no Identify — `identify` answered
+   `unsupported` and nothing blinked.)*
+4. **The app.** The sheet offers "Blink" for a Zigbee device and for a Matter
+   one; the hub answers with a real result: `unsupported` when the device has
+   no Identify cluster, `busy` when the commissioner is occupied.
+5. **The event.** The Matter path does not write a `pairing` event yet (the
+   Zigbee one does, so the History tab shows "Tinfoil is blinking").
+
+Still missing:
+
+- **Identify from Apple Home.** When the controller asks the *bridge* to
+  identify a bridged device, `firmware/thread-c6/main/matter_accessory.cpp`'s
+  `identification_cb` returns `ESP_OK` and does nothing. Making it blink means
+  a new command on the chip↔brain bus (`libhubproto`) — the bridge knows which
+  bus entity an endpoint stands for, the brain knows how to reach the device.
+  Not built; the bus protocol has no identify command today.
+- **Verified on hardware.** The invoke has never been sent to a real Matter
+  device (the TIMMERFLOTTE has the cluster, but nobody has invoked it since the
+  ServerList fix). The first thing to try after a flash is
+  `identify <id>` in the console and `Blink` in the app.
+- **Removing a Matter device.** `unpair` is Zigbee-only, so the sheet must not
+  offer "Remove device" for a Matter one (it did, briefly: the hub answered
+  `bad_args`). Dropping a Matter device means removing it from the fabric the
+  hub's controller holds — `DeviceController::RemoveDevice`, plus forgetting
+  its slots and the bridged endpoint — which is a separate piece of work.
+
+### The Matter devices are inside the hub (15.11.2026, verified)
+
+The last piece of the F2 architecture: a device the hub itself commissioned
+(the IKEA TIMMERFLOTTE) is not a separate accessory in Apple Home — it is a
+bridged endpoint **inside** the hub, next to the Zigbee plug.
+
+On the hardware, after a brain restart:
+
+```
+matter_bridge: restoring Matter node 0x0000000000001234 in slot 0
+brain-s3: chip 0x01 (zigbee) declared; registry has 3 entities
+brain-s3: chip 0x02 (thread) declared; registry has 3 entities
+matter_bridge: node 0x0000000000001234 -> 1 entities, first 0x0300
+matter_bridge: node 0x0000000000000002 is the hub's own Matter bridge: its parts mirror the registry entities, nothing to model
+```
+
+The brain's registry holds it (`0x0300 (office Tinfoil) sensor chip3: battery=15
+temperature=240 humidity=588`), and the co-processor's bridge holds the matching
+endpoint:
+
+```
+matter_bridge:   bridge slot 0: endpoint 2 -> device entity 0x0100
+matter_bridge:   bridge slot 1: endpoint 3 -> device entity 0x0300
+matter_bridge: bridge table: 2 of 20 slots used
+```
+
+**Two things had to be fixed to get there** (both were silent — nothing in the
+log said "this went wrong"):
+
+1. **The pseudo-chip now announces itself.** The core learns a chip from its
+   first message and starts a declaration cycle (a QUERY); the DECLARE that
+   arrives in the same breath is **dropped**. So the Matter entities appeared
+   only after the round trip — and a reader who looked at the registry right
+   after the "node ... -> N entities" line saw a device that was not there yet.
+   The pseudo-chip (0x03) now sends a **HELLO** before its first DECLARE, like
+   every real chip does: announce, then declare. (The behaviour itself is
+   host-tested in `core/test/test_radio_coordinator.cpp`: "the first DECLARE of
+   an unknown chip is dropped" and "a chip that announces itself with HELLO
+   keeps its DECLARE".)
+2. **The DECLARE buffer was one byte too small.** The firmware sized it as
+   `3 + attrs * 3`, but the wire format is `4 + attrs * 3` (entity id, device
+   type, attribute count, then three bytes per attribute). With eight
+   attributes the encoder refused the buffer and the DECLARE was dropped
+   *without a word* — the "node ... -> N entities" line was printed anyway,
+   right after the failed publish. The size now comes from
+   `hubproto::declare_size()`, and a failed encode is logged.
+
+**Reading the log correctly:** `bridge table: N of 20 slots used` is printed
+when the bridge comes up — a snapshot of what was in NVS *at that moment*. A
+device that joins later is not in that line; the line that says so is
+`bridged: entity 0x0300 (chip 0x03) -> Matter endpoint 3`.
+
+**Tools:** `scripts/flash-thread-c6-matter.sh --brain-reset` resets the brain
+(DTR low — the S3 wires it to EN) and follows the boot log; the port is looked
+up by MAC again, because the USB device re-enumerates.
 
 ### Commissioning the hub's own accessory (14.11.2026, verified)
 
@@ -1565,6 +1779,12 @@ budget holds with room to spare. Stage B (bridged endpoints) is next.
    (`map_device_type()` in `thread-c6/main/main.cpp`); adding
    dimmable_light, color_control, occupancy_sensor, etc. is a lookup
    table + a few extra clusters in `create_bridged_clusters()`.
+6a. 🟡 Blink (identify) a Matter device — the Identify cluster (0x0003) invoke
+   is built and routed by the owner of the entity (see "Blink (identify) a
+   Matter device" above), and the Descriptor read now looks for Identify in
+   the **ServerList** (fixed 15.11.2026 — it was looking in the ClientList and
+   never found it). Not verified on hardware. Identify *from* Apple Home is
+   still a no-op (`identification_cb` in `thread-c6/main/matter_accessory.cpp`).
 7. NVS-restore limitation: EEM/EPM clusters are only added on fresh endpoint
    creation (`g_pending_has_metering/energy` flags set before
    `app_bridge_create_new_device()`). NVS-restored endpoints get only

@@ -83,7 +83,7 @@ describe('Device button', () => {
     const onSet = vi.fn();
     render(
       <DeviceSheet
-        entity={{ id: 1, name: 'lamp', chip: 1, device: 'light', attrs: [{ id: 2, name: 'brightness', vt: 'u8', flags: ['r', 'w'], value: 128 }] }}
+        entity={{ id: 1, name: 'lamp', room: null, chip: 1, device: 'light', attrs: [{ id: 2, name: 'brightness', vt: 'u8', flags: ['r', 'w'], value: 128 }] }}
         status="online"
         reachable
         visible

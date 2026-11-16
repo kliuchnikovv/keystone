@@ -472,6 +472,9 @@ constexpr int kThRxGpio = 9;
 
 constexpr std::uint8_t kZigbeeChipId = 0x01;
 constexpr std::uint8_t kThreadChipId = 0x02;
+// The Matter pseudo-chip: the Matter devices the hub itself commissioned
+// (no UART of their own — their messages come from matter_bridge).
+constexpr std::uint8_t kMatterChipId = 0x03;
 
 constexpr std::uint8_t  kOnOffAttr = 0x01;
 
@@ -723,7 +726,9 @@ core::ChipMonitor* g_monitor = nullptr;  // set in app_main
 core::Bus* g_bus = nullptr;  // set in app_main
 
 const char* chip_label(std::uint8_t id) {
-  return id == 1 ? "zigbee" : id == 2 ? "thread" : "?";
+  // 0x03 is the Matter pseudo-chip: the devices the hub itself commissioned
+  // (they have no UART of their own — their frames come from the bridge).
+  return id == 1 ? "zigbee" : id == 2 ? "thread" : id == 3 ? "matter" : "?";
 }
 
 void on_chip_event(void* /*ctx*/, std::uint8_t chip, core::ChipMonitor::Event ev,
@@ -864,7 +869,37 @@ static SemaphoreHandle_t g_thread_dataset_sem = nullptr;
 static void bridge_sink(void* ctx, const hubproto::Header& h, const std::uint8_t* p,
                         std::size_t len) {
   (void)ctx;
-  if (g_bus != nullptr) static_cast<ChipRouter*>(g_bus)->inject_inbound(h, p, len);
+  if (g_bus == nullptr) {
+    // The bridge's worker starts before the bus exists (the CHIP controller
+    // wants the heap in one piece). A frame published in that window is lost —
+    // say so once, or nobody will know why a device never showed up.
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      ESP_LOGW(kTag, "matter: a frame was published before the bus existed and is lost");
+    }
+    return;
+  }
+  static_cast<ChipRouter*>(g_bus)->inject_inbound(h, p, len);
+}
+
+// The same frames on their way to the co-processor that carries the hub's
+// Matter bridge: the Matter devices the hub controls have to show up inside
+// the hub, next to the Zigbee ones, so a controller sees one device with
+// everything in it.
+//
+// ChipRouter::publish() goes straight into the co-processor's UART — the
+// core must not see these frames: the registry overwrites the owner of an
+// entity on every DECLARE, so a mirrored DECLARE would take the entity away
+// from the Matter pseudo-chip (and with it the routing of its commands).
+static void bridge_mirror(void* ctx, const hubproto::Header& h, const std::uint8_t* p,
+                          std::size_t len) {
+  (void)ctx;
+  if (g_bus == nullptr) return;
+  if (!static_cast<ChipRouter*>(g_bus)->publish(h, p, len)) {
+    ESP_LOGW(kTag, "matter: the mirror of a frame (type 0x%02x) did not reach the co-processor",
+             static_cast<unsigned>(static_cast<std::uint8_t>(h.type)));
+  }
 }
 
 // Ask the co-processor that owns the 802.15.4 radio for its Thread network. Called on the
@@ -938,6 +973,12 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
       q.type = hubproto::MsgType::Query;
       q.chip_id = kZigbeeChipId;
       bus->publish(q, nullptr, 0);
+      // The Matter devices are wrapped by the co-processor's bridge too, and
+      // the co-processor may have come up after we declared them: re-send
+      // their declarations so it can build the endpoints.
+#ifdef KEYSTONE_HAVE_MATTER
+      matter_bridge::republish();
+#endif
       ESP_LOGI(kTag, "kick Zigbee QUERY because Matter came up");
     } else {
       ESP_LOGD(kTag, "skip Zigbee QUERY (debounce, last kick %u ms ago)",
@@ -952,11 +993,18 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
       CmdSrcScope src(core::CmdSource::Matter);
       rec_note_command(nullptr, cmd.entity_id, cmd.attr_id, cmd.value);
     }
+    // Where the entity lives: the high byte of the entity id is its owner
+    // (0x01xx = the Zigbee chip, 0x03xx = a Matter device the brain
+    // controls). The hub's bridge wraps both, so the command goes to the
+    // owner of the entity — not always to Zigbee.
+    const std::uint8_t owner = static_cast<std::uint8_t>(h.entity_id >> 8);
+    const bool to_matter = owner == kMatterChipId;
     hubproto::Header fwd = h;
-    fwd.chip_id = kZigbeeChipId;
+    fwd.chip_id = to_matter ? kMatterChipId : kZigbeeChipId;
     bus->publish(fwd, p, len);
-    ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> Zigbee seq=%u",
-             static_cast<unsigned>(h.entity_id), static_cast<unsigned>(h.seq));
+    ESP_LOGI(kTag, "forward Matter COMMAND entity=0x%04x -> %s seq=%u",
+             static_cast<unsigned>(h.entity_id), to_matter ? "Matter" : "Zigbee",
+             static_cast<unsigned>(h.seq));
   }
 #ifdef KEYSTONE_HAVE_MATTER
   else if (h.type == hubproto::MsgType::ThreadDataset && h.chip_id == kThreadChipId) {
@@ -989,6 +1037,7 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_WIFI_JOIN, REQ_WIFI_STATUS, REQ_WIFI_SCAN,
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
+               REQ_ROOM_SET, REQ_ROOM_CLEAR, REQ_ROOMS_LIST,
                REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA };
 
 struct Req {
@@ -1132,6 +1181,43 @@ void restore_names(core::EntityRegistry<>::Names& names) {
       if (names.load(buf, sz)) {
         ESP_LOGI(kTag, "restored %u entity name(s) from NVS",
                  static_cast<unsigned>(names.size()));
+      }
+    }
+  }
+  nvs_close(h);
+}
+
+// The rooms blob: the same shape as the names (id + a 32-byte room), a separate
+// key — a room change must not rewrite the names.
+constexpr std::size_t kRoomsBlobMax =
+    core::EntityRegistry<>::Rooms::kHeaderSize +
+    core::EntityRegistry<>::Rooms::kEntryWireSize * core::EntityRegistry<>::Rooms::kMaxEntities;
+
+void persist_rooms(const core::EntityRegistry<>::Rooms& rooms) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  static EXT_RAM_BSS_ATTR std::uint8_t buf[kRoomsBlobMax];
+  std::size_t written = rooms.save(buf, sizeof(buf));
+  if (written > 0) {
+    nvs_set_blob(h, "ent_rooms", buf, written);
+    nvs_commit(h);
+  } else {
+    nvs_erase_key(h, "ent_rooms");
+    nvs_commit(h);
+  }
+  nvs_close(h);
+}
+
+void restore_rooms(core::EntityRegistry<>::Rooms& rooms) {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  std::size_t sz = 0;
+  if (nvs_get_blob(h, "ent_rooms", nullptr, &sz) == ESP_OK && sz <= kRoomsBlobMax) {
+    static EXT_RAM_BSS_ATTR std::uint8_t buf[kRoomsBlobMax];
+    if (nvs_get_blob(h, "ent_rooms", buf, &sz) == ESP_OK) {
+      if (rooms.load(buf, sz)) {
+        ESP_LOGI(kTag, "restored %u room assignment(s) from NVS",
+                 static_cast<unsigned>(rooms.size()));
       }
     }
   }
@@ -2670,6 +2756,45 @@ int cmd_name(int argc, char** argv) {
   return 1;
 }
 
+// room <id> <room> | room clear <id> | room            - where a device lives
+int cmd_room(int argc, char** argv) {
+  if (argc < 2) {
+    char buf[512];
+    Req r{};
+    r.kind = REQ_ROOMS_LIST;
+    r.out = buf;
+    r.out_cap = sizeof(buf);
+    printf(submit(r) ? "%s" : "timeout\n", buf);
+    return 0;
+  }
+  if (argc == 3 && std::strcmp(argv[1], "clear") == 0) {
+    char buf[128];
+    Req r{};
+    r.kind = REQ_ROOM_CLEAR;
+    r.target = argv[2];
+    r.out = buf;
+    r.out_cap = sizeof(buf);
+    printf(submit(r) ? "%s" : "timeout\n", buf);
+    return 0;
+  }
+  if (argc == 3) {
+    char buf[128];
+    Req r{};
+    r.kind = REQ_ROOM_SET;
+    r.target = argv[1];  // id_or_name
+    r.name = argv[2];    // the room
+    r.out = buf;
+    r.out_cap = sizeof(buf);
+    printf(submit(r) ? "%s" : "timeout\n", buf);
+    return 0;
+  }
+  printf("usage:\n"
+         "  room                     - list the rooms and who is in them\n"
+         "  room <id> <room>         - put a device in a room\n"
+         "  room clear <id_or_name>  - take a device out of its room\n");
+  return 1;
+}
+
 // ota <chip> <url> <sha256> | ota status | ota abort. Not routed through the
 // request queue: OtaJob is self-contained and thread-safe.
 fw::OtaJob* g_ota = nullptr;
@@ -3163,6 +3288,7 @@ void start_console() {
   reg_cmd("desired", "desired [clear <id_or_name>|all] - what the hub last asked each attribute to be", &cmd_desired);
   reg_cmd("rule", "rule [add|del] ... - persistent if-then rules (see `rule help`)", &cmd_rule);
   reg_cmd("name", "name [<id> <name> | clear <id_or_name>] - manage entity names", &cmd_name);
+  reg_cmd("room", "room [<id> <room> | clear <id_or_name>] - where a device lives", &cmd_room);
   reg_cmd("relay", "relay [<secret> | <host> <secret> | clear] - remote access tunnel", &cmd_relay);
   reg_cmd("led", "led [on|off] - status LED (green=healthy, amber=degraded, red=offline)", &cmd_led);
 #ifdef KEYSTONE_HAVE_MATTER
@@ -3402,7 +3528,8 @@ struct AppSource {
   void write(core::app::Section s, std::size_t i, core::JsonWriter& w) const {
     switch (s) {
       case core::app::Section::Entities:
-        core::app::write_entity(w, *ents[i], reg.name_of(ents[i]->entity_id));
+        core::app::write_entity(w, *ents[i], reg.name_of(ents[i]->entity_id),
+                                reg.room_of(ents[i]->entity_id));
         break;
       case core::app::Section::Chips:
         core::app::write_chip(w, app_chip_view(chips[i], reg, coord));
@@ -3452,6 +3579,8 @@ struct AppSource {
       }
       const char* name = reg.name_of(e.entity_id);
       if (name != nullptr) mix(name, std::strlen(name) + 1);
+      const char* room = reg.room_of(e.entity_id);
+      if (room != nullptr) mix(room, std::strlen(room) + 1);
     }
     char tmp[512];
     for (std::size_t i = 0; i < rules.rule_count(); ++i) {
@@ -3704,6 +3833,12 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "name.clear")) {
     o = name_clear(reg, reader, m.args);
     if (o.ok) persist_names(reg.names());
+  } else if (!std::strcmp(op, "room.set")) {
+    o = room_set(reg, reader, m.args);
+    if (o.ok) persist_rooms(reg.rooms());
+  } else if (!std::strcmp(op, "room.clear")) {
+    o = room_clear(reg, reader, m.args);
+    if (o.ok) persist_rooms(reg.rooms());
   } else if (!std::strcmp(op, "rule.add")) {
     o = rule_add(reg, scenes, rules, reader, m.args);
     if (o.ok) persist_rules(rules);
@@ -3847,14 +3982,29 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "pair") || !std::strcmp(op, "unpair") || !std::strcmp(op, "identify")) {
     // Zigbee chip operations, fire-and-forget like the console: the result is seen as an entity
     // appearing (pair), going away (unpair) or a device blinking (identify).
+    // The identify of a *Matter* device goes another way: the hub's own
+    // commissioner invokes the Identify cluster (the Matter way of blinking).
+    const bool identify = !std::strcmp(op, "identify");
     const core::app::ChipMeta cm =
         !std::strcmp(op, "pair")
             ? core::app::pair_meta(reader, m.args, kZigbeeChipId)
             : core::app::device_meta(reg, reader, m.args,
-                                     !std::strcmp(op, "unpair") ? core::app::kMetaUnpair : core::app::kMetaIdentify,
-                                     kZigbeeChipId);
+                                     identify ? core::app::kMetaIdentify : core::app::kMetaUnpair,
+                                     kZigbeeChipId, kMatterChipId);
     o = cm.out;
-    if (o.ok) send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
+    if (o.ok && identify && cm.chip == kMatterChipId) {
+#ifdef KEYSTONE_HAVE_MATTER
+      if (!matter_bridge::can_identify(cm.arg)) {
+        o = Outcome::fail(Err::Unsupported, "this device has no Identify cluster");
+      } else if (!matter_bridge::identify(cm.arg, 10)) {
+        o = Outcome::fail(Err::Busy, "the Matter commissioner is busy");
+      }
+#else
+      o = Outcome::fail(Err::Unsupported, "this hub has no Matter commissioner");
+#endif
+    } else if (o.ok) {
+      send_chip_meta(bus, cm.chip, cm.attr, cm.arg);
+    }
   } else if (!std::strcmp(op, "matter.commission")) {
     // The bytes the phone read from a Matter device over Bluetooth. Only the QR payload (kind 2)
     // carries the setup passcode PASE needs; the service data and the enhanced advertisement
@@ -4513,6 +4663,11 @@ static void matter_bringup() {
   if (!matter_bridge::start(nullptr, &bridge_sink, &bridge_dataset, &bridge_progress)) {
     ESP_LOGE("matter", "the Matter bridge did not start: this hub cannot add Matter devices");
   }
+  // The Matter frames also go to the co-processor that carries the hub's
+  // Matter bridge, so the Matter devices end up inside the hub (see
+  // bridge_mirror). The hook may be set before the router exists: the mirror
+  // drops the frames until then, like the sink does.
+  matter_bridge::set_mirror(nullptr, &bridge_mirror);
 
   // The task that creates the controller. It waits for the Wi-Fi interface and
   // for a usable IPv6 address on it — see matter_controller_task.
@@ -4738,6 +4893,7 @@ extern "C" void app_main(void) {
 
   static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
+  restore_rooms(reg.rooms());
   static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
   // publish(chip=0x01) -> UART1, publish(chip=0x02) -> UART2. A refused bind
   // means the brain is deaf on that link — say so.
@@ -5559,6 +5715,37 @@ extern "C" void app_main(void) {
                           static_cast<unsigned>(id));
             break;
           }
+          // Where the device lives decides how it is told to blink: a Zigbee
+          // device gets the ZCL Identify command from the coordinator, a Matter
+          // device the Identify cluster from the commissioner.
+          if (r->kind == REQ_IDENTIFY && e->chip_id == kMatterChipId) {
+#ifdef KEYSTONE_HAVE_MATTER
+            if (!matter_bridge::can_identify(id)) {
+              std::snprintf(r->out, r->out_cap,
+                            "identify 0x%04x: this device has no Identify cluster\n",
+                            static_cast<unsigned>(id));
+              break;
+            }
+            if (!matter_bridge::identify(id, 10)) {
+              std::snprintf(r->out, r->out_cap, "identify 0x%04x: the Matter bridge refused\n",
+                            static_cast<unsigned>(id));
+              break;
+            }
+            const char* name = reg.name_of(id);
+            if (name != nullptr) {
+              std::snprintf(r->out, r->out_cap, "identify 0x%04x (%s) -> Matter (sent)\n",
+                            static_cast<unsigned>(id), name);
+            } else {
+              std::snprintf(r->out, r->out_cap, "identify 0x%04x -> Matter (sent)\n",
+                            static_cast<unsigned>(id));
+            }
+#else
+            std::snprintf(r->out, r->out_cap,
+                          "identify 0x%04x: this hub has no Matter commissioner\n",
+                          static_cast<unsigned>(id));
+#endif
+            break;
+          }
           send_chip_meta(bus, e->chip_id, r->kind == REQ_UNPAIR ? core::app::kMetaUnpair : core::app::kMetaIdentify, id);
           const char* name = reg.name_of(id);
           if (name != nullptr) {
@@ -5869,6 +6056,67 @@ extern "C" void app_main(void) {
             off += static_cast<std::size_t>(std::snprintf(
                 r->out + off, r->out_cap - off, "  0x%04x -> %s\n",
                 static_cast<unsigned>(entry.id), entry.name));
+          }
+          break;
+        }
+        case REQ_ROOM_SET: {
+          std::uint16_t id = 0;
+          if (!reg.resolve(r->target, id)) {
+            std::snprintf(r->out, r->out_cap, "invalid target: %s\n", r->target);
+            break;
+          }
+          if (reg.find(id) == nullptr) {
+            std::snprintf(r->out, r->out_cap, "0x%04x: not found\n", static_cast<unsigned>(id));
+            break;
+          }
+          if (reg.set_room(id, r->name)) {
+            persist_rooms(reg.rooms());
+            std::snprintf(r->out, r->out_cap, "0x%04x -> \"%s\"\n",
+                          static_cast<unsigned>(id), r->name);
+          } else {
+            std::snprintf(r->out, r->out_cap,
+                          "failed to set the room (invalid name or table full)\n");
+          }
+          break;
+        }
+        case REQ_ROOM_CLEAR: {
+          std::uint16_t id = 0;
+          if (!reg.resolve(r->target, id)) {
+            std::snprintf(r->out, r->out_cap, "%s: not found\n", r->target);
+            break;
+          }
+          if (reg.clear_room(id)) {
+            persist_rooms(reg.rooms());
+            std::snprintf(r->out, r->out_cap, "cleared the room of 0x%04x\n",
+                          static_cast<unsigned>(id));
+          } else {
+            std::snprintf(r->out, r->out_cap, "0x%04x has no room\n", static_cast<unsigned>(id));
+          }
+          break;
+        }
+        case REQ_ROOMS_LIST: {
+          const auto& rooms = reg.rooms();
+          if (rooms.size() == 0) {
+            std::snprintf(r->out, r->out_cap, "no rooms yet\n");
+            break;
+          }
+          std::size_t off = 0;
+          off += static_cast<std::size_t>(std::snprintf(
+              r->out + off, r->out_cap - off, "%u device(s) in a room:\n",
+              static_cast<unsigned>(rooms.size())));
+          for (std::size_t i = 0; i < rooms.size() && off < r->out_cap; ++i) {
+            std::uint16_t id = 0;
+            const char* room = nullptr;
+            if (!rooms.entry_at(i, id, room)) break;
+            const char* name = reg.name_of(id);
+            off += static_cast<std::size_t>(std::snprintf(
+                r->out + off, r->out_cap - off, "  0x%04x -> %s%s%s\n",
+                static_cast<unsigned>(id), room, name != nullptr ? " (" : "",
+                name != nullptr ? name : ""));
+            if (name != nullptr) {
+              const std::size_t n = std::strlen(r->out);
+              if (n < r->out_cap) std::snprintf(r->out + n, r->out_cap - n, ")\n");
+            }
           }
           break;
         }

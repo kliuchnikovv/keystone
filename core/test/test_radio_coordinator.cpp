@@ -52,6 +52,12 @@ const std::array<AttrDecl, 2> kLight{{
     {0x02, ValueType::U8, 0x07},
 }};
 const std::array<AttrDecl, 1> kSwitch{{{0x01, ValueType::Bool, 0x07}}};
+// A Matter device the hub itself commissioned: temperature, humidity, battery.
+const std::array<AttrDecl, 3> kSensor{{
+    {0x10, ValueType::I16, 0x05},
+    {0x11, ValueType::U16, 0x05},
+    {0x12, ValueType::U8, 0x05},
+}};
 
 // Publish a DECLARE for one entity from the chip side.
 void publish_declare(UartTransport& chip, std::uint8_t chip_id,
@@ -223,4 +229,86 @@ TEST_CASE("resync clears only the rebooting chip's entities") {
   CHECK(reg.size() == 1);
   CHECK(reg.find(0x0010) == nullptr);
   CHECK(reg.find(0x0020) != nullptr);
+}
+
+// The Matter pseudo-chip (0x03): the Matter devices the hub itself
+// commissioned have no UART of their own — their frames come from the bridge
+// in the brain's own process, but they reach the core the same way.
+//
+// The core learns a chip from its first message and starts a declaration
+// cycle (a QUERY); the DECLARE that arrives in the same breath is dropped.
+// A chip that says HELLO first (as every real chip does) keeps its DECLARE —
+// that is why the pseudo-chip announces itself before it declares.
+
+TEST_CASE("the first DECLARE of an unknown chip is dropped: the core asks it to declare again") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  // No HELLO: the DECLARE is the first thing the core sees from this chip.
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+
+  CHECK(reg.size() == 0);   // dropped: the core starts a fresh cycle instead
+  REQUIRE(at_chip.count == 1);
+  CHECK(at_chip.last.type == MsgType::Query);
+  CHECK(at_chip.last.chip_id == 0x03);
+}
+
+TEST_CASE("a chip that announces itself with HELLO keeps its DECLARE") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  chip.publish(mk(MsgType::Hello, 0x03, 1), nullptr, 0);
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+  chip.publish(mk(MsgType::DeclareEnd, 0x03, 1), nullptr, 0);
+
+  REQUIRE(reg.size() == 1);
+  const auto* e = reg.find(0x0300);
+  REQUIRE(e != nullptr);
+  CHECK(e->chip_id == 0x03);
+  CHECK(e->device_type == DeviceType::Sensor);
+  CHECK(e->attr_count == 3);
+  CHECK(coord.chip_ready(0x03));
+  REQUIRE(at_chip.count == 1);   // the QUERY of the HELLO, nothing else
+  CHECK(at_chip.last.type == MsgType::Query);
+}
+
+TEST_CASE("the pseudo-chip's DECLARE survives the QUERY it triggers") {
+  // The core drops the first DECLARE of an unknown chip and asks it again.
+  // The chip that answers the QUERY with its declarations is taken in — this
+  // is the round trip the Matter bridge relies on when it re-declares.
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  Capture at_chip;
+  chip.subscribe(&Capture::on, &at_chip);
+
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+  REQUIRE(at_chip.count == 1);
+  CHECK(at_chip.last.type == MsgType::Query);
+
+  // The chip answers the QUERY (this is what the bridge's republish() does).
+  publish_declare(chip, 0x03, 0x0300, DeviceType::Sensor, kSensor.data(), 3);
+  chip.publish(mk(MsgType::DeclareEnd, 0x03, 1), nullptr, 0);
+
+  REQUIRE(reg.size() == 1);
+  CHECK(reg.find(0x0300) != nullptr);
+  CHECK(reg.find(0x0300)->chip_id == 0x03);
 }

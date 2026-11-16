@@ -22,6 +22,8 @@ export interface Entity {
   id: number;
   /** User-set name, or null. */
   name: string | null;
+  /** The room the person put the device in, or null. */
+  room: string | null;
   chip: number;
   device: string;
   attrs: Attr[];

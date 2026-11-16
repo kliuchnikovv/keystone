@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { groupByRoom, roomCount, roomOf } from '../src/model/rooms';
+import { allRooms, groupByRoom, hasOwnRoom, roomChoices, roomCount, roomFromName, roomOf } from '../src/model/rooms';
 import type { Entity } from '../src/protocol/messages';
 
-function device(name: string | null, id = 0x0100): Entity {
-  return { id, chip: 1, device: 'light', name, attrs: [] };
+function device(name: string | null, id = 0x0100, room: string | null = null): Entity {
+  return { id, chip: 1, device: 'light', name, room, attrs: [] };
 }
 
 describe('rooms come from the device name', () => {
@@ -45,5 +45,33 @@ describe('rooms come from the device name', () => {
   it('counts only rooms that have a device', () => {
     expect(roomCount([device('kitchen_plug', 1), device('kitchen_lamp', 2), device('strip', 3)])).toBe(1);
     expect(roomCount([])).toBe(0);
+  });
+});
+
+describe('the room the person assigned', () => {
+  it('wins over the one the name suggests', () => {
+    expect(roomOf(device('kitchen_plug', 1, 'Office'))).toBe('Office');
+    expect(hasOwnRoom(device('kitchen_plug', 1, 'Office'))).toBe(true);
+    expect(hasOwnRoom(device('kitchen_plug', 1))).toBe(false);
+  });
+
+  it('groups by the assigned room, even when the name says another', () => {
+    const rooms = groupByRoom([device('kitchen_plug', 1, 'Office'), device('kitchen_lamp', 2)]);
+    expect(rooms.map((r) => r.room)).toEqual(['Kitchen', 'Office']);
+    expect(rooms[1]?.devices.map((d) => d.id)).toEqual([1]);
+  });
+
+  it('a device with a room but no name still has a room', () => {
+    expect(roomOf(device(null, 1, 'Cellar'))).toBe('Cellar');
+    expect(roomFromName(null)).toBeNull();
+  });
+
+  it('the picker offers the rooms in the home and the ones a name can name', () => {
+    const choices = roomChoices([device('kitchen_plug', 1), device('strip', 2, 'Studio')]);
+    expect(choices).toContain('Kitchen');
+    expect(choices).toContain('Studio');
+    for (const room of allRooms()) expect(choices).toContain(room);
+    expect([...choices].sort()).toEqual(choices); // alphabetical
+    expect(new Set(choices).size).toBe(choices.length); // once each
   });
 });

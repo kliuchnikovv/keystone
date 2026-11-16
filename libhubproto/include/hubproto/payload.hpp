@@ -49,6 +49,21 @@ inline constexpr std::uint8_t kFlagReadable   = 0x01;
 inline constexpr std::uint8_t kFlagWritable   = 0x02;
 inline constexpr std::uint8_t kFlagReportable = 0x04;
 
+// The wire size of a DECLARE: entity_id(2) + device_type(1) + attr_count(1),
+// then three bytes per attribute (attr_id, value_type, flags).
+//
+// The encoder needs exactly `kDeclareFixed + count * kDeclareAttrBytes` bytes.
+// A caller that sizes its buffer by hand must use these constants: a buffer
+// one byte short makes `encode_declare` fail, and the DECLARE is then lost
+// without a word.
+inline constexpr std::size_t kDeclareFixed    = 4;
+inline constexpr std::size_t kDeclareAttrBytes = 3;
+
+/** The buffer size a DECLARE with `count` attributes needs. */
+inline constexpr std::size_t declare_size(std::size_t count) noexcept {
+  return kDeclareFixed + count * kDeclareAttrBytes;
+}
+
 // CMD_ACK status (SPEC §5).
 enum class CmdAckStatus : std::uint8_t {
   Ok          = 0,

@@ -5,16 +5,17 @@ import type { Entity } from '../src/protocol/messages';
 
 function device(id: number, kind: 'switch' | 'sensor' | 'climate', name: string | null = null): Entity {
   if (kind === 'switch') {
-    return { id, chip: 1, device: 'switch', name, attrs: [{ id: 0x01, name: 'on_off', vt: 'bool', flags: ['r', 'w'], value: true }] };
+    return { id, chip: 1, device: 'switch', name, room: null, attrs: [{ id: 0x01, name: 'on_off', vt: 'bool', flags: ['r', 'w'], value: true }] };
   }
   if (kind === 'sensor') {
-    return { id, chip: 1, device: 'sensor', name, attrs: [{ id: 0x50, name: 'temperature', vt: 'i16', flags: ['r'], value: 21 }] };
+    return { id, chip: 1, device: 'sensor', name, room: null, attrs: [{ id: 0x50, name: 'temperature', vt: 'i16', flags: ['r'], value: 21 }] };
   }
   return {
     id,
     chip: 1,
     device: 'climate',
     name,
+    room: null,
     attrs: [
       { id: 0x20, name: 'temperature', vt: 'i16', flags: ['r'], value: 21 },
       { id: 0x21, name: 'humidity', vt: 'u8', flags: ['r'], value: 48 },

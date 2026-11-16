@@ -78,6 +78,36 @@ TEST_CASE("encode_declare reports overflow") {
   CHECK_FALSE(r.ok);
 }
 
+TEST_CASE("declare_size is the buffer a DECLARE needs") {
+  // A caller that sizes its own buffer must use this number: one byte short
+  // and the encoder refuses the buffer — and the DECLARE is lost without a
+  // word (it happened in the firmware, with eight attributes).
+  CHECK(hubproto::declare_size(0) == 4);
+  CHECK(hubproto::declare_size(1) == 7);
+  CHECK(hubproto::declare_size(8) == 28);
+
+  std::array<AttrDecl, 8> attrs{};
+  for (std::size_t i = 0; i < attrs.size(); ++i) {
+    attrs[i] = AttrDecl{static_cast<std::uint8_t>(0x10 + i), ValueType::U8, 0x01};
+  }
+  std::array<std::uint8_t, hubproto::declare_size(8)> exact{};
+  auto r = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(),
+                                    8, exact.data(), exact.size());
+  REQUIRE(r.ok);
+  REQUIRE(r.len == hubproto::declare_size(8));
+
+  // One byte less: the encoder has to refuse it.
+  std::array<std::uint8_t, hubproto::declare_size(8) - 1> shortbuf{};
+  auto r2 = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(),
+                                     8, shortbuf.data(), shortbuf.size());
+  CHECK_FALSE(r2.ok);
+
+  DeclareView v{};
+  REQUIRE(hubproto::decode_declare(exact.data(), r.len, v));
+  CHECK(v.entity_id == 0x0300);
+  CHECK(v.attr_count == 8);
+}
+
 TEST_CASE("decode_declare rejects a truncated payload") {
   std::array<std::uint8_t, 5> buf{0x01, 0x00, 0x01, 0x02, 0x01};  // says 2 attrs
   DeclareView v{};

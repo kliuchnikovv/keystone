@@ -87,8 +87,9 @@ Rules, desired state, timers and entity names are persisted in NVS.
 - ~~**Desired-state per attribute** + reconciler~~ ✅ done (`core::DesiredState`
   + `core::Reconciler`, NVS key `desired`, console `desired`).
 - ~~**Entity names**~~ ✅ done (`core::EntityNames`, NVS key `ent_names`, console
-  `name`, every command accepts `<id_or_name>`). Still open: room tag, favorite
-  flag, icon.
+  `name`, every command accepts `<id_or_name>`). ~~Room tag~~ ✅ done
+  (`core::EntityRooms`, NVS key `ent_rooms`, `room.set`/`room.clear`, console
+  `room`). Still open: favorite flag, icon.
 - ~~**Persistent rule table**~~ ✅ done (§1).
 - One combined NVS namespace `brain_state`, versioned, migrated on schema
   bumps.

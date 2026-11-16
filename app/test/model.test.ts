@@ -3,7 +3,7 @@ import { HubError } from '../src/protocol/client';
 import type { Attr, Chip, Entity } from '../src/protocol/messages';
 import { initialState, reduce } from '../src/protocol/store';
 import { attrLabel, brightnessPercent, describeAck, describeError, formatEnergy, formatUptime, formatValue } from '../src/model/format';
-import { canManageDevice, climateTiles, deviceTitle, hexId, isReachable, primarySwitch, roomSummary, sliderFor, sortedDevices, stepped, stepperFor, summaryText, widgetValue } from '../src/model/devices';
+import { canManageDevice, canIdentifyDevice, canRemoveDevice, climateTiles, deviceTitle, hexId, isReachable, MATTER_CHIP_ID, primarySwitch, roomSummary, sliderFor, sortedDevices, stepped, stepperFor, summaryText, widgetValue } from '../src/model/devices';
 import { chipRows, chipSummary } from '../src/model/health';
 import { defaultChips, defaultEntities } from '../tools/mock-hub/hub';
 
@@ -112,7 +112,7 @@ describe('devices', () => {
     expect(s.text(3000)).toBe('3000 K');
   });
   it('named devices come first, alphabetically; unnamed by id', () => {
-    const named = (id: number, name: string | null): Entity => ({ id, name, chip: 1, device: 'switch', attrs: [] });
+    const named = (id: number, name: string | null): Entity => ({ id, name, room: null, chip: 1, device: 'switch', attrs: [] });
     const sorted = sortedDevices([named(9, null), named(3, 'zeta'), named(5, null), named(4, 'alpha')]);
     expect(sorted.map((e) => e.id)).toEqual([4, 3, 5, 9]);
   });
@@ -182,9 +182,9 @@ describe('the room as a button grid', () => {
     flags,
   });
   const w: Attr['flags'] = ['r', 'w', 'rep'];
-  const plug: Entity = { id: 0x100, name: 'plug1', chip: 1, device: 'switch', attrs: [attr(1, 'on_off', 'bool', true, w), attr(0x13, 'power_w', 'u16', 24)] };
-  const lamp: Entity = { id: 0x101, name: 'lamp', chip: 1, device: 'light', attrs: [attr(1, 'on_off', 'bool', false, w), attr(2, 'brightness', 'u8', 128)] };
-  const sensor: Entity = { id: 0x102, name: null, chip: 1, device: 'occupancy', attrs: [attr(0x50, 'occupied', 'bool', true)] };
+  const plug: Entity = { id: 0x100, name: 'plug1', room: null, chip: 1, device: 'switch', attrs: [attr(1, 'on_off', 'bool', true, w), attr(0x13, 'power_w', 'u16', 24)] };
+  const lamp: Entity = { id: 0x101, name: 'lamp', room: null, chip: 1, device: 'light', attrs: [attr(1, 'on_off', 'bool', false, w), attr(2, 'brightness', 'u8', 128)] };
+  const sensor: Entity = { id: 0x102, name: null, room: null, chip: 1, device: 'occupancy', attrs: [attr(0x50, 'occupied', 'bool', true)] };
 
   it('the summary counts what is on and what it draws', () => {
     expect(roomSummary([plug, lamp, sensor])).toEqual({ on: 1, total: 2, watts: 24 });
@@ -199,6 +199,7 @@ describe('the room as a button grid', () => {
     const climate: Entity = {
       id: 0x103,
       name: 'climate',
+      room: null,
       chip: 1,
       device: 'sensor',
       attrs: [attr(0x10, 'temperature', 'i16', 215), attr(0x11, 'humidity', 'u16', 480), attr(0x12, 'illuminance', 'u16', 320)],
@@ -225,5 +226,25 @@ describe('canManageDevice', () => {
     expect(canManageDevice(state, zb)).toBe(true);
     expect(canManageDevice(state, { ...zb, chip: 2 })).toBe(false); // a Matter-side mirror
     expect(canManageDevice(state, { ...zb, chip: 9 })).toBe(false); // unknown chip
+  });
+});
+
+describe('canIdentifyDevice', () => {
+  it('a Matter device can blink too (the Identify cluster), but only it and a Zigbee one', () => {
+    const state = reduce(initialState, { type: 'snapshot', entities: defaultEntities(), chips: defaultChips(), rules: [], schedules: [], timers: [] });
+    const zb = state.entities[0]!;
+    expect(canIdentifyDevice(state, zb)).toBe(true); // the Zigbee chip
+    expect(canIdentifyDevice(state, { ...zb, chip: MATTER_CHIP_ID })).toBe(true); // the Matter pseudo-chip
+    expect(canIdentifyDevice(state, { ...zb, chip: 2 })).toBe(false); // the co-processor's own mirror
+    expect(canIdentifyDevice(state, { ...zb, chip: 9 })).toBe(false); // unknown chip
+  });
+});
+
+describe('canRemoveDevice', () => {
+  it('offers Remove for a Zigbee device only — the hub cannot drop a Matter one yet', () => {
+    const state = reduce(initialState, { type: 'snapshot', entities: defaultEntities(), chips: defaultChips(), rules: [], schedules: [], timers: [] });
+    const zb = state.entities[0]!;
+    expect(canRemoveDevice(state, zb)).toBe(true);
+    expect(canRemoveDevice(state, { ...zb, chip: MATTER_CHIP_ID })).toBe(false);
   });
 });

@@ -65,7 +65,7 @@ describe('what can be picked', () => {
     const writable = attrOptions(ents, { writable: true });
     expect(writable.every((o) => o.writable)).toBe(true);
     expect(writable.map((o) => o.label)).not.toContain('plug1 · Power draw');
-    const withColour: Entity = { id: 9, name: 'strip', chip: 1, device: 'light', attrs: [{ id: 3, name: 'color_xy', vt: 'xy', flags: ['r', 'w'], value: [1, 2] }] };
+    const withColour: Entity = { id: 9, name: 'strip', room: null, chip: 1, device: 'light', attrs: [{ id: 3, name: 'color_xy', vt: 'xy', flags: ['r', 'w'], value: [1, 2] }] };
     expect(attrOptions([withColour])).toEqual([]);
   });
   it('schedules and timers can drive devices with an on/off switch', () => {
@@ -259,7 +259,7 @@ describe('scenes', () => {
     ]);
     expect(captureScene(ents, [0x0102])).toEqual([]); // a sensor has nothing to set
     expect(captureScene(ents, [0x9999])).toEqual([]);
-    const unknown: Entity[] = [{ id: 7, name: null, chip: 1, device: 'light', attrs: [{ id: 1, name: 'on_off', vt: 'bool', flags: ['r', 'w'], value: null }] }];
+    const unknown: Entity[] = [{ id: 7, name: null, room: null, chip: 1, device: 'light', attrs: [{ id: 1, name: 'on_off', vt: 'bool', flags: ['r', 'w'], value: null }] }];
     expect(captureScene(unknown, [7])).toEqual([]); // never saves a value the hub does not know
   });
 

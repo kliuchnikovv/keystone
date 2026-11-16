@@ -31,6 +31,7 @@ BUILD="$ROOT/firmware/thread-c6/build"
 SIZE_ONLY=0
 CONSOLE_ONLY=0
 COREDUMP=0
+NVS_DUMP=0
 RESET_ONLY=0
 FORCE=0
 BEFORE=""
@@ -40,20 +41,25 @@ REPEAT=1
 RAW=0
 BRAIN=0
 BRAIN_FLASH=0
+BRAIN_RESET=0
 CHIP_CMD=0
+REBOOT_LOG=0
 BRAIN_CMD=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --size-only) SIZE_ONLY=1 ;;
     --console-only) CONSOLE_ONLY=1 ;;
     --coredump) COREDUMP=1 ;;
+    --nvs) NVS_DUMP=1 ;;
     --reset) RESET_ONLY=1 ;;
     --force) FORCE=1 ;;
     --no-reset) BEFORE="no_reset" ;;
     --raw) RAW=1 ;;
     --brain) BRAIN=1 ;;
     --brain-flash) BRAIN_FLASH=1 ;;
+    --brain-reset) BRAIN_RESET=1 ;;
     --chip-cmd) CHIP_CMD=1 ;;
+    --reboot-log) REBOOT_LOG=1 ;;
     --seconds) WATCH_SECONDS="$2"; shift ;;
     --repeat) REPEAT="$2"; shift ;;
     --port) PORT_OVERRIDE="$2"; shift ;;
@@ -122,8 +128,56 @@ fi
 #   scripts/flash-thread-c6-matter.sh --brain -- "chips" "wifi_status"
 if [ "$CHIP_CMD" = "1" ]; then
   echo "thread chip = $PORT ($THREAD_MAC)"
-  timeout "$((WATCH_SECONDS + 20))" python3 "$ROOT/scripts/kcon.py" -p "$PORT" \
-    --wait "$WATCH_SECONDS" -- "${BRAIN_CMD[@]}" 2>&1 | tr -d '\r' | tail -40
+  timeout "$((WATCH_SECONDS + 30))" python3 "$ROOT/scripts/kcon.py" -p "$PORT" \
+    --wait "$WATCH_SECONDS" --follow-seconds "$WATCH_SECONDS" \
+    -- "${BRAIN_CMD[@]}" 2>&1 | tr -d '\r' | tail -120
+  exit 0
+fi
+
+# --reboot-log: reboot the co-processor and catch its boot log.
+#
+# The chip disappears from USB while it reboots and comes back — often under a
+# different ttyACM name — so the port has to be looked up by MAC again. The
+# interesting lines (which Thread dataset was restored, or that a new network
+# was formed) are printed a few seconds into the boot, well inside the window.
+if [ "$REBOOT_LOG" = "1" ]; then
+  echo "thread chip = $PORT ($THREAD_MAC)"
+  timeout 15 python3 "$ROOT/scripts/kcon.py" -p "$PORT" --wait 1 -- "reboot" 2>&1 \
+    | tr -d '\r' | tail -3
+  sleep 2
+  NEWPORT="$(port_for_mac "$THREAD_MAC" || true)"
+  echo "the chip is back on ${NEWPORT:-<not found>}"
+  [ -n "$NEWPORT" ] || exit 1
+  timeout "$((WATCH_SECONDS + 20))" python3 "$ROOT/scripts/kcon.py" \
+    -p "/dev/$NEWPORT" --watch 2>&1 | tr -d '\r' | tail -120
+  exit 0
+fi
+
+# --brain-reset: reset the brain and follow its boot log.
+#
+# The S3 wires DTR to EN, so deasserting DTR resets it ("rst:0x15
+# USB_UART_CHIP_RESET"). The USB device goes with it, so the port has to be
+# looked up by MAC again. This is how the boot order of the hub's own tables
+# is checked: what the Matter bridge declares, and when the core takes it in.
+if [ "$BRAIN_RESET" = "1" ]; then
+  BPORT="$(port_for_mac "$BRAIN_MAC" || true)"
+  if [ -z "$BPORT" ]; then
+    echo "could not find the brain by MAC ($BRAIN_MAC)" >&2
+    exit 1
+  fi
+  BPORT="/dev/$BPORT"
+  echo "brain = $BPORT ($BRAIN_MAC) - resetting it"
+  python3 "$ROOT/scripts/kcon.py" -p "$BPORT" --reset || true
+  sleep 3
+  NEWPORT="$(port_for_mac "$BRAIN_MAC" || true)"
+  echo "the brain is back on ${NEWPORT:-<not found>}"
+  [ -n "$NEWPORT" ] || exit 1
+  OUT="$ROOT/firmware/brain-s3/boot.log"
+  timeout "$((WATCH_SECONDS + 20))" python3 "$ROOT/scripts/kcon.py" -p "/dev/$NEWPORT" --watch \
+    >"$OUT" 2>&1 || true
+  echo "--- the boot log (in $OUT)"
+  tr -d '\r' <"$OUT" | grep -E "reset reason|matter_bridge|matter:|declare|Declare|entity|hub up|fan-out|brain up|chip 0x0" \
+    | tail -60 || true
   exit 0
 fi
 
@@ -165,6 +219,19 @@ if [ "$CONSOLE_ONLY" != "1" ] && [ "$RESET_ONLY" != "1" ]; then
 fi
 
 if [ "$SIZE_ONLY" = "1" ]; then
+  exit 0
+fi
+
+# --nvs: read the NVS partition (the Thread dataset, the OpenThread settings
+# and the Matter fabric all live there) so it can be inspected off-chip.
+if [ "$NVS_DUMP" = "1" ]; then
+  # The build dir belongs to the container's root and is not writable from
+  # here, so the dump goes next to the firmware (and is gitignored).
+  OUT="$ROOT/firmware/thread-c6/nvs.bin"
+  echo "--- reading the NVS partition (0x10000, 48 KB) into $OUT"
+  python3 "$ESPTOOL" --chip esp32c6 -p "$PORT" -b 460800 ${BEFORE:+--before "$BEFORE"} \
+    --after no_reset read_flash 0x10000 0xC000 "$OUT" 2>&1 | tail -3
+  ls -l "$OUT"
   exit 0
 fi
 

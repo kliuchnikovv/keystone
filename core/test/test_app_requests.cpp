@@ -69,6 +69,8 @@ struct Home {
   }
   Outcome name_set(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::name_set(reg, r, g); }); }
   Outcome name_clear(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::name_clear(reg, r, g); }); }
+  Outcome room_set(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::room_set(reg, r, g); }); }
+  Outcome room_clear(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::room_clear(reg, r, g); }); }
   Outcome rule_add(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_add(reg, scenes, rules, r, g); }); }
   Outcome rule_del(const std::string& a) { return call(a, [&](Reader& r, int g) { return core::app::rule_del(rules, r, g); }); }
   Outcome sched_add(const std::string& a, std::int32_t today = 0) { return call(a, [&](Reader& r, int g) { return core::app::schedule_add(reg, scenes, sched, r, g, today); }); }
@@ -153,6 +155,69 @@ TEST_CASE("name.set rejects bad names, duplicates and unknown or chip entities")
   CHECK(h.name_clear(R"({"entity":4660})").err == Err::NotFound);
   Reader r;  // a request with no args object at all
   CHECK(name_set(h.reg, r, -1).err == Err::BadArgs);
+}
+
+// ---- rooms -----------------------------------------------------------------------------
+
+TEST_CASE("room.set puts a device in a room, room.clear takes it out") {
+  Home h;
+  auto o = h.room_set(R"({"entity":256,"room":"Kitchen"})");
+  CHECK(o.ok);
+  CHECK(std::string(h.reg.room_of(0x0100)) == "Kitchen");
+
+  // A second device in the same room: unlike a name, a room is shared.
+  CHECK(h.room_set(R"({"entity":257,"room":"Kitchen"})").ok);
+  CHECK(std::string(h.reg.room_of(0x0101)) == "Kitchen");
+
+  // The device moves.
+  CHECK(h.room_set(R"({"entity":256,"room":"Hallway"})").ok);
+  CHECK(std::string(h.reg.room_of(0x0100)) == "Hallway");
+
+  CHECK(h.room_clear(R"({"entity":256})").ok);
+  CHECK(h.reg.room_of(0x0100) == nullptr);
+  CHECK(std::string(h.reg.room_of(0x0101)) == "Kitchen");
+}
+
+TEST_CASE("room.set accepts a room a person can read") {
+  Home h;
+  CHECK(h.room_set(R"({"entity":256,"room":"Living room"})").ok);
+  CHECK(h.room_set(R"({"entity":256,"room":"Кухня"})").ok);
+  CHECK(h.room_set(R"({"entity":256,"room":"Kids room"})").ok);
+}
+
+TEST_CASE("room.set rejects bad rooms and unknown or chip entities") {
+  Home h;
+  struct Case { const char* args; Err err; };
+  const Case bad[] = {
+      {R"({"entity":256,"room":""})", Err::BadArgs},
+      {R"({"entity":256,"room":" lead"})", Err::BadArgs},
+      {R"({"entity":256,"room":"trail "})", Err::BadArgs},
+      {R"({"entity":256,"room":"bad/room"})", Err::BadArgs},
+      {R"({"entity":256,"room":7})", Err::BadArgs},
+      {R"({"entity":256})", Err::BadArgs},
+      {R"({"room":"Kitchen"})", Err::BadArgs},
+      {R"({"entity":99999,"room":"Kitchen"})", Err::BadArgs},
+      {R"({"entity":4660,"room":"Kitchen"})", Err::NotFound},
+      {R"({"entity":1,"room":"Kitchen"})", Err::NotFound},   // chips are not devices
+  };
+  for (const auto& c : bad) {
+    CAPTURE(std::string(c.args));
+    const auto o = h.room_set(c.args);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == c.err);
+  }
+  CHECK(h.room_clear(R"({"entity":4660})").err == Err::NotFound);
+  // A chip is a radio, not a device: it is not in a room either.
+  CHECK(h.room_clear(R"({"entity":1})").err == Err::NotFound);
+}
+
+TEST_CASE("room.set puts a Matter device in a room") {
+  Home h;
+  // The hub's Matter bridge has no UART of its own, so its devices hang off the
+  // pseudo-chip — that does not make them chips, and they live in rooms like any other.
+  declare(h.reg, 3, 0x0300, hubproto::DeviceType::Light, {{0x01, ValueType::Bool, 0x07}});
+  CHECK(h.room_set(R"({"entity":768,"room":"Kitchen"})").ok);
+  CHECK(std::string(h.reg.room_of(0x0300)) == "Kitchen");
 }
 
 // ---- rules ---------------------------------------------------------------------------
@@ -434,6 +499,32 @@ TEST_CASE("unpair and identify target a Zigbee device only") {
   const ClientMsg m = decode_client(r, frame.data(), frame.size());
   REQUIRE(m.kind == ClientMsg::Kind::Req);
   CHECK(device_meta(h.reg, r, m.args, kMetaUnpair, 1).out.err == Err::BadArgs);
+}
+
+TEST_CASE("identify also works for a Matter device (the commissioner sends the command)") {
+  Home h;
+  declare(h.reg, 2, 0x0200, hubproto::DeviceType::Switch, {{0x01, ValueType::Bool, 0x07}});  // the Matter mirror
+  declare(h.reg, 3, 0x0300, hubproto::DeviceType::Sensor, {{0x10, ValueType::I16, 0x05}});  // a Matter device
+  auto meta = [&](const std::string& a, std::uint8_t attr) {
+    const std::string frame = R"({"type":"req","id":1,"op":"x","args":)" + a + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    // The Matter chip (0x03) is known to the hub.
+    return device_meta(h.reg, r, m.args, attr, 1, 3);
+  };
+  // A Matter device: the Identify command goes to the Matter commissioner.
+  auto i = meta(R"({"entity":768})", kMetaIdentify);
+  CHECK(i.out.ok);
+  CHECK((i.chip == 3 && i.attr == kMetaIdentify && i.arg == 0x0300));
+  // But it cannot be unpaired (the hub cannot take a Matter device out of the fabric yet).
+  CHECK(meta(R"({"entity":768})", kMetaUnpair).out.err == Err::BadArgs);
+  // Without the Matter chip the same device is refused.
+  Reader r;
+  const std::string frame = R"({"type":"req","id":1,"op":"identify","args":{"entity":768}})";
+  const ClientMsg m = decode_client(r, frame.data(), frame.size());
+  REQUIRE(m.kind == ClientMsg::Kind::Req);
+  CHECK(device_meta(h.reg, r, m.args, kMetaIdentify, 1).out.err == Err::BadArgs);
 }
 
 TEST_CASE("device.ota takes a Zigbee device, an http url and a sha256") {

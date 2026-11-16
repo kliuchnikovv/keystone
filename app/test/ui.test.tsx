@@ -49,7 +49,7 @@ describe('Devices', () => {
     expect(state('plug1')).toBe('on');
     expect(within(card('plug1')).getByText('3 W')).toBeTruthy();
     expect(state('lamp')).toBe('off');
-    expect(screen.getByText('Motion sensor 0x0102')).toBeTruthy();
+    expect(screen.getByLabelText('Device Motion sensor 0x0102')).toBeTruthy();
     expect(within(card('Motion sensor 0x0102')).getByText('Clear')).toBeTruthy();
     // The rest of the device lives in its sheet.
     await longPress(card('plug1'));

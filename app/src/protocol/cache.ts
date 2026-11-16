@@ -146,7 +146,10 @@ function entityOf(v: unknown): Entity | null {
   if (id === null || chip === null || device === null) return null;
   const name = e.name === null || e.name === undefined ? null : str(e.name);
   if (name === null && e.name !== null && e.name !== undefined) return null;
-  return { id, name, chip, device, attrs: list(e.attrs).map(attrOf).filter((a): a is Attr => a !== null) };
+  // The room the hub assigned, or null. An older cache has no such field at all.
+  const room = e.room === null || e.room === undefined ? null : str(e.room);
+  if (room === null && e.room !== null && e.room !== undefined) return null;
+  return { id, name, room, chip, device, attrs: list(e.attrs).map(attrOf).filter((a): a is Attr => a !== null) };
 }
 
 function chipOf(v: unknown): Chip | null {

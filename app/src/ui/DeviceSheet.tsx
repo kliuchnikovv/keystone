@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { MAX_NAME_CHARS, nameProblem } from '../model/names';
-import { allRooms, stripRoomPrefix } from '../model/rooms';
+import { allRooms, roomOf } from '../model/rooms';
 import { attrLabel, formatValue } from '../model/format';
 import {
   attrOf,
@@ -43,6 +43,10 @@ export interface DeviceSheetProps {
   onClose(): void;
   /** Give the device a name, or remove it (null). Resolves true when the hub accepted. */
   onRename(name: string | null): Promise<boolean>;
+  /** Put the device in a room, or take it out of one (null). Resolves true when the hub accepted. */
+  onSetRoom?(room: string | null): Promise<boolean>;
+  /** The rooms the picker offers: the ones in the home, and the ones a name can name. */
+  roomOptions?: string[];
   /** Zigbee devices only: blink the device so it can be found / take it off the network. */
   onIdentify?(): Promise<boolean>;
   /** Zigbee devices only: push a vendor firmware file to the device. Resolves true when the hub accepted it. */
@@ -67,6 +71,8 @@ export function DeviceSheet({
   onSet,
   onClose,
   onRename,
+  onSetRoom,
+  roomOptions,
   onIdentify,
   onStartUpdate,
   ota,
@@ -187,30 +193,34 @@ export function DeviceSheet({
         <View style={[styles.block, { borderTopColor: t.border }]}>
           <Text style={{ color: t.muted, fontSize: 13, marginBottom: 8 }}>Choose a room</Text>
           <View style={styles.roomPicker}>
-            {allRooms().map((room) => (
-              <Pressable
-                key={room}
-                accessibilityRole="button"
-                accessibilityLabel={`Move to ${room}`}
-                onPress={async () => {
-                  const rest = stripRoomPrefix(entity.name);
-                  // roomOf reads the first word; use the room's own trigger word (lowercase).
-                  const trigger = room.toLowerCase().split(' ')[0] ?? room.toLowerCase();
-                  const next = rest ? `${trigger} ${rest}` : trigger;
-                  const ok = await onRename(next);
-                  if (ok) { setChangingRoom(false); notify?.(`Moved to ${room}`); }
-                }}
-                style={[styles.roomChip, { borderColor: t.border, backgroundColor: t.fill }]}
-              >
-                <Text style={{ color: t.text, fontSize: 13 }}>{room}</Text>
-              </Pressable>
-            ))}
+            {(roomOptions ?? allRooms()).map((room) => {
+              const here = roomOf(entity) === room;
+              return (
+                <Pressable
+                  key={room}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: here }}
+                  accessibilityLabel={here ? `Move to ${room} (current room)` : `Move to ${room}`}
+                  onPress={async () => {
+                    if (onSetRoom === undefined) return;
+                    const ok = await onSetRoom(room);
+                    if (ok) { setChangingRoom(false); notify?.(`Moved to ${room}`); }
+                  }}
+                  style={[
+                    styles.roomChip,
+                    { borderColor: here ? t.accent : t.border, backgroundColor: here ? t.accentSoft : t.fill },
+                  ]}
+                >
+                  <Text style={{ color: here ? t.accent : t.text, fontSize: 13 }}>{room}</Text>
+                </Pressable>
+              );
+            })}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Remove room"
               onPress={async () => {
-                const rest = stripRoomPrefix(entity.name);
-                const ok = await onRename(rest || null);
+                if (onSetRoom === undefined) return;
+                const ok = await onSetRoom(null);
                 if (ok) { setChangingRoom(false); notify?.('Room removed'); }
               }}
               style={[styles.roomChip, { borderColor: t.border, backgroundColor: t.fill }]}
@@ -235,12 +245,13 @@ export function DeviceSheet({
           a11y={`Rename ${title}`}
           onPress={() => setRenaming(true)}
         />
-        <SheetRow
-          label="Move to another room"
-          a11y={`Move ${title} to another room`}
-          onPress={() => setChangingRoom(true)}
-        />
-        {onIdentify ? (
+        {onSetRoom !== undefined && (
+          <SheetRow
+            label="Move to another room"
+            a11y={`Move ${title} to another room`}
+            onPress={() => setChangingRoom(true)}
+          />
+        )}        {onIdentify ? (
           <SheetRow
             label="Blink"
             a11y={`Identify ${title}`}
@@ -458,7 +469,8 @@ function RenameBox({ current, onSave, onDone }: { current: string | null; onSave
         onSubmitEditing={save}
       />
       <Text style={{ color: t.muted, fontSize: 12, marginTop: 4 }}>
-        Up to {MAX_NAME_CHARS} characters, spaces allowed. Start with a room to group it, e.g. Living room lamp.
+        Up to {MAX_NAME_CHARS} characters, spaces allowed — what the device is called, not where it is.
+        Use "Move to another room" for the room.
       </Text>
       <ErrorText text={error} />
       <View style={styles.renameButtons}>

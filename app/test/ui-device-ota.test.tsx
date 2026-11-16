@@ -24,6 +24,7 @@ const attr = (id: number, name: string, vt: Attr['vt'], value: Attr['value'], fl
 const entity = (id: number, name: string, chip: number): Entity => ({
   id,
   name,
+  room: null,
   chip,
   device: 'light',
   attrs: [attr(1, 'on_off', 'bool', false, ['r', 'w', 'rep'])],

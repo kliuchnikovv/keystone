@@ -286,6 +286,58 @@ Outcome name_clear(Reg& reg, const Reader& r, int args) {
   return Outcome::done();
 }
 
+// ---- rooms -------------------------------------------------------------------------------
+//
+// A room is where a device lives ("Kitchen"). Unlike a name, it is shared by as many
+// devices as the person likes, and it is free text: the app offers the rooms that
+// already exist and lets a new one be typed.
+
+/** How long a room name may be, in bytes (without the terminator). */
+inline constexpr std::size_t kMaxRoomNameBytes = 32;
+
+template <typename Reg, typename Reader>
+Outcome room_set(Reg& reg, const Reader& r, int args) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  std::int64_t e = 0;
+  if (!detail::get_int(r, args, "entity", e) || e < 0 || e > 0xFFFF) {
+    return Outcome::fail(Err::BadArgs, "entity");
+  }
+  const auto id = static_cast<std::uint16_t>(e);
+  // A chip is a radio, not a device: it has no room. Everything else that the
+  // registry knows (including a Matter device on the pseudo-chip) does.
+  const auto* ent = reg.find(id);
+  if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) {
+    return Outcome::fail(Err::NotFound, "no such entity");
+  }
+  char room[kMaxRoomNameBytes + 2];
+  if (!r.get_string(r.find(args, "room"), room, sizeof(room))) {
+    return Outcome::fail(Err::BadArgs, "room");
+  }
+  // The same rules as a name: a person writes it, so letters, digits, spaces and
+  // a few marks — and it must not be empty.
+  if (!detail::valid_entity_name(room)) {
+    return Outcome::fail(Err::BadArgs, "room: up to 15 characters, letters and spaces");
+  }
+  if (!reg.set_room(id, room)) return Outcome::fail(Err::TableFull, "no room for more devices");
+  return Outcome::done();
+}
+
+template <typename Reg, typename Reader>
+Outcome room_clear(Reg& reg, const Reader& r, int args) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  std::int64_t e = 0;
+  if (!detail::get_int(r, args, "entity", e) || e < 0 || e > 0xFFFF) {
+    return Outcome::fail(Err::BadArgs, "entity");
+  }
+  const auto id = static_cast<std::uint16_t>(e);
+  const auto* ent = reg.find(id);
+  if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) {
+    return Outcome::fail(Err::NotFound, "no such entity");
+  }
+  reg.clear_room(id);
+  return Outcome::done();
+}
+
 // ---- history -------------------------------------------------------------------------
 
 // `history`: {"before": seq, "limit": n, "entity": id}, every member optional. `before` pages back
@@ -654,9 +706,16 @@ ChipMeta pair_meta(const Reader& r, int args, std::uint8_t zigbee_chip) {
   return {Outcome::done(), zigbee_chip, kMetaPair, static_cast<std::uint16_t>(sec)};
 }
 
-/** `unpair {entity}` / `identify {entity}`: a device on the Zigbee chip (not a chip, not a Matter mirror). */
+/** `unpair {entity}` / `identify {entity}`: a device on the Zigbee chip (not a chip, not a Matter mirror).
+ *
+ * `identify` also works for a Matter device — the hub's own commissioner sends the
+ * Identify command there — so the Matter chip is passed as well (0 = there is
+ * none). The caller routes by the chip the answer names. `unpair` stays
+ * Zigbee-only: the hub cannot yet take a Matter device out of the fabric.
+ */
 template <typename Reg, typename Reader>
-ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t attr, std::uint8_t zigbee_chip) {
+ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t attr,
+                      std::uint8_t zigbee_chip, std::uint8_t matter_chip = 0) {
   std::int64_t e = 0;
   if (args < 0 || !detail::get_int(r, args, "entity", e) || e < 0 || e > 0xFFFF) {
     return {Outcome::fail(Err::BadArgs, "entity"), 0, 0, 0};
@@ -665,7 +724,12 @@ ChipMeta device_meta(const Reg& reg, const Reader& r, int args, std::uint8_t att
   if (ent == nullptr || ent->device_type == hubproto::DeviceType::Chip) {
     return {Outcome::fail(Err::NotFound, "no such entity"), 0, 0, 0};
   }
-  if (ent->chip_id != zigbee_chip) return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, 0, 0};
+  if (ent->chip_id != zigbee_chip) {
+    if (attr == kMetaIdentify && matter_chip != 0 && ent->chip_id == matter_chip) {
+      return {Outcome::done(), matter_chip, attr, static_cast<std::uint16_t>(e)};
+    }
+    return {Outcome::fail(Err::BadArgs, "not a Zigbee device"), 0, 0, 0};
+  }
   return {Outcome::done(), zigbee_chip, attr, static_cast<std::uint16_t>(e)};
 }
 

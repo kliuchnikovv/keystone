@@ -24,15 +24,17 @@ bool is_known_value_type(std::uint8_t vt) noexcept {
   return value_size(static_cast<ValueType>(vt)) != 0;
 }
 
-constexpr std::size_t kDeclareFixed = 4;  // entity_id + device_type + attr_count
-constexpr std::size_t kAttrBytes = 3;     // attr_id + value_type + flags
+// The DECLARE layout constants live in the header (hubproto::kDeclareFixed,
+// hubproto::kDeclareAttrBytes): a caller that sizes its own buffer must use
+// the same numbers, so they are declared once.
+constexpr std::size_t kAttrBytes = hubproto::kDeclareAttrBytes;
 
 }  // namespace
 
 EncodeResult encode_declare(std::uint16_t entity_id, DeviceType device_type,
                             const AttrDecl* attrs, std::uint8_t count,
                             std::uint8_t* out, std::size_t cap) noexcept {
-  const std::size_t need = kDeclareFixed + kAttrBytes * count;
+  const std::size_t need = hubproto::declare_size(count);
   if (cap < need) return {false, 0};
 
   std::size_t w = 0;
@@ -50,19 +52,19 @@ EncodeResult encode_declare(std::uint16_t entity_id, DeviceType device_type,
 
 bool decode_declare(const std::uint8_t* in, std::size_t len,
                     DeclareView& out) noexcept {
-  if (len < kDeclareFixed) return false;
+  if (len < hubproto::kDeclareFixed) return false;
   const std::uint8_t count = in[3];
-  if (len < kDeclareFixed + kAttrBytes * count) return false;
+  if (len < hubproto::declare_size(count)) return false;
 
   for (std::uint8_t i = 0; i < count; ++i) {
-    const std::uint8_t vt = in[kDeclareFixed + kAttrBytes * i + 1];
+    const std::uint8_t vt = in[hubproto::kDeclareFixed + kAttrBytes * i + 1];
     if (!is_known_value_type(vt)) return false;
   }
 
   out.entity_id = static_cast<std::uint16_t>(in[0] | (in[1] << 8));
   out.device_type = static_cast<DeviceType>(in[2]);
   out.attr_count = count;
-  out.attrs = in + kDeclareFixed;
+  out.attrs = in + hubproto::kDeclareFixed;
   return true;
 }
 

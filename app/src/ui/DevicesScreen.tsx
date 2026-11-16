@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Platform } from 'react-native';
 import { canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
 import { deviceShape, gridLayout } from '../model/grid';
-import { groupByRoom, roomCount } from '../model/rooms';
+import { groupByRoom, roomChoices, roomCount } from '../model/rooms';
 import { useEntityActivity } from '../hooks/useEntityActivity';
 import { useNow } from '../hooks/useNow';
 import type { Commands } from '../hooks/useCommands';
@@ -112,6 +112,14 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
             if (ok) commands.notify(name === null ? 'Name removed' : 'Device renamed');
             return ok;
           }}
+          onSetRoom={async (room) => {
+            // The room lives in the hub, next to the name: a device can be moved
+            // without being renamed, and two devices share a room freely.
+            const ok =
+              (await commands.request(room === null ? 'room.clear' : 'room.set', room === null ? { entity: open.id } : { entity: open.id, room })) !== null;
+            return ok;
+          }}
+          roomOptions={roomChoices(home.entities)}
           {...(canIdentifyDevice(home, open)
             ? {
                 onIdentify: async () => (await commands.request('identify', { entity: open.id })) !== null,

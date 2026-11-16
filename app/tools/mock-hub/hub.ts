@@ -92,6 +92,7 @@ export function defaultEntities(): Entity[] {
     {
       id: DEVICE_FIRST_ENTITY,
       name: 'plug1',
+      room: null,
       chip: 1,
       device: 'switch',
       attrs: [
@@ -103,6 +104,7 @@ export function defaultEntities(): Entity[] {
     {
       id: DEVICE_FIRST_ENTITY + 1,
       name: 'lamp',
+      room: null,
       chip: 1,
       device: 'light',
       attrs: [
@@ -113,6 +115,7 @@ export function defaultEntities(): Entity[] {
     {
       id: DEVICE_FIRST_ENTITY + 2,
       name: null,
+      room: null,
       chip: 1,
       device: 'occupancy',
       attrs: [attr(0x50, 'occupied', 'bool', ['r', 'rep'], false)],
@@ -258,7 +261,7 @@ export class MockHub {
   /** A device joining while the network is open: it appears in every client's list. */
   simulateJoin(id: number, name: string | null = null): void {
     this.entities.push({
-      id, name, chip: 1, device: 'switch',
+      id, name, room: null, chip: 1, device: 'switch',
       attrs: [attr(0x01, 'on_off', 'bool', ['r', 'w', 'rep'], false)],
     });
     this.resync();
@@ -454,6 +457,7 @@ export class MockHub {
       this.entities.push({
         id: 0x0200 + i,
         name: null,
+        room: null,
         chip: 1,
         device: 'switch',
         attrs: [attr(0x01, 'on_off', 'bool', ['r', 'w', 'rep'], false)],
@@ -511,6 +515,37 @@ export class MockHub {
         const e = this.entities.find((x) => x.id === args.entity);
         if (!e) return no('not_found', 'entity');
         e.name = null;
+        this.broadcast({ type: 'entity', op: 'add', entity: e });
+        return ok();
+      }
+      case 'room.set': {
+        if (typeof args.entity !== 'number') return no('bad_args', 'entity');
+        const e = this.entities.find((x) => x.id === args.entity);
+        if (!e) return no('not_found', 'entity');
+        if (typeof args.room !== 'string') return no('bad_args', 'room');
+        const room = args.room.trim();
+        // The hub's rule (`valid_entity_name`): at most 15 characters, no stray
+        // space at the edges, at least one letter, and only letters, digits,
+        // spaces and a little punctuation.
+        const chars = [...room].length;
+        const valid =
+          room === args.room &&
+          chars > 0 &&
+          chars <= 15 &&
+          /\p{L}/u.test(room) &&
+          /^[\p{L}\p{N} .,&'()_-]+$/u.test(room);
+        if (!valid) {
+          return no('bad_args', 'room: up to 15 characters, letters and spaces');
+        }
+        e.room = room;
+        this.broadcast({ type: 'entity', op: 'add', entity: e });
+        return ok();
+      }
+      case 'room.clear': {
+        if (typeof args.entity !== 'number') return no('bad_args', 'entity');
+        const e = this.entities.find((x) => x.id === args.entity);
+        if (!e) return no('not_found', 'entity');
+        e.room = null;
         this.broadcast({ type: 'entity', op: 'add', entity: e });
         return ok();
       }

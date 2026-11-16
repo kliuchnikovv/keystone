@@ -18,7 +18,7 @@ const attr = (id: number, name: string, vt: Attr['vt'], value: Attr['value'], fl
   value,
   flags,
 });
-const entity = (device: string, name: string, attrs: Attr[]): Entity => ({ id: 0x200, name, chip: 1, device, attrs });
+const entity = (device: string, name: string, attrs: Attr[]): Entity => ({ id: 0x200, name, room: null, chip: 1, device, attrs });
 
 function sheet(e: Entity, onSet = vi.fn()) {
   render(

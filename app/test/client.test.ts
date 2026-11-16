@@ -836,6 +836,7 @@ describe('the cached state', () => {
       {
         id: 0x0100,
         name: 'plug1',
+        room: 'Kitchen',
         chip: 1,
         device: 'switch',
         attrs: [{ id: 0x01, name: 'on_off', vt: 'bool' as const, flags: ['r' as const, 'w' as const], value: true }],
@@ -847,6 +848,8 @@ describe('the cached state', () => {
     const c = client();
     c.hydrate(cached);
     expect(c.getSnapshot().entities.map((e) => e.name)).toEqual(['plug1']);
+    // The room the hub assigned survives the cache: a stale app still shows the home as it was.
+    expect(c.getSnapshot().entities.map((e) => e.room)).toEqual(['Kitchen']);
     expect(c.getSnapshot().stale).toBe(true);
     expect(c.getSnapshot().savedAt).toBe(1700000000000);
   });

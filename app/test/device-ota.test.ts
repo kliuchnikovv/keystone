@@ -152,8 +152,8 @@ describe('asking the hub for a firmware update', () => {
 
 describe('what the app says about a firmware update', () => {
   it('only a device on the Zigbee chip can be updated', () => {
-    const zigbee = { id: 0x0100, name: null, chip: 1, device: 'light', attrs: [] };
-    const matter = { id: 0x0200, name: null, chip: 2, device: 'light', attrs: [] };
+    const zigbee = { id: 0x0100, name: null, room: null, chip: 1, device: 'light', attrs: [] };
+    const matter = { id: 0x0200, name: null, room: null, chip: 2, device: 'light', attrs: [] };
     expect(canUpdateFirmware(zigbee)).toBe(true);
     expect(canUpdateFirmware(matter)).toBe(false);
   });

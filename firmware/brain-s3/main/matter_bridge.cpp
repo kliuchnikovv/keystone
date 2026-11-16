@@ -62,11 +62,14 @@ constexpr std::size_t kAttrsPerEntity = core::matter::kNodeEntityAttrs;
 // own; both end up in the same table.
 constexpr std::uint64_t kNodeIdBase = 0x00414B5300000000ULL;  // "AKS" in the high bytes
 
-// The Descriptor cluster and the two attributes that tell us what an endpoint is.
+// The Descriptor cluster and the attributes that tell us what an endpoint is.
 constexpr std::uint16_t kDescriptorEndpointWildcard = 0xFFFF;
 constexpr std::uint32_t kDescriptorCluster = 0x001D;
 constexpr std::uint32_t kDeviceTypeListAttribute = 0x0000;
 constexpr std::uint32_t kServerListAttribute = 0x0001;
+// ClientList (0x0002) is deliberately not read. The one cluster the hub looks
+// for here — Identify, the blink — is a *server* cluster on the device that
+// blinks, so the ServerList is where it lives.
 
 // What a descriptor read collects: a handful of endpoints per node, and only the device
 // types and cluster ids this bridge can use. Bigger than any device a home has, small
@@ -102,9 +105,20 @@ struct RuntimeEntity {
 
 struct RuntimeNode {
   bool used = false;
+  // The descriptor of this node was read and its entities (if any) were
+  // published. A node with no entities can still be "modelled" — the hub's
+  // own Matter bridge is exactly that: it has no entities of its own.
+  bool modelled = false;
   std::uint64_t node_id = 0;
   std::uint8_t entity_count = 0;
   RuntimeEntity entities[kEntitiesPerNode] = {};
+  // The endpoint that has the Identify cluster (the blink). It is a *server*
+  // cluster — the device blinks, not the hub — so the Descriptor's ServerList
+  // says where it lives. 0 = the root endpoint, which is where most devices put it.
+  std::uint16_t identify_endpoint = 0;
+  // Whether this device has the Identify cluster at all (a sensor without it
+  // cannot be told to blink).
+  bool has_identify = false;
 };
 
 RuntimeNode g_nodes[kSlots];
@@ -125,6 +139,7 @@ enum class Op : std::uint8_t {
   kRepublish,            // re-send every DECLARE (the core asked with QUERY)
   kShareOpen,            // open a commissioning window on a commissioned node (multi-admin)
   kShareResult,          // SDK's commissioning_window_opener callback — manual code or failure
+  kIdentify,             // make a device identify itself (the Identify command)
 };
 
 struct Request {
@@ -145,6 +160,9 @@ struct Request {
   bool boolean = false;
   // The CHIP error of a failed attempt, as a small code (see attr_code).
   std::uint8_t code = 0;
+  // The identify request: which entity, and for how long.
+  std::uint16_t entity = 0;
+  std::uint16_t seconds = 0;
 };
 
 QueueHandle_t g_queue = nullptr;
@@ -155,6 +173,11 @@ void* g_ctx = nullptr;
 Sink g_sink = nullptr;
 DatasetFn g_dataset = nullptr;
 ProgressFn g_progress = nullptr;
+Mirror g_mirror = nullptr;
+void* g_mirror_ctx = nullptr;
+// The co-processor that carries the hub's Matter bridge: the mirror of the
+// Matter frames goes there (and only there).
+constexpr std::uint8_t kMirrorChipId = 0x02;
 
 std::atomic<bool> g_controller_ready{false};
 std::atomic<bool> g_attempt_active{false};
@@ -185,6 +208,11 @@ struct DescriptorEndpoint {
   std::uint8_t cluster_count = 0;
   std::uint16_t device_types[kMaxDeviceTypes] = {};
   std::uint32_t clusters[kMaxClusters] = {};
+  // Whether this endpoint has the Identify cluster (the blink). Identify is a
+  // *server* cluster on the device that blinks, so it is looked for in the
+  // ServerList — and flagged as the list is decoded rather than searched for
+  // afterwards, so a server list longer than `clusters` cannot hide it.
+  bool has_identify = false;
 };
 
 struct DescriptorBuild {
@@ -207,6 +235,18 @@ void publish(const hubproto::Header& h, const std::uint8_t* payload, std::size_t
   if (g_sink != nullptr) g_sink(g_ctx, h, payload, len);
 }
 
+// The same frame on its way to the co-processor that carries the hub's Matter
+// bridge: the Matter devices the hub controls must show up inside the hub,
+// next to the Zigbee ones. The copy goes straight into the UART — through the
+// core it would take the entity away from the Matter pseudo-chip (the
+// registry overwrites the owner on every DECLARE).
+void publish_mirror(const hubproto::Header& h, const std::uint8_t* payload, std::size_t len) {
+  if (g_mirror == nullptr) return;
+  hubproto::Header m = h;
+  m.chip_id = kMirrorChipId;
+  g_mirror(g_mirror_ctx, m, payload, len);
+}
+
 hubproto::Header header(hubproto::MsgType type, std::uint16_t entity, std::uint16_t seq = 0) {
   hubproto::Header h{};
   h.version = hubproto::kProtocolVersion;
@@ -218,6 +258,24 @@ hubproto::Header header(hubproto::MsgType type, std::uint16_t entity, std::uint1
   return h;
 }
 
+// The pseudo-chip announces itself like every other chip.
+//
+// The core learns a chip from its first message and asks it to declare (a
+// QUERY); the DECLARE that arrives in the same breath is dropped, because the
+// core starts a fresh declaration cycle instead. That is fine for a real chip
+// (it answers the QUERY), but it made the Matter entities appear only after a
+// round trip — and a reader who looked at the registry right after the
+// "node ... -> N entities" line saw a device that was not there yet. The HELLO
+// makes the order explicit: announce, then declare.
+bool g_announced = false;
+
+void publish_hello() {
+  if (g_announced) return;
+  g_announced = true;
+  publish(header(hubproto::MsgType::Hello, 0), nullptr, 0);
+  ESP_LOGI(kTag, "the Matter pseudo-chip (chip 0x%02x) announced itself", kChipId);
+}
+
 void publish_declare(const RuntimeEntity& entity) {
   hubproto::AttrDecl attrs[kAttrsPerEntity] = {};
   for (std::uint8_t i = 0; i < entity.attr_count; ++i) {
@@ -226,11 +284,24 @@ void publish_declare(const RuntimeEntity& entity) {
     const core::matter::Binding* b = core::matter::binding_for_attr(entity.attrs[i].attr);
     if (b != nullptr) attrs[i].flags = b->flags;
   }
-  std::uint8_t buf[3 + kAttrsPerEntity * 3] = {};
+  // The buffer has to hold the whole DECLARE: the fixed part (entity id,
+  // device type, attribute count) plus three bytes per attribute. A buffer
+  // one byte short makes the encoder fail — and the DECLARE would be lost
+  // without a word.
+  std::uint8_t buf[hubproto::declare_size(kAttrsPerEntity)] = {};
   const auto enc = hubproto::encode_declare(entity.id, entity.device_type, attrs,
                                             entity.attr_count, buf, sizeof(buf));
-  if (!enc.ok) return;
-  publish(header(hubproto::MsgType::Declare, entity.id), buf, enc.len);
+  if (!enc.ok) {
+    ESP_LOGE(kTag, "the DECLARE of entity 0x%04x does not fit into %u bytes",
+             static_cast<unsigned>(entity.id), static_cast<unsigned>(sizeof(buf)));
+    return;
+  }
+  publish_hello();
+  const hubproto::Header h = header(hubproto::MsgType::Declare, entity.id);
+  publish(h, buf, enc.len);
+  publish_mirror(h, buf, enc.len);
+  ESP_LOGI(kTag, "declared entity 0x%04x (%u attributes) to the hub and to the co-processor",
+           static_cast<unsigned>(entity.id), static_cast<unsigned>(entity.attr_count));
 }
 
 void publish_declare_end() {
@@ -242,7 +313,9 @@ void publish_state(std::uint16_t entity, std::uint8_t attr, const hubproto::Valu
   std::uint8_t buf[2 + 1 + 1 + 4] = {};
   const auto enc = hubproto::encode_state(entity, &entry, 1, buf, sizeof(buf));
   if (!enc.ok) return;
-  publish(header(hubproto::MsgType::State, entity), buf, enc.len);
+  const hubproto::Header h = header(hubproto::MsgType::State, entity);
+  publish(h, buf, enc.len);
+  publish_mirror(h, buf, enc.len);
 }
 
 void publish_ack(std::uint16_t seq, std::uint16_t entity, hubproto::CmdAckStatus status) {
@@ -421,7 +494,9 @@ void start_descriptor_read(std::uint8_t slot) {
     if (!g_build.active || remote_node != g_build.node_id || data == nullptr) return;
     if (status.ToChipError() != CHIP_NO_ERROR) return;
     if (path.mClusterId != kDescriptorCluster) return;
-    if (path.mAttributeId != kDeviceTypeListAttribute && path.mAttributeId != kServerListAttribute) return;
+    if (path.mAttributeId != kDeviceTypeListAttribute && path.mAttributeId != kServerListAttribute) {
+      return;
+    }
 
     DescriptorEndpoint* endpoint = nullptr;
     for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
@@ -451,8 +526,14 @@ void start_descriptor_read(std::uint8_t slot) {
       List list;
       if (chip::app::DataModel::Decode(*data, list) != CHIP_NO_ERROR) return;
       auto it = list.begin();
-      while (it.Next() && endpoint->cluster_count < kMaxClusters) {
-        endpoint->clusters[endpoint->cluster_count++] = static_cast<std::uint32_t>(it.GetValue());
+      while (it.Next()) {
+        const auto cluster = static_cast<std::uint32_t>(it.GetValue());
+        // Identify is the blink: remember it here, while every entry is seen,
+        // instead of searching `clusters` (which may be truncated).
+        if (cluster == core::matter::kIdentifyCluster) endpoint->has_identify = true;
+        if (endpoint->cluster_count < kMaxClusters) {
+          endpoint->clusters[endpoint->cluster_count++] = cluster;
+        }
       }
     }
   };
@@ -625,6 +706,37 @@ void handle_descriptor(bool ok) {
     views[i].clusters = g_build.endpoints[i].clusters;
     views[i].cluster_count = g_build.endpoints[i].cluster_count;
   }
+
+  // The hub's own Matter accessory (the bridge on the co-processor) is not a
+  // foreign device: its bridged endpoints are mirrors of the registry entities
+  // the hub already has (0x01xx…). Modelling them again would show every
+  // device twice in the app and take the entity id of a real Matter device.
+  // Its aggregator endpoint (device type 0x000E) is the tell.
+  constexpr std::uint16_t kMatterAggregatorDeviceType = 0x000E;
+  for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
+    for (std::uint8_t t = 0; t < g_build.endpoints[i].device_type_count; ++t) {
+      if (g_build.endpoints[i].device_types[t] != kMatterAggregatorDeviceType) continue;
+      RuntimeNode& hub_bridge = g_nodes[g_build.slot];
+      hub_bridge.entity_count = 0;
+      hub_bridge.modelled = true;
+      ESP_LOGI(kTag,
+               "node 0x%016llx is the hub's own Matter bridge: its parts mirror the registry "
+               "entities, nothing to model",
+               static_cast<unsigned long long>(g_build.node_id));
+      publish_declare_end();
+      if (attempt) {
+        g_attempt_active.store(false);
+        g_attempt_slot = -1;
+        g_attempt_saved = false;
+        g_pair_node = 0;
+        report(hubproto::MatterState::Done, hubproto::MatterCode::Ok, 0);
+      }
+      Request next{Op::kRestoreNext};
+      xQueueSend(g_queue, &next, 0);
+      return;
+    }
+  }
+
   const core::matter::NodePlan plan =
       core::matter::plan_node(views, g_build.endpoint_count);
   if (!plan.known) {
@@ -642,16 +754,39 @@ void handle_descriptor(bool ok) {
   }
 
   RuntimeNode& node = g_nodes[g_build.slot];
-  node.entity_count = plan.entity_count;
+  node.entity_count = 0;
+  node.modelled = true;
+  // Where the Identify cluster lives: the first endpoint whose *server* list
+  // has it. A device without it cannot be told to blink, and the hub says so
+  // instead of sending a command into the void.
+  node.has_identify = false;
+  node.identify_endpoint = 0;
+  for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
+    const DescriptorEndpoint& ep = g_build.endpoints[i];
+    if (!ep.has_identify) continue;
+    node.has_identify = true;
+    node.identify_endpoint = ep.endpoint;
+    break;
+  }
   for (std::uint8_t e = 0; e < plan.entity_count; ++e) {
     RuntimeEntity& entity = node.entities[e];
-    entity.id = static_cast<std::uint16_t>(kFirstEntityId + g_build.slot * kEntitiesPerNode + e);
+    // The entity ids live in one space (0x0300…), but the two paths that
+    // create them number their slots independently: a node commissioned in
+    // this session and a node restored from NVS can land on the same id.
+    // So take the first free id instead of a computed one.
+    std::uint16_t id = static_cast<std::uint16_t>(kFirstEntityId + g_build.slot * kEntitiesPerNode + e);
+    for (std::uint16_t probe = 0; probe < 0x0100; ++probe) {
+      if (find_entity(id, nullptr) == nullptr) break;
+      ++id;
+    }
+    entity.id = id;
     entity.device_type = plan.entities[e].device_type;
     entity.attr_count = plan.entities[e].attr_count;
     for (std::uint8_t a = 0; a < entity.attr_count; ++a) {
       const core::matter::NodeAttr& src = plan.entities[e].attrs[a];
       entity.attrs[a] = RuntimeAttr{src.attr, src.type, src.endpoint, src.cluster, src.path};
     }
+    node.entity_count = static_cast<std::uint8_t>(e + 1);
   }
 
   for (std::uint8_t e = 0; e < node.entity_count; ++e) publish_declare(node.entities[e]);
@@ -677,7 +812,10 @@ void start_next_restore() {
   if (g_attempt_active.load()) return;
   if (g_build.active) return;
   for (std::size_t i = 0; i < kSlots; ++i) {
-    if (g_nodes[i].used && g_nodes[i].node_id != 0 && g_nodes[i].entity_count == 0) {
+    // "modelled" and not "entity_count == 0": the hub's own Matter bridge has
+    // no entities of its own (its parts mirror the registry entities) and must
+    // not be read again and again.
+    if (g_nodes[i].used && g_nodes[i].node_id != 0 && !g_nodes[i].modelled) {
       start_descriptor_read(static_cast<std::uint8_t>(i));
       return;
     }
@@ -685,6 +823,55 @@ void start_next_restore() {
 }
 
 // ---- commands from the hub core ----------------------------------------------------------
+// Make a device identify itself: the Identify command on the endpoint that has
+// the cluster. This is the Matter way of saying "the device you are looking
+// for is this one" — a LED blinks, a display shows something.
+void handle_identify(const Request& req) {
+  RuntimeNode* node = nullptr;
+  for (auto& n : g_nodes) {
+    if (!n.used) continue;
+    for (std::uint8_t i = 0; i < n.entity_count; ++i) {
+      if (n.entities[i].id == req.entity) {
+        node = &n;
+        break;
+      }
+    }
+    if (node != nullptr) break;
+  }
+  if (node == nullptr) {
+    ESP_LOGW(kTag, "identify: entity 0x%04x is not a Matter device",
+             static_cast<unsigned>(req.entity));
+    return;
+  }
+  if (!node->has_identify) {
+    ESP_LOGW(kTag, "identify: the device 0x%016llx has no Identify cluster",
+             static_cast<unsigned long long>(node->node_id));
+    return;
+  }
+
+  core::matter::WritePlan plan = core::matter::to_matter_identify(req.seconds);
+  plan.endpoint = node->identify_endpoint;
+
+  char json[32] = {};
+  std::snprintf(json, sizeof(json), "{\"0\":U16:%u}", static_cast<unsigned>(req.seconds));
+
+  esp_err_t err = ESP_FAIL;
+  {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    err = esp_matter::controller::send_invoke_cluster_command(
+        node->node_id, plan.endpoint, plan.cluster, plan.id, json);
+  }
+  if (err == ESP_OK) {
+    ESP_LOGI(kTag, "identify: entity 0x%04x -> node 0x%016llx endpoint %u for %u s",
+             static_cast<unsigned>(req.entity), static_cast<unsigned long long>(node->node_id),
+             static_cast<unsigned>(plan.endpoint), static_cast<unsigned>(req.seconds));
+  } else {
+    ESP_LOGW(kTag, "identify: entity 0x%04x did not reach node 0x%016llx: %s",
+             static_cast<unsigned>(req.entity), static_cast<unsigned long long>(node->node_id),
+             esp_err_to_name(err));
+  }
+}
+
 void handle_command(const Request& req) {
   RuntimeNode* node = nullptr;
   RuntimeEntity* entity = nullptr;
@@ -1072,6 +1259,10 @@ void worker(void*) {
         handle_command(req);
         break;
 
+      case Op::kIdentify:
+        handle_identify(req);
+        break;
+
       case Op::kAttribute:
         handle_attribute(req);
         break;
@@ -1124,6 +1315,11 @@ void worker(void*) {
 
 }  // namespace
 
+void set_mirror(void* ctx, Mirror mirror) {
+  g_mirror_ctx = ctx;
+  g_mirror = mirror;
+}
+
 bool start(void* ctx, Sink sink, DatasetFn dataset, ProgressFn progress) {
   if (g_started) return true;
   g_ctx = ctx;
@@ -1171,7 +1367,9 @@ void restore() {
 void republish() {
   if (!g_started) return;
   Request req{Op::kRepublish};
-  xQueueSend(g_queue, &req, 0);
+  if (xQueueSend(g_queue, &req, 0) != pdTRUE) {
+    ESP_LOGE(kTag, "the request queue is full: the Matter declarations are not repeated");
+  }
 }
 
 Start commission_payload(std::uint8_t kind, const std::uint8_t* bytes, std::size_t len) {
@@ -1295,6 +1493,29 @@ bool command(std::uint16_t seq, const std::uint8_t* payload, std::size_t len) {
   req.len = static_cast<std::uint8_t>(len);
   std::memcpy(req.bytes, payload, len);
   return xQueueSend(g_queue, &req, 0) == pdTRUE;
+}
+
+bool identify(std::uint16_t entity_id, std::uint16_t seconds) {
+  if (!g_started || seconds == 0 || seconds > 3600) return false;
+  Request req;
+  req.op = Op::kIdentify;
+  req.entity = entity_id;
+  req.seconds = seconds;
+  if (xQueueSend(g_queue, &req, 0) != pdTRUE) {
+    ESP_LOGE(kTag, "the request queue is full: the identify request is lost");
+    return false;
+  }
+  return true;
+}
+
+bool can_identify(std::uint16_t entity_id) {
+  for (auto& node : g_nodes) {
+    if (!node.used) continue;
+    for (std::uint8_t i = 0; i < node.entity_count; ++i) {
+      if (node.entities[i].id == entity_id) return node.has_identify;
+    }
+  }
+  return false;
 }
 
 }  // namespace matter_bridge

@@ -691,10 +691,15 @@ inline void encode_device_ota(JsonWriter& w, std::uint16_t entity, const char* p
 
 // Attribute and entity objects. `Entity` is core::EntityT<N>.
 template <typename Entity>
-void write_entity(JsonWriter& w, const Entity& e, const char* name) noexcept {
+void write_entity(JsonWriter& w, const Entity& e, const char* name, const char* room = nullptr) noexcept {
   w.begin_object().kv("id", static_cast<std::int64_t>(e.entity_id));
   w.key("name");
   if (name != nullptr) w.str(name);
+  else w.null();
+  // The room the device lives in ("Kitchen"), or null when it has none. The app
+  // falls back to the room its name suggests.
+  w.key("room");
+  if (room != nullptr) w.str(room);
   else w.null();
   w.kv("chip", static_cast<std::int64_t>(e.chip_id)).kv("device", device_name(e.device_type));
   w.key("attrs").begin_array();
@@ -722,9 +727,9 @@ void write_entity(JsonWriter& w, const Entity& e, const char* name) noexcept {
 }
 
 template <typename Entity>
-void encode_entity_event(JsonWriter& w, const Entity& e, const char* name) noexcept {
+void encode_entity_event(JsonWriter& w, const Entity& e, const char* name, const char* room = nullptr) noexcept {
   w.begin_object().kv("type", "entity").kv("op", "add").key("entity");
-  write_entity(w, e, name);
+  write_entity(w, e, name, room);
   w.end_object();
 }
 

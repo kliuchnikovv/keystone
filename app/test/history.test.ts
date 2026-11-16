@@ -191,8 +191,8 @@ describe('describeEvent', () => {
   });
 
   it('contacts and buttons read naturally', () => {
-    const doors: Entity[] = [{ id: 0x0200, name: 'front_door', chip: 1, device: 'contact', attrs: [{ id: 0x51, name: 'contact', vt: 'bool', flags: ['r'], value: true }] },
-      { id: 0x0201, name: 'remote', chip: 1, device: 'button', attrs: [{ id: 0x60, name: 'event', vt: 'enum8', flags: ['r'], value: 0 }] }];
+    const doors: Entity[] = [{ id: 0x0200, name: 'front_door', room: null, chip: 1, device: 'contact', attrs: [{ id: 0x51, name: 'contact', vt: 'bool', flags: ['r'], value: true }] },
+      { id: 0x0201, name: 'remote', room: null, chip: 1, device: 'button', attrs: [{ id: 0x60, name: 'event', vt: 'enum8', flags: ['r'], value: 0 }] }];
     const h = { entities: doors, chips: [] };
     expect(say({ kind: 'state', entity: 0x0200, attr: 0x51, value: false }, h)).toBe('front_door opened');
     expect(say({ kind: 'state', entity: 0x0200, attr: 0x51, value: true }, h)).toBe('front_door closed');
