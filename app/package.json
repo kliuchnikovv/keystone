@@ -15,6 +15,7 @@
     "mock-hub": "tsx tools/mock-hub/main.ts",
     "probe": "tsx tools/probe.ts",
     "hub-check": "tsx tools/hub-check.ts",
+    "ui-remove-check": "tsx tools/ui-remove-check.ts",
     "discover": "tsx tools/discover.ts",
     "setup-check": "tsx tools/setup-check.ts",
     "console": "tsx tools/console.ts",
