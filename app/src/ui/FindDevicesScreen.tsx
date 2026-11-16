@@ -65,8 +65,10 @@ export function FindDevicesScreen({
   // The code printed on the device, and the camera that reads it.
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState<MatterIdentity | null>(null);
+  const [lastMatter, setLastMatter] = useState<MatterIdentity | null>(null);
 
   const addMatter = async (matter: MatterIdentity) => {
+    setLastMatter(matter);
     const ok = await commands.request('matter.commission', {
       kind: matter.kind,
       payload: matter.payloadHex,
@@ -104,6 +106,9 @@ export function FindDevicesScreen({
 
       <ScrollView contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
         {attempt ? <AttemptNote attempt={attempt} /> : null}
+        {attempt?.state === 'failed' && lastMatter ? (
+          <Button kind="secondary" size="compact" label="Try again" onPress={() => void addMatter(lastMatter)} disabled={busy} />
+        ) : null}
         {attempt?.state === 'done' ? (
           <View style={[styles.attempt, { borderColor: t.good, backgroundColor: t.card }]}>
             <Glyph name="check" size={15} color={t.good} />
@@ -149,6 +154,11 @@ function AttemptNote({ attempt }: { attempt: MatterEvent }) {
         <Glyph name={failed ? 'signal' : 'check'} size={15} color={failed ? t.warn : t.good} />
       )}
       <Text style={{ color: failed ? t.warn : t.text, fontSize: 12.5, lineHeight: 18, flex: 1 }}>{text}</Text>
+      {attempt.code === 'unsupported' ? (
+        <Text style={{ color: t.muted, fontSize: 12, flexBasis: '100%', marginTop: 4 }}>
+          To put the device in Apple Home, open Home → Add Accessory and scan the QR code on the device.
+        </Text>
+      ) : null}
     </View>
   );
 }
