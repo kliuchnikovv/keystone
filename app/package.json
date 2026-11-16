@@ -24,7 +24,8 @@
     "start": "expo start",
     "web": "expo start --web",
     "export:web": "expo export --platform web",
-    "relay-probe": "tsx tools/relay-probe.ts"
+    "relay-probe": "tsx tools/relay-probe.ts",
+    "ui-add-check": "tsx tools/ui-add-check.ts"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.2",
