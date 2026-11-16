@@ -28,7 +28,7 @@ endpoint has exactly the clusters it was created with:
 
 | hub entity | Matter device type | extra clusters |
 |------------|--------------------|----------------|
-| plug / on-off only | On/Off Light | Electrical Power / Energy Measurement |
+| plug / on-off only | On/Off Plug-in Unit | Electrical Power / Energy Measurement |
 | brightness | Dimmable Light | power, energy |
 | + colour temperature / + xy | Color-Temperature / Extended Color Light | power, energy |
 | temperature, humidity or illuminance | Temperature / Humidity / Light Sensor (first one present) | the other readings, Power Source |
@@ -1860,9 +1860,8 @@ budget holds with room to spare. Stage B (bridged endpoints) is next.
     int64 milliwatt-hours (Stage 2e). Cluster confirmed on hardware; full
     STATE path triggers after ≥1 Wh accumulation.
 6. Additional Matter device types matching the Zigbee ones as they come
-   online. Today only Switch → On/Off Light is wired
-   (`map_device_type()` in `thread-c6/main/main.cpp`); adding
-   dimmable_light, color_control, occupancy_sensor, etc. is a lookup
+   online. Switch → On/Off Plug-in Unit is wired (`core/matter_plan.hpp`);
+   adding dimmable_light, color_control, occupancy_sensor, etc. is a lookup
    table + a few extra clusters in `create_bridged_clusters()`.
 6a. 🟡 Blink (identify) a Matter device — the Identify cluster (0x0003) invoke
    is built and routed by the owner of the entity (see "Blink (identify) a

@@ -24,7 +24,10 @@
 #include "integration.h"
 
 #include <app/clusters/boolean-state-server/BooleanStateCluster.h>
+#include <app/clusters/illuminance-measurement-server/IlluminanceMeasurementCluster.h>
 #include <app/clusters/occupancy-sensor-server/OccupancySensingCluster.h>
+#include <app/clusters/relative-humidity-measurement-server/RelativeHumidityMeasurementCluster.h>
+#include <app/clusters/temperature-measurement-server/TemperatureMeasurementCluster.h>
 #include <app/server/Server.h>
 #include <data_model_provider/esp_matter_data_model_provider.h>
 // chip::Platform::New / Delete — the same header esp-matter's own bridge
@@ -328,6 +331,12 @@ esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep, std::uint32_t pack
       err = on_off_light::add(ep, &c);
       break;
     }
+    case M::kOnOffPlugInUnit: {
+      on_off_plug_in_unit::config_t c;
+      keep_on_off(c);
+      err = on_off_plug_in_unit::add(ep, &c);
+      break;
+    }
     case M::kDimmableLight: {
       dimmable_light::config_t c;
       keep_on_off(c);
@@ -573,6 +582,19 @@ void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& 
         update_attr(ep, TemperatureMeasurement::Id,
                     TemperatureMeasurement::Attributes::MeasuredValue::Id, nullable_i16(centi),
                     "Temperature", centi);
+        // TemperatureMeasurement is a code-driven CHIP cluster: the controller reads
+        // the cluster object's value, not esp-matter's legacy attribute store. Set both.
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
+            chip::app::ConcreteClusterPath(ep, TemperatureMeasurement::Id));
+        if (sci != nullptr) {
+          const chip::ChipError err =
+              static_cast<chip::app::Clusters::TemperatureMeasurementCluster*>(sci)->SetMeasuredValue(
+                  chip::app::DataModel::Nullable<std::int16_t>(centi));
+          if (err != CHIP_NO_ERROR) {
+            ESP_LOGW(kTag, "failed to set the Matter temperature: %" CHIP_ERROR_FORMAT, err.Format());
+          }
+        }
       }
       break;
     }
@@ -581,12 +603,36 @@ void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& 
       update_attr(ep, RelativeHumidityMeasurement::Id,
                   RelativeHumidityMeasurement::Attributes::MeasuredValue::Id, nullable_u16(centi),
                   "Humidity", centi);
+      // RelativeHumidityMeasurement is code-driven too: update its CHIP cluster object.
+      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+      auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
+          chip::app::ConcreteClusterPath(ep, RelativeHumidityMeasurement::Id));
+      if (sci != nullptr) {
+        const chip::ChipError err =
+            static_cast<chip::app::Clusters::RelativeHumidityMeasurementCluster*>(sci)->SetMeasuredValue(
+                chip::app::DataModel::Nullable<std::uint16_t>(centi));
+        if (err != CHIP_NO_ERROR) {
+          ESP_LOGW(kTag, "failed to set the Matter humidity: %" CHIP_ERROR_FORMAT, err.Format());
+        }
+      }
       break;
     }
     case A::kIlluminance: {
       const std::uint16_t m16 = U::lux_to_measured(v.as_u16());
       update_attr(ep, IlluminanceMeasurement::Id, IlluminanceMeasurement::Attributes::MeasuredValue::Id,
                   nullable_u16(m16), "Illuminance", m16);
+      // IlluminanceMeasurement is code-driven too: update its CHIP cluster object.
+      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+      auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
+          chip::app::ConcreteClusterPath(ep, IlluminanceMeasurement::Id));
+      if (sci != nullptr) {
+        const chip::ChipError err =
+            static_cast<chip::app::Clusters::IlluminanceMeasurementCluster*>(sci)->SetMeasuredValue(
+                chip::app::DataModel::Nullable<std::uint16_t>(m16));
+        if (err != CHIP_NO_ERROR) {
+          ESP_LOGW(kTag, "failed to set the Matter illuminance: %" CHIP_ERROR_FORMAT, err.Format());
+        }
+      }
       break;
     }
     case A::kBattery: {

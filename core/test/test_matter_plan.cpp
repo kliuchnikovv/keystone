@@ -16,11 +16,11 @@ Attrs attrs(std::initializer_list<std::uint8_t> ids) {
 }
 }  // namespace
 
-TEST_CASE("the plug stays an on/off light with its metering extras") {
+TEST_CASE("the plug becomes an on/off plug-in unit with its metering extras") {
   const auto p = plan_for(DeviceType::Switch, attrs({A::kOnOff, A::kPowerW, A::kEnergyWh}));
-  CHECK(p.kind == kOnOffLight);
+  CHECK(p.kind == kOnOffPlugInUnit);
   CHECK(p.extras == (kXPower | kXEnergy));
-  CHECK(kind_of(p.packed()) == kOnOffLight);
+  CHECK(kind_of(p.packed()) == kOnOffPlugInUnit);
   CHECK(extras_of(p.packed()) == (kXPower | kXEnergy));
 }
 
@@ -79,8 +79,9 @@ TEST_CASE("the co-processor and an empty entity are not bridged") {
 TEST_CASE("a stored endpoint is kept when it already serves the plan") {
   const auto plug = plan_for(DeviceType::Switch, attrs({A::kOnOff, A::kPowerW, A::kEnergyWh}));
   CHECK(stored_matches(plug.packed(), plug));
-  // Persisted by the older build as the bare on/off-light id: still the same accessory.
-  CHECK(stored_matches(kOnOffLight, plug));
+  // Persisted by the older build as the bare on/off-light id. A plug now needs the
+  // plug-in-unit type, so this endpoint must be re-created.
+  CHECK_FALSE(stored_matches(kOnOffLight, plug));
   // A lamp that gained brightness is a different endpoint.
   const auto dim = plan_for(DeviceType::Light, attrs({A::kOnOff, A::kBrightness}));
   CHECK_FALSE(stored_matches(kOnOffLight, dim));

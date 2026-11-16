@@ -23,6 +23,7 @@ enum Kind : std::uint16_t {
   kContactSensor = 0x0015,
   kOnOffLight = 0x0100,
   kDimmableLight = 0x0101,
+  kOnOffPlugInUnit = 0x010A,
   kLightSensor = 0x0106,
   kOccupancySensor = 0x0107,
   kColorTemperatureLight = 0x010C,
@@ -129,7 +130,9 @@ inline Plan plan_for(hubproto::DeviceType dt, const Attrs& a) noexcept {
     }
     x(a.battery, kXBattery);
   } else if (a.on_off) {
-    p.kind = kOnOffLight;
+    // A switch is a plug-in unit, not a light. The Matter type makes Apple Home show
+    // an outlet instead of a lamp; its OnOff cluster and command behaviour are the same.
+    p.kind = dt == hubproto::DeviceType::Switch ? kOnOffPlugInUnit : kOnOffLight;
     x(a.power, kXPower);
     x(a.energy, kXEnergy);
   }
@@ -141,6 +144,9 @@ inline Plan plan_for(hubproto::DeviceType dt, const Attrs& a) noexcept {
 // would give the controller a new accessory and lose the user's rooms and scenes.
 inline bool stored_matches(std::uint32_t stored, const Plan& want) noexcept {
   if (stored == want.packed()) return true;
+  // A legacy on/off-light endpoint may serve an on/off-light plan. It cannot serve
+  // the new plug-in-unit plan: the endpoint's device type is fixed after creation,
+  // so a plug needs a new endpoint (and therefore a new accessory in the controller).
   return extras_of(stored) == 0 && kind_of(stored) == kOnOffLight && want.kind == kOnOffLight;
 }
 

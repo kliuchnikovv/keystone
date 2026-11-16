@@ -20,6 +20,7 @@ if(DEFINED ENV{ESP_MATTER_PATH})
     list(APPEND KS_PRIV_INCLUDES
          "${ESP_MATTER_PATH}/examples/common/utils"
          "${ESP_MATTER_PATH}/components/esp_matter"
+         "${ESP_MATTER_PATH}/components/esp_matter/data_model/private"
          "${ESP_MATTER_PATH}/components/esp_matter/data_model_provider/clusters/electrical_energy_measurement")
 endif()
 

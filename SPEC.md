@@ -264,7 +264,7 @@ exposed as a Matter accessory with no second modeling pass.
 |-------------|-------|--------------------|------------------------------|
 | light       | 0x01  | On/Off, Dimmable, Color-Temperature or Extended Color Light | on_off(0x01), brightness(0x02), color_xy(0x03), color_temp(0x04) |
 | sensor      | 0x02  | Temperature / Humidity / Light Sensor | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
-| switch      | 0x03  | On/Off Light (a plug-in unit today) | on_off(0x01), power_w(0x13), energy_wh(0x14) |
+| switch      | 0x03  | On/Off Plug-in Unit | on_off(0x01), power_w(0x13), energy_wh(0x14) |
 | cover       | 0x04  | Window Covering     | position(0x20), state(0x21) — not implemented yet |
 | lock        | 0x05  | Door Lock          | locked(0x30) — not implemented yet |
 | climate     | 0x06  | Thermostat (heating) | temperature(0x10), setpoint(0x40), mode(0x41) |

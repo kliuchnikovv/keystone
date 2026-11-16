@@ -22,6 +22,7 @@
 #include <esp_log.h>
 #include <esp_matter.h>
 #include <esp_matter_endpoint.h>
+#include <esp_matter_data_model_priv.h>
 #include <esp_openthread_types.h>
 #include <app/server/Server.h>
 #include <platform/CHIPDeviceEvent.h>
