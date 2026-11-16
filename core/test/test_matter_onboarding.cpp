@@ -38,16 +38,16 @@ Payload make_payload(std::uint32_t version, std::uint16_t discriminator, std::ui
 }  // namespace
 
 TEST_CASE("an onboarding payload yields the passcode and the discriminator") {
-  const Payload p = make_payload(1, 0x0FA, 20202021);
+  const Payload p = make_payload(0, 0x0FA, 20202021);
   const Onboarding o = parse_onboarding_bytes(p.bytes, sizeof(p.bytes));
   CHECK(o.valid);
-  CHECK(o.version == 1);
+  CHECK(o.version == 0);
   CHECK(o.discriminator == 0x0FA);
   CHECK(o.passcode == 20202021u);
 }
 
 TEST_CASE("the QR kind is the packed payload exactly") {
-  const Payload p = make_payload(1, 3840, 20202021);
+  const Payload p = make_payload(0, 3840, 20202021);
   const Onboarding o = parse_onboarding(hubproto::kMatterKindQr, p.bytes, sizeof(p.bytes));
   CHECK(o.valid);
   CHECK(o.discriminator == 3840);
@@ -62,7 +62,7 @@ TEST_CASE("the enhanced advertisement identifies the device but carries no passc
 }
 
 TEST_CASE("a trailing TLV after the packed payload is ignored") {
-  const Payload p = make_payload(1, 7, 1234567);
+  const Payload p = make_payload(0, 7, 1234567);
   std::uint8_t longer[20] = {};
   for (std::size_t i = 0; i < sizeof(p.bytes); ++i) longer[i] = p.bytes[i];
   const Onboarding o = parse_onboarding(hubproto::kMatterKindQr, longer, sizeof(longer));
@@ -76,21 +76,21 @@ TEST_CASE("the commissioning service data is not enough to commission") {
 }
 
 TEST_CASE("a payload that cannot open PASE is rejected") {
-  const Payload short_one = make_payload(1, 1, 1);
+  const Payload short_one = make_payload(0, 1, 1);
   CHECK_FALSE(parse_onboarding_bytes(short_one.bytes, 10).valid);  // truncated
 
   const Payload wrong_version = make_payload(2, 1, 1234567);
   CHECK_FALSE(parse_onboarding_bytes(wrong_version.bytes, sizeof(wrong_version.bytes)).valid);
 
-  const Payload zero_pin = make_payload(1, 1, 0);
+  const Payload zero_pin = make_payload(0, 1, 0);
   CHECK_FALSE(parse_onboarding_bytes(zero_pin.bytes, sizeof(zero_pin.bytes)).valid);
 
-  const Payload too_big = make_payload(1, 1, core::matter::kMaxSetupPasscode + 1);
+  const Payload too_big = make_payload(0, 1, core::matter::kMaxSetupPasscode + 1);
   CHECK_FALSE(parse_onboarding_bytes(too_big.bytes, sizeof(too_big.bytes)).valid);
 }
 
 TEST_CASE("the last valid passcode is accepted") {
-  const Payload p = make_payload(1, 0xFFF, core::matter::kMaxSetupPasscode);
+  const Payload p = make_payload(0, 0xFFF, core::matter::kMaxSetupPasscode);
   const Onboarding o = parse_onboarding_bytes(p.bytes, sizeof(p.bytes));
   CHECK(o.valid);
   CHECK(o.discriminator == 0xFFF);

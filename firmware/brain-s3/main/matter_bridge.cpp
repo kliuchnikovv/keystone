@@ -1435,7 +1435,12 @@ Start commission_payload(std::uint8_t kind, const std::uint8_t* bytes, std::size
     return Start::kNoSetupHash;
   }
   const core::matter::Onboarding onboarding = core::matter::parse_onboarding(kind, bytes, len);
-  if (!onboarding.valid) return Start::kBadPayload;
+  if (!onboarding.valid) {
+    ESP_LOGW(kTag, "commission_payload: bad QR payload (len=%u, version=%u, discriminator=%u, passcode=%u)",
+             static_cast<unsigned>(len), static_cast<unsigned>(onboarding.version),
+             static_cast<unsigned>(onboarding.discriminator), static_cast<unsigned>(onboarding.passcode));
+    return Start::kBadPayload;
+  }
 
   bool expected = false;
   if (!g_attempt_active.compare_exchange_strong(expected, true)) return Start::kBusy;

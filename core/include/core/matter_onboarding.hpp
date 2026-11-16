@@ -59,9 +59,9 @@ inline Onboarding parse_onboarding_bytes(const std::uint8_t* bytes, std::size_t 
   out.discriminator = static_cast<std::uint16_t>(take(12));
   out.passcode = take(27);
 
-  // Version 1 is the only payload version Matter 1.0 defines; a passcode outside CHIP's
+  // Version 0 is the only payload version Matter 1.0 defines; a passcode outside CHIP's
   // range cannot open a PASE session, so it is a bad payload rather than a device error.
-  out.valid = out.version == 1 && out.discriminator <= 0xFFF && out.passcode >= 1 &&
+  out.valid = out.version == 0 && out.discriminator <= 0xFFF && out.passcode >= 1 &&
               out.passcode <= kMaxSetupPasscode;
   return out;
 }
