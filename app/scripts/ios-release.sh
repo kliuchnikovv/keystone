@@ -80,6 +80,7 @@ fi
   -derivedDataPath "$WORK_DIR/DerivedData" \
   -archivePath "$ARCHIVE" \
   -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-5H749MZFPN}" \
   archive)
 
 echo
