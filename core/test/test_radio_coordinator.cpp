@@ -64,7 +64,7 @@ void publish_declare(UartTransport& chip, std::uint8_t chip_id,
                      std::uint16_t entity_id, DeviceType dt,
                      const AttrDecl* attrs, std::uint8_t count) {
   std::array<std::uint8_t, 64> buf{};
-  auto r = hubproto::encode_declare(entity_id, dt, attrs, count, buf.data(),
+  auto r = hubproto::encode_declare(entity_id, dt, attrs, count, nullptr, buf.data(),
                                     buf.size());
   REQUIRE(r.ok);
   chip.publish(mk(MsgType::Declare, chip_id, 1), buf.data(), r.len);
@@ -90,6 +90,27 @@ TEST_CASE("HELLO triggers a QUERY back to the chip") {
   CHECK(at_chip.last.chip_id == 0x01);
   CHECK(coord.chip_known(0x01));
   CHECK_FALSE(coord.chip_ready(0x01));
+  // The boot counter is what tells the hub that the chip rebooted and lost
+  // what it had in RAM (the co-processor restores its endpoints from NVS and
+  // has to be told the entities' names again).
+  CHECK(coord.boot_id_of(0x01) == 1);
+  CHECK(coord.boot_id_of(0x02) == 0);  // a chip we never heard from
+}
+
+TEST_CASE("a chip that reboots gets a new boot counter") {
+  InMemoryLink la, lb;
+  InMemoryLink::connect(la, lb);
+  UartTransport brain(la);
+  UartTransport chip(lb);
+  Registry reg;
+  core::RadioCoordinator<Registry> coord(brain, reg);
+
+  chip.publish(mk(MsgType::Hello, 0x02, 7), nullptr, 0);
+  CHECK(coord.boot_id_of(0x02) == 7);
+
+  // The chip reboots: it says hello again with a new boot counter.
+  chip.publish(mk(MsgType::Hello, 0x02, 8), nullptr, 0);
+  CHECK(coord.boot_id_of(0x02) == 8);
 }
 
 TEST_CASE("DECLARE cycle populates the registry and marks the chip ready") {

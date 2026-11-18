@@ -203,6 +203,33 @@ if [ ! -f "$ESPTOOL" ]; then
   exit 1
 fi
 
+if [ ! -f "$ESPTOOL" ]; then
+  echo "esptool not found at $ESPTOOL (set ESPTOOL=...)" >&2
+  exit 1
+fi
+
+# The console prompt says again which board this is, on the board itself.
+# A chip that crash-loops never answers (and its USB port flaps, so the open
+# can block) — hence the timeout, and --force for that case: the MAC check
+# above is the one that must never be skipped.
+#
+# This has to happen *before* the flash id is read: esptool leaves the chip
+# in the bootloader ("Staying in bootloader"), and a chip in the bootloader
+# does not run the application that prints the prompt — so asking afterwards
+# always fails.
+out="$(timeout 15 python3 "$ROOT/scripts/kcon.py" -p "$PORT" --wait 6 -- "" 2>/dev/null || true)"
+case "$out" in
+  *"thread>"*) : ;;
+  *)
+    if [ "$FORCE" != "1" ]; then
+      echo "the board on $PORT does not answer as the thread chip (no 'thread>' prompt)." >&2
+      echo "refusing to flash it (use --force if the board is crash-looping)." >&2
+      exit 1
+    fi
+    echo "note: $PORT did not answer; continuing anyway (--force)"
+    ;;
+esac
+
 # What flash does the module actually have? The Matter image is ~2.1 MB: the
 # 4 MB layout gives it two 1.92 MB OTA slots, an 8 MB module gives two 3.44 MB
 # ones (the layout of esp-matter's own Border Router example). esptool prints
@@ -292,23 +319,6 @@ if [ "$CONSOLE_ONLY" = "1" ]; then
   done
   exit 0
 fi
-
-# The console prompt says again which board this is, on the board itself.
-# A chip that crash-loops never answers (and its USB port flaps, so the open
-# can block) — hence the timeout, and --force for that case: the MAC check
-# above is the one that must never be skipped.
-out="$(timeout 15 python3 "$ROOT/scripts/kcon.py" -p "$PORT" --wait 6 -- "" 2>/dev/null || true)"
-case "$out" in
-  *"thread>"*) : ;;
-  *)
-    if [ "$FORCE" != "1" ]; then
-      echo "the board on $PORT does not answer as the thread chip (no 'thread>' prompt)." >&2
-      echo "refusing to flash it (use --force if the board is crash-looping)." >&2
-      exit 1
-    fi
-    echo "note: $PORT did not answer; continuing anyway (--force)"
-    ;;
-esac
 
 if [ ! -f "$ESPTOOL" ]; then
   echo "esptool not found at $ESPTOOL (set ESPTOOL=...)" >&2

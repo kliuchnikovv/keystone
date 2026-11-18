@@ -21,7 +21,7 @@ struct DeclareBytes {
 
   DeclareBytes(std::uint16_t entity_id, DeviceType dt,
                const AttrDecl* attrs, std::uint8_t count) {
-    auto r = hubproto::encode_declare(entity_id, dt, attrs, count, buf.data(),
+    auto r = hubproto::encode_declare(entity_id, dt, attrs, count, nullptr, buf.data(),
                                       buf.size());
     REQUIRE(r.ok);
     REQUIRE(hubproto::decode_declare(buf.data(), r.len, view));

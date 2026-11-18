@@ -35,7 +35,8 @@ bool BridgedDevice::check_dev_addr(const void* addr) {
   if (addr && m_dev_addr_ctx) {
     const auto* a = static_cast<const BridgedAddr*>(addr);
     const auto* b = static_cast<const BridgedAddr*>(m_dev_addr_ctx);
-    return a->chip_id == b->chip_id && a->entity_id == b->entity_id;
+    return a->chip_id == b->chip_id && a->entity_id == b->entity_id &&
+           a->channel == b->channel;
   }
   return false;
 }
@@ -80,6 +81,13 @@ esp_err_t BridgedDevice::restore_dev_addr() {
                    esp_matter_bridge::nvs_key_allocator::endpoint_dev_addr(ep).KeyName(),
                    m_dev_addr_ctx, &sz),
       TAG, "read dev_addr");
+  if (sz < sizeof(BridgedAddr)) {
+    // Endpoints kept by older builds stored only chip_id + entity_id. calloc() has
+    // already zeroed the new channel, which is exactly the old main endpoint.
+    static_cast<BridgedAddr*>(m_dev_addr_ctx)->channel = 0;
+    ESP_LOGI(TAG, "endpoint %u: legacy dev_addr (%u bytes), using main channel",
+             static_cast<unsigned>(ep), static_cast<unsigned>(sz));
+  }
   return ESP_OK;
 }
 

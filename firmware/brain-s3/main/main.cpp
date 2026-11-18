@@ -72,6 +72,7 @@
 #include "core/schedule_table.hpp"
 #include <cmath>
 #include "core/scene_table.hpp"
+#include "core/presence.hpp"
 #include "core/sun.hpp"
 #include "core/setup_mode.hpp"
 #include "core/thread_dataset.hpp"
@@ -962,6 +963,29 @@ void on_bus_forward(void* ctx, const hubproto::Header& h,
        h.type == hubproto::MsgType::Undeclare)) {  // a device left: drop its Matter endpoint
     hubproto::Header mirror = h;
     mirror.chip_id = kThreadChipId;
+    if (h.type == hubproto::MsgType::Declare) {
+      // The Zigbee chip knows no names — the hub does. The Matter bridge puts
+      // the name into the Bridged Device Basic Information cluster, which is
+      // what the controller shows for the device and what it matches against
+      // to recognise it after a restart. So the mirror carries the name the
+      // hub knows, not the DECLARE as it came.
+      hubproto::DeclareView view{};
+      if (g_reg != nullptr && hubproto::decode_declare(p, len, view)) {
+        const char* name = g_reg->name_of(view.entity_id);
+        hubproto::AttrDecl attrs[8];
+        const std::uint8_t n = view.attr_count > 8 ? 8 : view.attr_count;
+        for (std::uint8_t k = 0; k < n; ++k) {
+          attrs[k] = hubproto::declare_attr_at(view, k);
+        }
+        std::uint8_t buf[64 + hubproto::kDeclareNameMax + 1];
+        const auto r = hubproto::encode_declare(view.entity_id, view.device_type, attrs, n, name,
+                                                 buf, sizeof(buf));
+        if (r.ok) {
+          bus->publish(mirror, buf, r.len);
+          return;
+        }
+      }
+    }
     bus->publish(mirror, p, len);
   } else if (h.type == hubproto::MsgType::Hello && h.chip_id == kThreadChipId) {
     // Matter just came up — kick Zigbee to re-DECLARE so the mirror can
@@ -1113,6 +1137,7 @@ const char* dt_name(hubproto::DeviceType t) {
     case hubproto::DeviceType::Contact: return "contact";
     case hubproto::DeviceType::Button: return "button";
     case hubproto::DeviceType::Chip: return "chip";
+    case hubproto::DeviceType::Phone: return "phone";
   }
   return "?";
 }
@@ -1592,6 +1617,102 @@ void restore_rules(Rules& rules) {
     }
   }
   nvs_close(h);
+}
+
+// ---- presence: the phones that report where they are ----------------------------------------
+//
+// A phone is a VIRTUAL ENTITY: the hub makes it one, with a single boolean attribute
+// ("home"), and a rule watches it exactly as it watches a motion sensor. The phone
+// reports through the app protocol (`presence.report`); the value goes into the
+// registry and through the StateMachine, so the rule engine needs nothing new.
+//
+// The phones are kept in NVS so a rule that points at "Anna's phone" still points at
+// something after a reboot. The last report time is NOT kept: the hub's uptime
+// starts at zero, so a saved timestamp would be meaningless.
+
+using Presence = core::PresenceTable<4>;
+Presence g_presence;
+
+// The chip id the virtual phone entities belong to. It is not a real radio chip, but
+// every entity needs an owner; a chip that never talks never clears it.
+constexpr std::uint8_t kPhoneChipId = 0xFE;
+
+constexpr std::size_t kPresenceBlobMax =
+    Presence::kHeaderSize + 4 * Presence::kEntryWireSize;
+
+void persist_presence() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &h) != ESP_OK) return;
+  static EXT_RAM_BSS_ATTR std::uint8_t buf[kPresenceBlobMax];
+  const std::size_t n = g_presence.count() == 0 ? 0 : g_presence.save(buf, sizeof(buf));
+  if (n > 0) {
+    nvs_set_blob(h, "presence", buf, n);
+  } else {
+    nvs_erase_key(h, "presence");
+  }
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+void restore_presence() {
+  nvs_handle_t h;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &h) != ESP_OK) return;
+  static EXT_RAM_BSS_ATTR std::uint8_t buf[kPresenceBlobMax];
+  std::size_t sz = sizeof(buf);
+  if (nvs_get_blob(h, "presence", buf, &sz) == ESP_OK) {
+    if (g_presence.load(buf, sz)) {
+      ESP_LOGI(kTag, "restored %u phone(s) from NVS",
+               static_cast<unsigned>(g_presence.count()));
+    } else {
+      ESP_LOGW(kTag, "stored phones are corrupt — ignored");
+    }
+  }
+  nvs_close(h);
+}
+
+/**
+ * Make sure the phone is an entity the hub knows about, with its "home" attribute.
+ *
+ * The entity is declared once and kept: the phone keeps its entity id (and so its
+ * name and the rules that point at it) for as long as it is known.
+ */
+bool ensure_phone_entity(Registry& reg, const core::PhonePresence& phone) {
+  const auto* e = reg.find(phone.entity_id);
+  if (e != nullptr && e->device_type == hubproto::DeviceType::Phone) return true;
+  hubproto::AttrDecl attrs[1];
+  attrs[0].attr_id = hubproto::attr::kHome;
+  attrs[0].value_type = hubproto::ValueType::Bool;
+  attrs[0].flags = hubproto::kFlagReadable | hubproto::kFlagReportable;
+  if (!reg.declare_virtual(kPhoneChipId, phone.entity_id, hubproto::DeviceType::Phone,
+                           attrs, 1)) {
+    return false;
+  }
+  // The name lives in the registry's names table, so the app and the console show it
+  // like any other device.
+  reg.names().set_name(phone.entity_id, phone.name);
+  return true;
+}
+
+/**
+ * Publish the phone's presence as an ordinary STATE, so everything downstream works
+ * unchanged: the rule engine fires, the app sees the value, the event history records
+ * it. The phone is not a radio device, but on the wire it is just a STATE.
+ */
+void publish_phone_presence(core::Bus& bus, Registry& reg, const core::PhonePresence& phone,
+                            bool home) {
+  if (!ensure_phone_entity(reg, phone)) return;
+  hubproto::StateEntry entry{};
+  entry.attr_id = hubproto::attr::kHome;
+  entry.value = hubproto::Value::make_bool(home);
+  std::uint8_t buf[16];
+  const auto r = hubproto::encode_state(phone.entity_id, &entry, 1, buf, sizeof(buf));
+  if (!r.ok) return;
+  hubproto::Header h{};
+  h.version = hubproto::kProtocolVersion;
+  h.type = hubproto::MsgType::State;
+  h.chip_id = kPhoneChipId;
+  h.entity_id = phone.entity_id;
+  bus.publish(h, buf, r.len);
 }
 
 // ---- `rule` console command: parsing + handling (runs on the main loop) ----
@@ -2340,7 +2461,44 @@ int cmd_scene(int argc, char** argv) {
   return 0;
 }
 
-// ---- dev tool: pretend a device exists, towards the Matter chip only -------------------------
+// Publish a DECLARE for one entity toward the Matter co-processor, with the
+// name the hub knows it by. The bridge puts the name into the Bridged Device
+// Basic Information cluster: the controller shows it, and — more important —
+// it matches the device against it after a restart, which is what keeps the
+// room the user gave it.
+void publish_entity_declare(core::Bus& bus, std::uint16_t entity_id, hubproto::DeviceType type,
+                             const hubproto::AttrDecl* attrs, std::uint8_t count,
+                             const char* name) {
+  std::uint8_t buf[64 + hubproto::kDeclareNameMax + 1];
+  const auto r = hubproto::encode_declare(entity_id, type, attrs, count, name, buf, sizeof(buf));
+  if (!r.ok) return;
+  hubproto::Header d{};
+  d.version = hubproto::kProtocolVersion;
+  d.type = hubproto::MsgType::Declare;
+  d.chip_id = kThreadChipId;
+  d.entity_id = entity_id;
+  bus.publish(d, buf, r.len);
+}
+
+// The name of an entity changed: tell the Matter co-processor, so the name it
+// shows for the bridged device changes too. The bridge updates the NodeLabel
+// of the endpoint it already has.
+void republish_entity_name(core::Bus& bus, std::uint16_t entity_id) {
+  if (g_reg == nullptr) return;
+  const auto* e = g_reg->find(entity_id);
+  if (e == nullptr) return;
+  hubproto::AttrDecl attrs[8];
+  const std::uint8_t n = e->attr_count > 8 ? 8 : e->attr_count;
+  for (std::uint8_t k = 0; k < n; ++k) {
+    attrs[k].attr_id = e->attrs[k].attr_id;
+    attrs[k].value_type = e->attrs[k].value_type;
+    attrs[k].flags = e->attrs[k].flags;
+  }
+  publish_entity_declare(bus, entity_id, e->device_type, attrs, n,
+                          g_reg->name_of(entity_id));
+}
+
+
 // `inject <kind>` declares a made-up device (and sends a first STATE) to the Matter chip as if the
 // Zigbee chip had announced it, so the bridged endpoint of every device type can be exercised
 // without owning the hardware. The brain's own registry is untouched: it never sees these.
@@ -2429,8 +2587,9 @@ void handle_inject(core::Bus& bus, Req* r) {
     const std::uint16_t id = static_cast<std::uint16_t>(kInjectBase + i);
     hubproto::AttrDecl attrs[8];
     const std::size_t n = core::zcl::attrs_for(kInject[i].caps, attrs, 8);
-    std::uint8_t buf[4 + 3 * 8];
-    const auto d = hubproto::encode_declare(id, kInject[i].type, attrs, static_cast<std::uint8_t>(n), buf, sizeof(buf));
+    std::uint8_t buf[4 + 3 * 8 + hubproto::kDeclareNameMax + 1];
+    const auto d = hubproto::encode_declare(id, kInject[i].type, attrs, static_cast<std::uint8_t>(n),
+                                            kInject[i].name, buf, sizeof(buf));
     if (!d.ok) break;
     inject_send(bus, hubproto::MsgType::Declare, id, buf, d.len);
     g_injected[i] = true;
@@ -3916,10 +4075,26 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
     }
   } else if (!std::strcmp(op, "name.set")) {
     o = name_set(reg, reader, m.args);
-    if (o.ok) persist_names(reg.names());
+    if (o.ok) {
+      persist_names(reg.names());
+      // The Matter co-processor shows the name for the bridged device: tell
+      // it the new one.
+      std::int64_t renamed = -1;
+      if (core::app::detail::get_int(reader, m.args, "entity", renamed) && renamed >= 0 &&
+          renamed <= 0xFFFF) {
+        republish_entity_name(bus, static_cast<std::uint16_t>(renamed));
+      }
+    }
   } else if (!std::strcmp(op, "name.clear")) {
     o = name_clear(reg, reader, m.args);
-    if (o.ok) persist_names(reg.names());
+    if (o.ok) {
+      persist_names(reg.names());
+      std::int64_t renamed = -1;
+      if (core::app::detail::get_int(reader, m.args, "entity", renamed) && renamed >= 0 &&
+          renamed <= 0xFFFF) {
+        republish_entity_name(bus, static_cast<std::uint16_t>(renamed));
+      }
+    }
   } else if (!std::strcmp(op, "room.set")) {
     o = room_set(reg, reader, m.args);
     if (o.ok) persist_rooms(reg.rooms());
@@ -4035,6 +4210,50 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "location.clear")) {
     clear_location();
     o = Outcome::done();
+  } else if (!std::strcmp(op, "presence.report")) {
+    // The phone says where its owner is. It becomes an entity, and the value goes
+    // out as an ordinary STATE — so a rule watching it fires exactly as it would
+    // for a motion sensor.
+    char name[24];
+    bool home = false;
+    o = presence_report_parse(reader, m.args, name, sizeof(name), home);
+    if (o.ok) {
+      const bool known = g_presence.find_by_name(name) != nullptr;
+      if (!g_presence.report(name, home, now / 1000)) {
+        o = Outcome::fail(Err::TableFull, "no room for another phone");
+      } else {
+        const auto* phone = g_presence.find_by_name(name);
+        if (phone != nullptr) {
+          publish_phone_presence(bus, reg, *phone, home);
+          if (!known) persist_presence();  // a new phone: the table changed
+          ESP_LOGI(kTag, "presence: %s is %s", name, home ? "home" : "away");
+        }
+        o = Outcome::at(static_cast<std::int64_t>(phone != nullptr ? phone->entity_id : 0));
+      }
+    }
+  } else if (!std::strcmp(op, "presence.list")) {
+    o = presence_list_parse(reader, m.args);
+    if (o.ok) {
+      char pb[512];
+      core::JsonWriter pw(pb, sizeof(pb));
+      core::app::encode_presence_list(pw, g_presence, now / 1000);
+      if (pw.ok()) {
+        hub_send(in.fd, pb, pw.size());
+        return;  // the answer is the frame itself
+      }
+      o = Outcome::fail(Err::Internal, "presence list too large");
+    }
+  } else if (!std::strcmp(op, "presence.remove")) {
+    std::int64_t entity = 0;
+    o = presence_remove_parse(reader, m.args, entity);
+    if (o.ok) {
+      if (!g_presence.remove(static_cast<std::uint16_t>(entity))) {
+        o = Outcome::fail(Err::NotFound, "no such phone");
+      } else {
+        reg.undeclare(static_cast<std::uint16_t>(entity));
+        persist_presence();
+      }
+    }
   } else if (!std::strcmp(op, "scene.put")) {
     o = scene_put(reg, scenes, reader, m.args);
     if (o.ok) persist_scenes(scenes);
@@ -4994,6 +5213,15 @@ extern "C" void app_main(void) {
   static EXT_RAM_BSS_ATTR Registry reg;
   restore_names(reg.names());
   restore_rooms(reg.rooms());
+  // The phones that report where their owners are (core/presence.hpp). They are
+  // entities right away, so a rule that points at one still points at something
+  // before the phone has said anything — its presence is simply unknown until
+  // the first report.
+  restore_presence();
+  for (std::size_t i = 0; i < g_presence.count(); ++i) {
+    const auto* phone = g_presence.at(i);
+    if (phone != nullptr) ensure_phone_entity(reg, *phone);
+  }
   static EXT_RAM_BSS_ATTR ChipRouter bus;           // presents itself as one Bus
   // publish(chip=0x01) -> UART1, publish(chip=0x02) -> UART2. A refused bind
   // means the brain is deaf on that link — say so.
@@ -5138,6 +5366,10 @@ extern "C" void app_main(void) {
 
   bool announced_zb = false;
   bool announced_th = false;
+  // The boot counter of the co-processor when the registry was last mirrored to
+  // it. A change means the chip rebooted: it restored its endpoints from NVS
+  // and has to be told the entities' names again.
+  std::uint8_t last_th_boot = 0;
 
   // Self-heal QUERY: if a bound chip hasn't declared yet (e.g. brain rebooted
   // after the chip, so we missed its HELLO), poke it every so often. On a QUERY
@@ -5236,33 +5468,43 @@ extern "C" void app_main(void) {
       ESP_LOGI(kTag, "chip 0x%02x (zigbee) declared; registry has %u entities",
                kZigbeeChipId, static_cast<unsigned>(reg.size()));
     }
-    if (!announced_th && coord.chip_ready(kThreadChipId)) {
-      announced_th = true;
-      ESP_LOGI(kTag, "chip 0x%02x (thread) declared; registry has %u entities",
-               kThreadChipId, static_cast<unsigned>(reg.size()));
-      // Mirror the whole registry as DECLAREs toward the Matter Bridge so it
-      // can allocate a bridged endpoint per entity. Without this the Bridge
-      // only sees entities that declare live *after* it comes up.
-      for (std::size_t i = 0; i < reg.size(); ++i) {
-        const auto* e = reg.entity_at(i);
-        if (!e) continue;
-        hubproto::AttrDecl attrs[8];
-        const std::uint8_t n = e->attr_count > 8 ? 8 : e->attr_count;
-        for (std::uint8_t k = 0; k < n; ++k) {
-          attrs[k].attr_id = e->attrs[k].attr_id;
-          attrs[k].value_type = e->attrs[k].value_type;
-          attrs[k].flags = e->attrs[k].flags;
+    // Mirror the whole registry as DECLAREs toward the Matter Bridge so it can
+    // allocate a bridged endpoint per entity — and refresh what it shows for
+    // the endpoints it already has (the name travels with the DECLARE).
+    //
+    // This happens every time the co-processor announces itself, not only the
+    // first time: a co-processor that reboots restores its endpoints from NVS,
+    // but the *names* live here, in the hub, so it has to be told them again.
+    // (Without that the devices come back unnamed, and a controller that
+    // cannot match them recreates them — in the Default Room, see
+    // docs/matter-backlog.md § "Rooms in Apple Home".)
+    if (coord.chip_ready(kThreadChipId)) {
+      const std::uint8_t th_boot = coord.boot_id_of(kThreadChipId);
+      if (!announced_th || th_boot != last_th_boot) {
+        if (announced_th) {
+          ESP_LOGI(kTag, "chip 0x%02x (thread) rebooted (boot_id %u): re-declaring the registry",
+                   kThreadChipId, static_cast<unsigned>(th_boot));
+        } else {
+          ESP_LOGI(kTag, "chip 0x%02x (thread) declared; registry has %u entities",
+                   kThreadChipId, static_cast<unsigned>(reg.size()));
         }
-        std::uint8_t buf[64];
-        auto r = hubproto::encode_declare(e->entity_id, e->device_type, attrs, n,
-                                          buf, sizeof(buf));
-        if (!r.ok) continue;
-        hubproto::Header d{};
-        d.version = hubproto::kProtocolVersion;
-        d.type = hubproto::MsgType::Declare;
-        d.chip_id = kThreadChipId;
-        d.entity_id = e->entity_id;
-        bus.publish(d, buf, r.len);
+        announced_th = true;
+        last_th_boot = th_boot;
+        for (std::size_t i = 0; i < reg.size(); ++i) {
+          const auto* e = reg.entity_at(i);
+          if (!e) continue;
+          hubproto::AttrDecl attrs[8];
+          const std::uint8_t n = e->attr_count > 8 ? 8 : e->attr_count;
+          for (std::uint8_t k = 0; k < n; ++k) {
+            attrs[k].attr_id = e->attrs[k].attr_id;
+            attrs[k].value_type = e->attrs[k].value_type;
+            attrs[k].flags = e->attrs[k].flags;
+          }
+          // The name rides along: the Matter controller shows it for the bridged
+          // device and matches the device against it after a restart.
+          publish_entity_declare(bus, e->entity_id, e->device_type, attrs, n,
+                                  reg.name_of(e->entity_id));
+        }
       }
     }
 
@@ -5459,6 +5701,17 @@ extern "C" void app_main(void) {
     // A reboot, a factory reset, a new app token or a forgotten network: the app asked for it,
     // the reply has had its time to go out, now do it.
     hub_action_service(t);
+
+    // A phone that stopped reporting: the hub stops believing it. Publishing "not
+    // home" for it keeps a rule from acting on an answer that is no longer true —
+    // otherwise a crashed app would leave the lights on forever.
+    {
+      const auto* stale = g_presence.take_stale(t / 1000);
+      if (stale != nullptr) {
+        publish_phone_presence(bus, reg, *stale, false);
+        ESP_LOGW(kTag, "presence: %s stopped reporting — treating it as away", stale->name);
+      }
+    }
 
     // Drain console requests (single-threaded core access here).
     Req* r = nullptr;
@@ -6134,6 +6387,9 @@ extern "C" void app_main(void) {
           }
           if (reg.set_name(id, r->name)) {
             persist_names(reg.names());
+            // The Matter co-processor shows the name for the bridged device:
+            // tell it the new one.
+            republish_entity_name(bus, id);
             std::snprintf(r->out, r->out_cap, "0x%04x -> \"%s\"\n",
                           static_cast<unsigned>(id), r->name);
           } else {

@@ -16,4 +16,8 @@ android {
 
 dependencies {
   implementation "com.squareup.okhttp3:okhttp:4.12.0"
+  // The geofence that says "I am home": the system's geofence service wakes the
+  // app when the phone crosses the zone, even though the app itself is killed
+  // in the background.
+  implementation "com.google.android.gms:play-services-location:21.3.0"
 }

@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "hubproto/payload.hpp"
@@ -32,7 +34,7 @@ TEST_CASE("encode_declare produces the SPEC 5 byte layout") {
   }};
   std::array<std::uint8_t, 32> out{};
   auto r = hubproto::encode_declare(0x1234, DeviceType::Light, attrs.data(),
-                                    2, out.data(), out.size());
+                                    2, nullptr, out.data(), out.size());
   REQUIRE(r.ok);
   REQUIRE(r.len == 4 + 3 * 2);
 
@@ -54,7 +56,7 @@ TEST_CASE("decode_declare round-trips") {
   }};
   std::array<std::uint8_t, 32> buf{};
   auto r = hubproto::encode_declare(0x0007, DeviceType::Sensor, attrs.data(),
-                                    3, buf.data(), buf.size());
+                                    3, nullptr, buf.data(), buf.size());
   REQUIRE(r.ok);
 
   DeclareView v{};
@@ -74,8 +76,76 @@ TEST_CASE("encode_declare reports overflow") {
   const std::array<AttrDecl, 1> attrs{{{0x01, ValueType::Bool, 0x01}}};
   std::array<std::uint8_t, 4> tiny{};  // needs 7
   auto r = hubproto::encode_declare(0x0001, DeviceType::Switch, attrs.data(),
-                                    1, tiny.data(), tiny.size());
+                                    1, nullptr, tiny.data(), tiny.size());
   CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("a DECLARE carries the entity's name") {
+  const std::array<AttrDecl, 1> attrs{{{0x1F, ValueType::U8, hubproto::kFlagReadable}}};
+  std::array<std::uint8_t, 64> buf{};
+  auto r = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                    "kitchen sensor", buf.data(), buf.size());
+  REQUIRE(r.ok);
+  REQUIRE(r.len == hubproto::declare_size_with_name(1, 14));
+
+  DeclareView v{};
+  REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));
+  CHECK(v.entity_id == 0x0300);
+  REQUIRE(v.name != nullptr);
+  CHECK(v.name_len == 14);
+  CHECK(std::string(v.name, v.name_len) == "kitchen sensor");
+
+  // No name: the DECLARE is the old shape and the reader sees no name.
+  auto r2 = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                     nullptr, buf.data(), buf.size());
+  REQUIRE(r2.ok);
+  CHECK(r2.len == hubproto::declare_size(1));
+  DeclareView v2{};
+  REQUIRE(hubproto::decode_declare(buf.data(), r2.len, v2));
+  CHECK(v2.name == nullptr);
+  CHECK(v2.name_len == 0);
+
+  // An empty name is the same as no name.
+  auto r3 = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                     "", buf.data(), buf.size());
+  REQUIRE(r3.ok);
+  CHECK(r3.len == hubproto::declare_size(1));
+}
+
+TEST_CASE("an old reader ignores the name, and a new one reads an old DECLARE") {
+  // The name is a tail: an older peer decodes the DECLARE as before.
+  const std::array<AttrDecl, 1> attrs{{{0x1F, ValueType::U8, hubproto::kFlagReadable}}};
+  std::array<std::uint8_t, 64> buf{};
+  auto r = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                    "lamp", buf.data(), buf.size());
+  REQUIRE(r.ok);
+
+  // A reader that stops after the attributes sees the old layout.
+  CHECK(r.len > hubproto::declare_size(1));
+  CHECK(buf[hubproto::declare_size(1)] == 4);  // the name's length byte
+
+  // A new reader of an old DECLARE (no tail) finds no name — and still works.
+  std::array<std::uint8_t, 8> old{};
+  auto r2 = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                     nullptr, old.data(), old.size());
+  REQUIRE(r2.ok);
+  DeclareView v{};
+  REQUIRE(hubproto::decode_declare(old.data(), r2.len, v));
+  CHECK(v.name == nullptr);
+  CHECK(v.attr_count == 1);
+}
+
+TEST_CASE("a name longer than the limit is cut") {
+  const std::array<AttrDecl, 1> attrs{{{0x1F, ValueType::U8, hubproto::kFlagReadable}}};
+  std::array<std::uint8_t, 128> buf{};
+  const std::string long_name(60, 'x');
+  auto r = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(), 1,
+                                    long_name.c_str(), buf.data(), buf.size());
+  REQUIRE(r.ok);
+  DeclareView v{};
+  REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));
+  REQUIRE(v.name != nullptr);
+  CHECK(v.name_len == hubproto::kDeclareNameMax);
 }
 
 TEST_CASE("declare_size is the buffer a DECLARE needs") {
@@ -92,14 +162,14 @@ TEST_CASE("declare_size is the buffer a DECLARE needs") {
   }
   std::array<std::uint8_t, hubproto::declare_size(8)> exact{};
   auto r = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(),
-                                    8, exact.data(), exact.size());
+                                    8, nullptr, exact.data(), exact.size());
   REQUIRE(r.ok);
   REQUIRE(r.len == hubproto::declare_size(8));
 
   // One byte less: the encoder has to refuse it.
   std::array<std::uint8_t, hubproto::declare_size(8) - 1> shortbuf{};
   auto r2 = hubproto::encode_declare(0x0300, DeviceType::Sensor, attrs.data(),
-                                     8, shortbuf.data(), shortbuf.size());
+                                     8, nullptr, shortbuf.data(), shortbuf.size());
   CHECK_FALSE(r2.ok);
 
   DeclareView v{};

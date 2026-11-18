@@ -10,6 +10,7 @@
 
 #include "core/event_log.hpp"
 #include "core/json.hpp"
+#include "core/presence.hpp"
 #include "core/rule_engine.hpp"
 #include "core/scene_table.hpp"
 #include "core/sun.hpp"
@@ -45,6 +46,7 @@ inline const char* attr_name(std::uint8_t id) noexcept {
     case 0x41: return "mode";
     case 0x50: return "occupied";
     case 0x51: return "contact";
+    case 0x52: return "home";
     case 0x60: return "event";
     default: return nullptr;
   }
@@ -62,6 +64,7 @@ inline const char* device_name(hubproto::DeviceType t) noexcept {
     case hubproto::DeviceType::Contact: return "contact";
     case hubproto::DeviceType::Button: return "button";
     case hubproto::DeviceType::Chip: return "chip";
+    case hubproto::DeviceType::Phone: return "phone";
   }
   return "unknown";
 }
@@ -676,6 +679,37 @@ inline void encode_state(JsonWriter& w, std::uint16_t entity, std::uint8_t attr,
 
 inline void encode_time(JsonWriter& w, std::int64_t time, const char* tz, bool synced) noexcept {
   w.begin_object().kv("type", "time").kv("time", time).kv("tz", tz).kv("synced", synced).end_object();
+}
+
+// ---- presence: the phones that report where they are -------------------------------------
+
+// One phone: its entity id, its name, and whether it is home right now.
+// `known` is false when the phone has not reported (or has gone quiet for too long):
+// its presence is then UNKNOWN, not "away" — the app must not show "away" for a phone
+// that simply stopped talking.
+inline void write_presence(JsonWriter& w, std::uint16_t entity, const char* name, bool known,
+                           bool home) noexcept {
+  w.begin_object().kv("entity", static_cast<std::int64_t>(entity));
+  w.key("name");
+  if (name != nullptr) w.str(name);
+  else w.null();
+  w.kv("known", known).kv("home", home);
+  w.end_object();
+}
+
+// The whole table, as one frame: {"type":"presence","phones":[…]}
+template <typename Table>
+void encode_presence_list(JsonWriter& w, const Table& table, std::uint32_t now_s) noexcept {
+  w.begin_object().kv("type", "presence");
+  w.key("phones").begin_array();
+  for (std::size_t i = 0; i < table.count(); ++i) {
+    const auto* p = table.at(i);
+    if (p == nullptr) continue;
+    const auto st = p->state(now_s);
+    const bool known = st != core::PhonePresence::State::Unknown;
+    write_presence(w, p->entity_id, p->name, known, st == core::PhonePresence::State::Home);
+  }
+  w.end_array().end_object();
 }
 
 // The firmware session of a Zigbee device: the hub pushes a vendor .ota file to

@@ -623,6 +623,56 @@ Outcome scene_apply(const Reg& reg, const Scenes& scenes, const Reader& r, int a
   return Outcome::counts(static_cast<std::int64_t>(res.sent), static_cast<std::int64_t>(res.skipped));
 }
 
+// ---- presence --------------------------------------------------------------------------------
+
+/**
+ * `presence.report {name, home}` — the phone says where its owner is.
+ *
+ * The phone is identified by its NAME, not by an entity id: the app asks the hub to
+ * make it an entity, and the hub answers with the id it chose. So a phone that has
+ * never been seen before works the same as one that is known.
+ *
+ * `home` is a boolean: true = the owner is home.
+ */
+template <typename Reader>
+Outcome presence_report_parse(const Reader& r, int args, char* name, std::size_t name_cap, bool& home) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  if (!r.get_string(r.find(args, "name"), name, name_cap)) {
+    return Outcome::fail(Err::BadArgs, "name");
+  }
+  if (name[0] == '\0') return Outcome::fail(Err::BadArgs, "name: empty");
+  // "home" is a boolean. A number is accepted too (0/1), because some clients
+  // send numbers where a boolean belongs.
+  const int h = r.find(args, "home");
+  if (!r.get_bool(h, home)) {
+    std::int64_t v = 0;
+    if (!r.get_i64(h, v) || (v != 0 && v != 1)) {
+      return Outcome::fail(Err::BadArgs, "home: true or false");
+    }
+    home = (v == 1);
+  }
+  return Outcome::done();
+}
+
+/** `presence.list` — nothing to parse; the caller answers with the table. */
+template <typename Reader>
+Outcome presence_list_parse(const Reader& r, int args) {
+  if (args < 0) return Outcome::fail(Err::BadArgs, "args");
+  return Outcome::done();
+}
+
+/**
+ * `presence.remove {entity}` — the person removed the phone in the app.
+ * The caller removes it from the table.
+ */
+template <typename Reader>
+Outcome presence_remove_parse(const Reader& r, int args, std::int64_t& entity) {
+  if (args < 0 || !r.get_i64(r.find(args, "entity"), entity) || entity < 0 || entity > 0xFFFF) {
+    return Outcome::fail(Err::BadArgs, "entity");
+  }
+  return Outcome::done();
+}
+
 // ---- location --------------------------------------------------------------------------------
 
 /** `location.set {lat, lon}` (degrees, north/east positive). The caller stores it. */

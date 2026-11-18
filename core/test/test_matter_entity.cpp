@@ -18,7 +18,8 @@ struct FakeEndpoint {
   EndpointView view;
 
   FakeEndpoint(std::uint16_t endpoint_id, std::initializer_list<std::uint32_t> cluster_ids,
-               std::initializer_list<std::uint16_t> device_types = {}) {
+               std::initializer_list<std::uint16_t> device_types = {},
+               std::uint32_t power_source_features = 0) {
     std::size_t n = 0;
     for (auto c : cluster_ids) clusters[n++] = c;
     view.endpoint_id = endpoint_id;
@@ -28,6 +29,7 @@ struct FakeEndpoint {
     for (auto t : device_types) types[n++] = t;
     view.device_types = types;
     view.device_type_count = n;
+    view.power_source_features = power_source_features;
   }
 };
 
@@ -152,12 +154,38 @@ TEST_CASE("sensors: temperature and humidity on one endpoint, presence and conta
 
   FakeEndpoint contact(3, {kBooleanState});
   CHECK(plan_from_endpoint(contact.view).device_type == DeviceType::Contact);
+}
 
+TEST_CASE("the Power Source cluster is a battery only when its BAT feature says so") {
   // A battery-only endpoint is a Sensor: nothing better describes a PowerSource.
-  FakeEndpoint battery(4, {kPowerSource});
+  FakeEndpoint battery(4, {kPowerSource}, {}, kPowerSourceFeatureBattery);
   const auto b = plan_from_endpoint(battery.view);
   CHECK(b.device_type == DeviceType::Sensor);
+  REQUIRE(b.attr_count == 1);
+  REQUIRE(find_attr(b, A::kBattery) != nullptr);
   CHECK(find_attr(b, A::kBattery)->flags == (hubproto::kFlagReadable | hubproto::kFlagReportable));
+  CHECK(battery.view.has_battery());
+
+  // The same cluster on a mains-powered device: the WIRED feature instead of BAT. It is not
+  // a battery, so the hub must not declare a battery that will never report anything.
+  FakeEndpoint wired(5, {kPowerSource}, {}, kPowerSourceFeatureWired);
+  const auto w = plan_from_endpoint(wired.view);
+  CHECK(w.device_type == DeviceType::Sensor);
+  CHECK(w.attr_count == 0);
+  CHECK(find_attr(w, A::kBattery) == nullptr);
+  CHECK_FALSE(wired.view.has_battery());
+
+  // A Power Source cluster whose feature map was not read (0): we do not know what it
+  // describes, so we do not claim a battery.
+  FakeEndpoint unknown(6, {kPowerSource});
+  CHECK(plan_from_endpoint(unknown.view).attr_count == 0);
+  CHECK_FALSE(unknown.view.has_battery());
+
+  // A device with both features (a battery that can also run on mains) is a battery.
+  FakeEndpoint both(7, {kPowerSource}, {},
+                    kPowerSourceFeatureBattery | kPowerSourceFeatureWired);
+  CHECK(both.view.has_battery());
+  REQUIRE(find_attr(plan_from_endpoint(both.view), A::kBattery) != nullptr);
 }
 
 TEST_CASE("an endpoint with no cluster the hub models is skipped") {
@@ -165,6 +193,34 @@ TEST_CASE("an endpoint with no cluster the hub models is skipped") {
   const auto p = plan_from_endpoint(root.view);
   CHECK_FALSE(p.known);
   CHECK(p.attr_count == 0);
+}
+
+TEST_CASE("a node's battery rides along with the measurements of the same entity") {
+  // A sensor box with a temperature endpoint and a battery endpoint: one entity, both.
+  FakeEndpoint temperature(1, {kTemperature}, {0x0302 /* Temperature Sensor */});
+  FakeEndpoint battery(2, {kPowerSource}, {}, kPowerSourceFeatureBattery);
+  const EndpointView endpoints[] = {temperature.view, battery.view};
+
+  const NodePlan n = plan_node(endpoints, 2);
+  CHECK(n.known);
+  REQUIRE(n.entity_count == 1);
+  const NodeEntity& sensor = n.entities[0];
+  CHECK(sensor.device_type == DeviceType::Sensor);
+  REQUIRE(sensor.attr_count == 2);
+
+  const NodeAttr* b = find_node_attr(sensor, A::kBattery);
+  REQUIRE(b != nullptr);
+  CHECK(b->endpoint == 2);       // the battery lives on its own endpoint
+  CHECK(b->cluster == kPowerSource);
+  CHECK(b->path == 0x000C);      // BatPercentRemaining
+
+  // The same box with a mains power source instead: no battery attribute at all.
+  FakeEndpoint wired(2, {kPowerSource}, {}, kPowerSourceFeatureWired);
+  const EndpointView wired_endpoints[] = {temperature.view, wired.view};
+  const NodePlan w = plan_node(wired_endpoints, 2);
+  CHECK(w.known);
+  REQUIRE(w.entity_count == 1);
+  CHECK(find_node_attr(w.entities[0], A::kBattery) == nullptr);
 }
 
 TEST_CASE("one node: measurement endpoints merge into one entity, actuators stay separate") {

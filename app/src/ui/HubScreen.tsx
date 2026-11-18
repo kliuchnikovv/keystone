@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import type { Commands } from '../hooks/useCommands';
+import { useGeofence, presenceRequest } from '../hooks/useGeofence';
 import type { HubConnection } from '../hooks/useHub';
 import { describeLocation, locationRequest } from '../model/automation';
 import { chipRows, chipSummary } from '../model/health';
@@ -9,6 +10,7 @@ import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
 import { ScreenHeader } from './ScreenHeader';
 import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
+import { PresenceCard } from './PresenceCard';
 import { WifiCard } from './WifiCard';
 import { PALETTES, THEMES, radius, useTheme, type PaletteId } from './theme';
 
@@ -175,6 +177,16 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
   // One dot for the whole hub: healthy, degraded (a chip is quiet) or offline.
   const hubTone = home.status !== 'ready' ? 'bad' : home.chips.some((c) => c.status !== 'ready') ? 'warn' : 'good';
   const hubStatus = hubTone === 'bad' ? 'offline' : hubTone === 'warn' ? 'degraded' : 'healthy';
+
+  // Watch the home zone (the hub's own position) and tell the hub when the
+  // phone comes or goes. The watching itself is native code, so it keeps
+  // working when the app is closed.
+  useGeofence(
+    hub?.location ?? null,
+    (atHome) => {
+      void commands.request('presence.report', presenceRequest(atHome));
+    },
+  );
   return (
     <ScrollView contentContainerStyle={styles.page}>
       <ScreenHeader title="Hub" />
@@ -205,6 +217,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
 
       <WifiCard home={home} commands={commands} />
       <LocationCard home={home} commands={commands} />
+      <PresenceCard home={home} commands={commands} />
       <MatterBridgeCard home={home} />
 
       <Text style={[styles.section, { color: t.muted }]}>CHIPS</Text>

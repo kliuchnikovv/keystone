@@ -225,6 +225,15 @@ DECLARE payload:
     uint8 attr_id           # semantics scoped to device_type
     uint8 value_type        # section 6.2
     uint8 flags             # bit0 readable, bit1 writable, bit2 reportable
+  uint8  name_len           # optional tail: 0 = no name
+  char   name[name_len]     # the name a person gave the entity (up to 31 bytes)
+
+  The name is optional and a reader that does not want it ignores the tail:
+  the entities of a chip that knows no names (the Zigbee coordinator) send
+  none, and the hub — which holds the names — puts them into the DECLARE it
+  mirrors to the co-processor. The Matter bridge shows the name for the
+  bridged device and matches the device against it after a restart, which is
+  what keeps the room the user gave it in Apple Home.
 
 DECLARE_END payload:
   (none)
@@ -263,7 +272,7 @@ exposed as a Matter accessory with no second modeling pass.
 | device_type | value | Matter Device Type | Typical attributes (attr_id) |
 |-------------|-------|--------------------|------------------------------|
 | light       | 0x01  | On/Off, Dimmable, Color-Temperature or Extended Color Light | on_off(0x01), brightness(0x02), color_xy(0x03), color_temp(0x04) |
-| sensor      | 0x02  | Temperature / Humidity / Light Sensor | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
+| sensor      | 0x02  | Temperature / Light Sensor, plus a separate Humidity Sensor (0x0307) when humidity is reported | temperature(0x10), humidity(0x11), illuminance(0x12), battery(0x1F) |
 | switch      | 0x03  | On/Off Plug-in Unit | on_off(0x01), power_w(0x13), energy_wh(0x14) |
 | cover       | 0x04  | Window Covering     | position(0x20), state(0x21) — not implemented yet |
 | lock        | 0x05  | Door Lock          | locked(0x30) — not implemented yet |
@@ -271,7 +280,18 @@ exposed as a Matter accessory with no second modeling pass.
 | occupancy   | 0x07  | Occupancy Sensor   | occupied(0x50) |
 | contact     | 0x08  | Contact Sensor     | contact(0x51) |
 | button      | 0x09  | Generic Switch     | event(0x60) |
+| phone       | 0x0B  | — (not bridged; not a radio device — see below) | home(0x52) |
 | chip        | 0x0A  | — (not bridged; may later map to Matter diagnostics clusters) | uptime_s(0x70, u32), heap_free(0x71, u32), boot_id(0x72, u8), rx_frames(0x73, u32), tx_frames(0x74, u32), crc_errors(0x75, u16), thread_role(0x76, u8), thread_children(0x77, u8) |
+
+**The phone is a virtual entity.** It is not a radio device and not a Matter accessory:
+the phone tells the hub where its owner is (`presence.report` in the app protocol), and
+the hub makes it an entity with one boolean attribute, `home` (0x52). Because it looks
+like any other device, a rule watches it the same way it watches a motion sensor — the
+rule engine needs nothing new. Each phone is its own entity, so a house with two people
+has two entities and two rules. The phone's presence is **unknown** until it reports (and
+again after it has been silent for too long) — unknown is not "away", so a rule that
+watches it stays quiet rather than acting on a stale answer. See
+[docs/automations.md §5.2](automations.md).
 
 **How a Zigbee endpoint becomes one of these** (`core/zcl_profile.hpp`): the clusters decide,
 and so does the metering. An endpoint that reports its **own** power draw (Electrical
@@ -281,6 +301,12 @@ cluster (it shares its firmware with the bulbs), so "On/Off + Level ⇒ a dimmab
 to turn a plug into a lamp. A lamp never measures its own consumption: the socket does.
 The rule is applied from the stored capabilities too, so a device paired with an older
 firmware is corrected on the next coordinator boot instead of needing a re-pair.
+A Matter controller creates an accessory from the endpoint's *device type*, not from every
+cluster on it: Apple Home ignores `RelativeHumidityMeasurement` (0x0405) on a Temperature
+Sensor. So the bridge gives a combined sensor **two endpoints** — the primary type keeps the
+stable `UniqueID`, and humidity becomes a separate `Humidity Sensor` (0x0307) with the suffix
+`:h`. A humidity-only sensor stays a single endpoint. The secondary endpoint's channel is
+persisted with the bridge address.
 
 **Attribute units** (`libhubproto/include/hubproto/attrs.hpp`; Zigbee and Matter agree on most of
 them, the rest are converted by `hubproto/units.hpp`):
@@ -311,9 +337,13 @@ cluster picks the type (thermostat > light > occupancy > IAS > sensor > button >
 cluster of the endpoint adds attributes, so a motion sensor that also reports temperature is one
 `occupancy` entity with a `temperature` attribute. `battery` is only declared on devices that are
 not plugs or lamps (those carry Power Configuration for the mains voltage). The mapping is
-`core/zcl_profile.hpp`, host-tested. On the Matter side `core/matter_plan.hpp` turns an entity into one
-endpoint: the device type from its primary attributes plus extra clusters (temperature, humidity,
-illuminance, battery as Power Source, power and energy metering) on the same endpoint.
+`core/zcl_profile.hpp`, host-tested. On the Matter side `core/matter_plan.hpp` turns an entity into
+one endpoint (or two, for temperature/humidity — see §6.1): the device type from its primary
+attributes plus extra clusters (temperature, illuminance, battery as Power Source, power and
+energy metering) on the same endpoint. The reverse
+(`core/matter_entity.hpp`, the brain's commissioner) turns a Matter endpoint into a hub entity: the
+Power Source cluster becomes the `battery` attribute only when the cluster's feature map says BAT —
+the same cluster with WIRED describes a mains supply, which has no battery to report.
 
 The `chip` device_type is the co-processor itself, declared as a self entity
 whose `entity_id` equals the chip's own `chip_id` (0x01, 0x02, … — the registry

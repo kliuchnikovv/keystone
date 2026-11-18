@@ -2,4 +2,10 @@
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+  <!-- The geofence that says "I am home". The system's geofence service watches
+       the zone and wakes the app when the phone crosses it — the app itself is
+       killed in the background long before that. -->
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 </manifest>

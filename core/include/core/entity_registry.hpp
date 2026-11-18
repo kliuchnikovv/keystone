@@ -49,6 +49,18 @@ class EntityRegistry {
   // false if the entity has more than MaxAttrs attributes or the table is full.
   bool declare(std::uint8_t chip_id, const hubproto::DeclareView& view) noexcept;
 
+  /**
+   * Add an entity that no chip owns — a phone that reports its presence
+   * (core/presence.hpp). It is owned by `chip_id` like any other, so the chip
+   * bookkeeping stays consistent, but it never disappears on a chip resync.
+   *
+   * The attributes are given one by one. Returns false if the table is full, the
+   * entity has too many attributes, or an attribute's type is not known.
+   */
+  bool declare_virtual(std::uint8_t chip_id, std::uint16_t entity_id,
+                       hubproto::DeviceType device_type,
+                       const hubproto::AttrDecl* attrs, std::uint8_t count) noexcept;
+
   // Number of live entities.
   std::size_t size() const noexcept;
 
@@ -160,6 +172,28 @@ bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::declare(
     e->attrs[i].attr_id = a.attr_id;
     e->attrs[i].value_type = a.value_type;
     e->attrs[i].flags = a.flags;
+    e->attrs[i].has_value = false;
+  }
+  e->in_use = true;
+  return true;
+}
+
+template <std::size_t MaxEntities, std::size_t MaxAttrs, std::size_t MaxNameLen>
+bool EntityRegistry<MaxEntities, MaxAttrs, MaxNameLen>::declare_virtual(
+    std::uint8_t chip_id, std::uint16_t entity_id, hubproto::DeviceType device_type,
+    const hubproto::AttrDecl* attrs, std::uint8_t count) noexcept {
+  if (count > MaxAttrs) return false;
+  Entity* e = slot_for(entity_id);
+  if (e == nullptr) return false;
+
+  e->entity_id = entity_id;
+  e->chip_id = chip_id;
+  e->device_type = device_type;
+  e->attr_count = count;
+  for (std::uint8_t i = 0; i < count; ++i) {
+    e->attrs[i].attr_id = attrs[i].attr_id;
+    e->attrs[i].value_type = attrs[i].value_type;
+    e->attrs[i].flags = attrs[i].flags;
     e->attrs[i].has_value = false;
   }
   e->in_use = true;

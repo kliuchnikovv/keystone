@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 // lucide geometry as the design mockups (24×24 grid, round caps, 2 px stroke).
 export type GlyphName =
   | 'light' | 'switch' | 'sensor' | 'occupancy' | 'contact' | 'cover' | 'lock' | 'climate' | 'button'
+  | 'phone'
   | 'home' | 'automation' | 'hub' | 'history' | 'plus' | 'pencil' | 'chevron' | 'back' | 'play' | 'check'
   | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff' | 'battery' | 'humidity' | 'plug';
 
@@ -118,6 +119,14 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
         <>
           <Circle cx="12" cy="12" r="10" {...c} />
           <Circle cx="12" cy="12" r="3" {...on} />
+        </>
+      );
+    case 'phone':
+      // A phone that reports where its owner is.
+      return (
+        <>
+          <Rect x="6" y="2" width="12" height="20" rx="2.5" {...c} />
+          <Path d="M10.5 18.5h3" {...c} />
         </>
       );
 

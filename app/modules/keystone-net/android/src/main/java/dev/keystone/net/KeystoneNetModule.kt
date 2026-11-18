@@ -28,6 +28,7 @@ private const val EVENT_HUB_FOUND = "onHubFound"
 private const val EVENT_HUB_LOST = "onHubLost"
 private const val EVENT_BLE_ADVERTISEMENT = "onBleAdvertisement"
 private const val EVENT_BLE_STATE = "onBleState"
+private const val EVENT_PRESENCE = "onPresence"
 private const val SERVICE_TYPE = "_keystone._tcp."
 
 private fun hex(bytes: ByteArray): String =
@@ -81,7 +82,7 @@ class KeystoneNetModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("KeystoneNet")
-    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST, EVENT_BLE_ADVERTISEMENT, EVENT_BLE_STATE)
+    Events(EVENT_SOCKET, EVENT_HUB_FOUND, EVENT_HUB_LOST, EVENT_BLE_ADVERTISEMENT, EVENT_BLE_STATE, EVENT_PRESENCE)
 
     Function("connect") { id: String, url: String, fingerprint: String -> connect(id, url, fingerprint) }
     Function("connectLearning") { id: String, url: String -> openSocket(id, url, null) }
@@ -96,11 +97,57 @@ class KeystoneNetModule : Module() {
     Function("stopBleScan") { Unit }
     Function("bleStatus") { mapOf<String, Any?>("state" to "unsupported", "authorization" to "notDetermined") }
 
+    // ---- presence: the geofence that says "I am home" ------------------------------
+    //
+    // The region monitoring lives in the native code, not in JS: Android kills
+    // the app in the background, but the system's geofence service still wakes
+    // us when the phone crosses the zone.
+    Function("startGeofence") { latitude: Double, longitude: Double, radius: Double ->
+      startGeofence(latitude, longitude, radius)
+    }
+    Function("stopGeofence") { stopGeofence() }
+    Function("geofenceStatus") { mapOf<String, Any?>("authorization" to geofenceStatus()) }
+    Function("requestLocationPermission") { requestLocationPermission() }
+
     OnDestroy {
       stopDiscovery()
       conns.values.forEach { it.ws.cancel() }
       conns.clear()
     }
+  }
+
+  // ---- presence: the geofence that says "I am home" ---------------------------------
+
+  private fun ensureGeofence(): GeofenceWatcher {
+    val existing = KeystonePresenceBridge.watcher
+    if (existing != null) return existing
+    val watcher = GeofenceWatcher(
+      context,
+      onChange = { home -> sendEvent(EVENT_PRESENCE, mapOf<String, Any?>("home" to home)) },
+      onError = { message -> sendEvent(EVENT_PRESENCE, mapOf<String, Any?>("error" to message)) },
+    )
+    KeystonePresenceBridge.watcher = watcher
+    return watcher
+  }
+
+  private fun startGeofence(latitude: Double, longitude: Double, radius: Double) {
+    ensureGeofence().start(latitude, longitude, radius)
+  }
+
+  private fun stopGeofence() {
+    KeystonePresenceBridge.watcher?.stop()
+    KeystonePresenceBridge.watcher = null
+  }
+
+  private fun geofenceStatus(): String {
+    return KeystonePresenceBridge.watcher?.authorizationStatus() ?: "notDetermined"
+  }
+
+  private fun requestLocationPermission() {
+    // The permission is asked for by the JS side (expo-location), which knows how
+    // to show the system's dialog. Here we only make sure the watcher exists so
+    // it can start as soon as the permission arrives.
+    ensureGeofence()
   }
 
   // ---- pinned WebSocket ----------------------------------------------------------------

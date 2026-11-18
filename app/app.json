@@ -17,6 +17,8 @@
         "NSLocalNetworkUsageDescription": "Keystone talks to your hub on your home network.",
         "NSBluetoothAlwaysUsageDescription": "Keystone looks for the devices around you when you add one, so it can tell you which device is next to you.",
         "NSCameraUsageDescription": "Keystone reads the QR code printed on a device so it can add that device to your hub.",
+        "NSLocationWhenInUseUsageDescription": "Keystone watches when you arrive home or leave, so an automation can turn the light on.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keystone watches when you arrive home or leave, so an automation can turn the light on — even when the app is closed.",
         "NSBonjourServices": [
           "_keystone._tcp"
         ],

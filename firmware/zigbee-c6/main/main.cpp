@@ -541,8 +541,11 @@ void send_declarations() {
     const std::size_t attr_count = zcl::attrs_for(e.caps, attrs, kMaxCache);
     if (attr_count == 0) continue;
     std::uint8_t buf[4 + 3 * kMaxCache];
+    // No name: the hub holds the names and mirrors its own DECLAREs to the
+    // co-processor with them.
     auto r = hubproto::encode_declare(e.entity_id, e.type, attrs,
-                                      static_cast<std::uint8_t>(attr_count), buf, sizeof(buf));
+                                      static_cast<std::uint8_t>(attr_count), nullptr, buf,
+                                      sizeof(buf));
     if (r.ok) {
       publish_locked(make_header(hubproto::MsgType::Declare, e.entity_id, 0), buf, r.len);
       ++declared;

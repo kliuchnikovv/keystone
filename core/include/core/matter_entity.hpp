@@ -44,18 +44,33 @@ enum Cluster : std::uint32_t {
 // The Identify command: IdentifyTime (u16, seconds).
 inline constexpr std::uint32_t kIdentifyCommand = 0x00;
 
+// The Power Source cluster's feature map (attribute 0xFFFD). The cluster describes *a* power
+// source, not necessarily a battery: a mains-powered device has the same cluster with the
+// WIRED feature instead of BAT. Only the BAT bit makes it a battery.
+//
+// Feature bits (Matter 1.x, Power Source cluster 0x002F):
+//   bit 0 = WIRED, bit 1 = BAT, bit 2 = RECHARGABLE, bit 3 = REPLACEABLE
+inline constexpr std::uint32_t kPowerSourceFeatureWired = 1u << 0;
+inline constexpr std::uint32_t kPowerSourceFeatureBattery = 1u << 1;
+
 // One hub attribute and where it lives on a Matter endpoint.
 //
 // `path` is the attribute to read and subscribe. How a *command* reaches the device is
 // decided by `to_matter` below, not here: Matter refuses writes to several attributes the
 // hub treats as writable (OnOff and CurrentLevel are read-only; you drive them through the
 // OnOff/LevelControl commands), so a table entry cannot say it on its own.
+//
+// `needs_feature` is the cluster's feature bit the endpoint must advertise for the binding to
+// apply at all (0 = the cluster alone is enough). The Power Source cluster describes *a*
+// power source: a mains-powered device carries the same cluster with the WIRED feature and no
+// battery, so the battery binding needs the BAT bit.
 struct Binding {
   std::uint8_t attr;        // hubproto::attr id
   std::uint32_t cluster;    // Matter cluster id
   std::uint32_t path;       // Matter attribute id to read/subscribe
   hubproto::ValueType type; // the type of the hub-side value
   std::uint8_t flags;       // kFlagReadable | kFlagWritable | kFlagReportable
+  std::uint32_t needs_feature;  // 0 = no feature needed
 };
 
 // The table, in the order attributes should appear in a DECLARE.
@@ -66,35 +81,71 @@ struct Binding {
 inline constexpr Binding kBindings[] = {
     // level / colour: the app writes them, subscriptions report them back.
     {hubproto::attr::kOnOff, kOnOffCluster, 0x0000, hubproto::ValueType::Bool,
-     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kBrightness, kLevelControl, 0x0000, hubproto::ValueType::U8,
-     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kColorTemp, kColorControl, 0x0007, hubproto::ValueType::U16,
-     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable, 0},
     // sensors: read-only, report-driven (units.hpp turns the device units into ours).
     {hubproto::attr::kTemperature, kTemperature, 0x0000, hubproto::ValueType::I16,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kHumidity, kHumidity, 0x0000, hubproto::ValueType::U16,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kIlluminance, kIlluminance, 0x0000, hubproto::ValueType::U16,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
+    // The battery: the Power Source cluster *and* its BAT feature. A wired-only Power Source
+    // (the same cluster, WIRED feature) is a mains supply: there is no battery to report.
     {hubproto::attr::kBattery, kPowerSource, 0x000C /* BatPercentRemaining */,
-     hubproto::ValueType::U8, hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::ValueType::U8, hubproto::kFlagReadable | hubproto::kFlagReportable,
+     kPowerSourceFeatureBattery},
     {hubproto::attr::kOccupied, kOccupancy, 0x0000, hubproto::ValueType::Bool,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kContact, kBooleanState, 0x0000, hubproto::ValueType::Bool,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
     // thermostat: LocalTemperature is part of the same cluster, the other two are writable.
     {hubproto::attr::kTemperature, kThermostat, 0x0000, hubproto::ValueType::I16,
-     hubproto::kFlagReadable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kSetpoint, kThermostat, 0x0012 /* OccupiedHeatingSetpoint */,
      hubproto::ValueType::I16,
-     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable, 0},
     {hubproto::attr::kMode, kThermostat, 0x001C /* SystemMode */, hubproto::ValueType::Enum8,
-     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable},
+     hubproto::kFlagReadable | hubproto::kFlagWritable | hubproto::kFlagReportable, 0},
 };
 
 inline constexpr std::size_t kBindingCount = sizeof(kBindings) / sizeof(kBindings[0]);
+
+// What an endpoint says about itself: the DeviceTypeList and the ServerList of its
+// Descriptor. The pointers refer to storage that outlives the call.
+struct EndpointView {
+  std::uint16_t endpoint_id = 0;
+  const std::uint16_t* device_types = nullptr;
+  std::size_t device_type_count = 0;
+  const std::uint32_t* clusters = nullptr;
+  std::size_t cluster_count = 0;
+  // The feature map of the Power Source cluster on this endpoint (attribute 0xFFFD of that
+  // cluster), 0 when the endpoint has no Power Source cluster or it was not read. Only the
+  // BAT bit turns the cluster into a battery: the same cluster describes a mains supply with
+  // the WIRED bit instead, and that device has no battery to report.
+  std::uint32_t power_source_features = 0;
+
+  bool has_cluster(std::uint32_t id) const noexcept {
+    for (std::size_t i = 0; i < cluster_count; ++i) {
+      if (clusters[i] == id) return true;
+    }
+    return false;
+  }
+  bool has_device_type(std::uint16_t id) const noexcept {
+    for (std::size_t i = 0; i < device_type_count; ++i) {
+      if (device_types[i] == id) return true;
+    }
+    return false;
+  }
+  // The endpoint is battery powered: it has a Power Source cluster that says so.
+  bool has_battery() const noexcept {
+    return has_cluster(kPowerSource) &&
+           (power_source_features & kPowerSourceFeatureBattery) != 0;
+  }
+};
 
 // The binding for a hub attribute, or nullptr.
 inline const Binding* binding_for_attr(std::uint8_t attr) noexcept {
@@ -112,28 +163,15 @@ inline const Binding* binding_for_path(std::uint32_t cluster, std::uint32_t path
   return nullptr;
 }
 
-// What an endpoint says about itself: the DeviceTypeList and the ServerList of its
-// Descriptor. The pointers refer to storage that outlives the call.
-struct EndpointView {
-  std::uint16_t endpoint_id = 0;
-  const std::uint16_t* device_types = nullptr;
-  std::size_t device_type_count = 0;
-  const std::uint32_t* clusters = nullptr;
-  std::size_t cluster_count = 0;
-
-  bool has_cluster(std::uint32_t id) const noexcept {
-    for (std::size_t i = 0; i < cluster_count; ++i) {
-      if (clusters[i] == id) return true;
-    }
-    return false;
-  }
-  bool has_device_type(std::uint16_t id) const noexcept {
-    for (std::size_t i = 0; i < device_type_count; ++i) {
-      if (device_types[i] == id) return true;
-    }
-    return false;
-  }
-};
+// Does the binding apply to this endpoint? The cluster must be there, and the cluster's
+// feature map must carry the bit the binding needs (the battery needs the Power Source's BAT
+// feature: the same cluster with WIRED describes a mains supply).
+inline bool binding_applies(const Binding& b, const EndpointView& ep) noexcept {
+  if (!ep.has_cluster(b.cluster)) return false;
+  if (b.needs_feature == 0) return true;
+  if (b.cluster != kPowerSource) return false;
+  return (ep.power_source_features & b.needs_feature) != 0;
+}
 
 // Matter device types that change the hub's DeviceType without changing the attributes:
 // a plug on an OnOff cluster is a Switch, not a Light.
@@ -163,7 +201,7 @@ inline EntityPlan plan_from_endpoint(const EndpointView& ep) noexcept {
   };
 
   for (const auto& b : kBindings) {
-    if (ep.has_cluster(b.cluster)) add(b);
+    if (binding_applies(b, ep)) add(b);
   }
   if (plan.attr_count == 0) return plan;
 
@@ -242,7 +280,7 @@ inline const Binding* pick_binding(const EndpointView& ep, std::uint8_t attr) no
   for (const auto& b : kBindings) {
     if (b.attr != attr) continue;
     if (fallback == nullptr) fallback = &b;
-    if (!ep.has_cluster(b.cluster)) continue;
+    if (!binding_applies(b, ep)) continue;
     if (match == nullptr || b.cluster == kThermostat) match = &b;
   }
   return match != nullptr ? match : fallback;

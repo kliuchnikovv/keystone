@@ -17,10 +17,12 @@ add_executable(core_tests
   test_timer_table.cpp
   test_schedule_table.cpp
   test_scene_table.cpp
+  test_presence.cpp
   test_sun.cpp
   test_zcl_profile.cpp
   test_matter_plan.cpp
   test_matter_entity.cpp
+  test_matter_identity.cpp
   test_matter_onboarding.cpp
   test_wifi_policy.cpp
   test_setup_mode.cpp

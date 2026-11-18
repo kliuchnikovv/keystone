@@ -21,21 +21,52 @@ device" below.
 
 ## Device types on the bridge
 
-Every hub entity becomes one bridged endpoint; `core/matter_plan.hpp` (host-tested) picks the Matter
-device type from its attributes and the extra clusters to add, and the choice rides in the endpoint's
-persisted "device type id" (low 16 bits the Matter device type, above them the extras), so a restored
-endpoint has exactly the clusters it was created with:
+Every hub entity becomes at least one bridged endpoint; `core/matter_plan.hpp` (host-tested) picks
+the Matter device type from its attributes and the extra clusters to add, and the choice rides in
+the endpoint's persisted "device type id" (low 16 bits the Matter device type, above them the
+extras), so a restored endpoint has exactly the clusters it was created with. A combined
+temperature/humidity sensor is the exception: it becomes two endpoints (see below).
 
 | hub entity | Matter device type | extra clusters |
 |------------|--------------------|----------------|
 | plug / on-off only | On/Off Plug-in Unit | Electrical Power / Energy Measurement |
 | brightness | Dimmable Light | power, energy |
 | + colour temperature / + xy | Color-Temperature / Extended Color Light | power, energy |
-| temperature, humidity or illuminance | Temperature / Humidity / Light Sensor (first one present) | the other readings, Power Source |
-| occupancy | Occupancy Sensor (PIR) | temperature, humidity, illuminance, Power Source |
+| temperature, illuminance | Temperature / Light Sensor (first one present) | the other reading, Power Source |
+| humidity with another reading | an extra **Humidity Sensor (0x0307)** endpoint | Power Source stays on the main endpoint |
+| occupancy | Occupancy Sensor (PIR) | temperature, illuminance, Power Source |
 | contact | Contact Sensor | temperature, Power Source |
 | thermostat (setpoint, mode) | Thermostat (heating) | Power Source |
 | button | Generic Switch (momentary, release, long press) | Power Source |
+
+Power Source rides along with **every** entity that has a battery attribute — the hub knows the
+level, so the endpoint gets the cluster that reports it, whatever the device is.
+
+**Humidity is its own endpoint.** A controller builds an accessory from the endpoint's *device
+type*, not from every cluster on it: Apple Home does not render a `RelativeHumidityMeasurement`
+(0x0405) cluster that rides along on a Temperature Sensor (0x0302) or an Occupancy Sensor (0x0107).
+`plans_for()` therefore returns two plans when an entity reports humidity *and* has another primary
+type: the main one unchanged, plus a `Humidity Sensor` (0x0307) on channel 1. The main endpoint keeps
+the old `UniqueID` (`3:0300`) so Apple Home keeps the room and the automations; the extra one gets
+`:h` (`3:0300:h`) and its `NodeLabel` gets `" humidity"`. Battery and the other extras stay on the
+main endpoint. A humidity-only sensor remains a single endpoint. Both endpoints are persisted:
+`BridgedAddr` stores the channel after `chip_id`/`entity_id`, old 4-byte NVS records restore as
+channel 0, and `stored_matches()` ignores the legacy `kXHumidity` extra so the existing sensor is
+not re-created (which would change its `UniqueID`). `apply_state()` routes humidity to channel 1
+and everything else to channel 0; UNDECLARE removes both. Quick check after flashing:
+`inject set 0x0300 humidity 601` must print `STATE -> Matter ep=<humidity endpoint> Humidity=6010`,
+and `python3 scripts/kcon.py -p /dev/ttyACM2 --watch` must show that endpoint as channel 1 with
+`kind 0x0307` in the bridge table. Verified on hardware 17.11.2026: after flashing the bridge
+printed `endpoint 8 -> device entity 0x0300 channel 1` (`3:0300:h`, `humidity`), and the inject
+above printed `STATE -> Matter ep=8 Humidity=6010`. Only Apple Home's own display is unverified.
+
+The two directions of the mapping, and where each one lives:
+
+- **hub → Matter** (`core/matter_plan.hpp`): the hub attribute `battery` becomes the Power Source
+  cluster (0x002F) on the bridged endpoint, with the BAT feature and `BatPercentRemaining` in
+  half-percent.
+- **Matter → hub** (`core/matter_entity.hpp`, the brain's commissioner): the Power Source cluster
+  becomes the hub attribute `battery` — but only when the cluster says it is a *battery*.
 
 Things learnt the hard way (all found by `inject`, the brain console tool that declares a made-up device to
 the Matter chip only: `inject dimmer|ctlight|colorlight|sensor|motion|contact|thermostat|button`, `inject set
@@ -44,7 +75,9 @@ the Matter chip only: `inject dimmer|ctlight|colorlight|sensor|motion|contact|th
 - `app_bridge_create_new_device`'s last argument is the device's *private data*, not an out-parameter.
 - The occupancy cluster aborts the chip unless a sensing feature (PIR) is set.
 - BooleanState and OccupancySensing are code-driven clusters: `attribute::update` is refused, the cluster
-  object (`registry().Get(path)`, then `SetStateValue` / `SetOccupancy`) has to be told.
+  object (`registry().Get(path)`, then `SetStateValue` / `SetOccupancy`) has to be told. Relative
+  Humidity is code-driven in the same way — and invisible to Apple Home unless the endpoint's device
+  type is 0x0307, hence the separate endpoint above.
 - Switching a lamp on makes the Matter stack move CurrentLevel to 1 by itself, and it initialises attributes
   while an endpoint is created or restored. The bridge ignores level/colour/thermostat writes during endpoint
   construction, for 8 s after boot and for 0.6 s after mirroring an "on", otherwise the real lamp would be
@@ -57,9 +90,142 @@ the Matter chip only: `inject dimmer|ctlight|colorlight|sensor|motion|contact|th
   (`CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=22`).
 - A controller dragging a slider produces many writes: level, colour and thermostat commands are debounced
   (150 ms, latest wins) before they go to the brain; on/off is immediate.
+- **The Power Source cluster has no `Source` attribute** in the current Matter revision (0.9-fall2025,
+  the one esp-matter 1.6 ships): the old mandatory `Source` = 4 (Battery) is gone. What says "battery"
+  is the cluster's **feature map** (attribute 0xFFFD) — bit 1 is BAT, bit 0 is WIRED. The same cluster
+  with the WIRED bit describes a mains supply, so "the endpoint has a Power Source cluster" is not
+  enough to call it a battery: the feature map has to be read (a second read, per endpoint, after the
+  Descriptor has said which endpoints have the cluster at all).
+- The bridged endpoints carry the **Bridged Node** device type (0x0013) next to their real one
+  (`esp_matter_bridge` adds it), and that is the type that makes the Power Source cluster legal on
+  the endpoint — it is mandatory there, not on the Dimmable Light or the Plug-in Unit.
 
 Not verified: any of this against a real Zigbee device of that type, and with a controller (Apple Home) —
 only with the injected devices and the plug.
+
+## Rooms in Apple Home: why everything lands in "Default Room"
+
+**Symptom:** every device the hub exposes to Apple Home shows up in the *Default Room* instead of
+the room the user put it in.
+
+**First, what is not the cause.** Matter does not carry rooms, and a bridge cannot assign one.
+Apple's own HomeKit documentation says so for a bridge (`HMAccessory.isBridged`):
+
+> When you add a bridge to a room, the accessories behind the bridge are not automatically added to
+> the room because the bridge and its accessories might be located in different rooms. Manage each
+> accessory's room independently.
+
+A Matter bridge in production says the same (nomos Controller docs):
+
+> Assign the devices to your rooms in the app, because Matter does not transfer rooms.
+
+So "the hub cannot set the room" is by design. The room is the user's business, made once in the
+Home app. The defect is different, and it is ours: **Apple Home does not recognise our devices
+again after the bridge restarts, so it treats them as new and puts them back into the Default
+Room.** From the Homey Matter Bridge issue (athombv/com.athom.matter-bridge#11), describing
+exactly this behaviour:
+
+> iOS connects to the bridge; the bridge presents a list of devices. If that list doesn't contain
+> all the devices that you have previously assigned to a room, those devices are basically deleted.
+> When the bridge eventually presents such devices, iOS thinks they are new and assigns them to
+> the Default Room.
+
+### What the bridge tells the controller about a device
+
+Every bridged endpoint carries the **Bridged Device Basic Information** cluster (0x0039), and that
+is where the controller reads the device's name and identity. What we fill in today (checked in
+`firmware/thread-c6/main/matter_bridge.cpp` — it never touches the cluster):
+
+| attribute | id | what it is for | our state |
+|-----------|-----|----------------|-----------|
+| `NodeLabel` | 0x0005 | the name the user sees; writable | **absent** — esp-matter's `create()` does not create it |
+| `UniqueID` | 0x0012 | tells the controller this is the same device after a restart | **absent** — needs `CHIP_CONFIG_USE_ENDPOINT_UNIQUE_ID=1`, ours is `0` |
+| `ProductName` | 0x0003 | what the device is called in the bridge's device list | absent |
+| `VendorName` | 0x0001 | the vendor | absent |
+| `Reachable` | 0x0011 | online/offline | present (esp-matter default) |
+
+Without `UniqueID` the controller has nothing stable to match against: our bridged endpoints keep
+their endpoint ids across reboots (they are restored from NVS), but the *accessory record* in the
+Home app has nothing to tie to, so it is recreated — in the Default Room, without the old name and
+without the old automations.
+
+### Three levels of fix, cheapest first
+
+**Level 1 — identity and name (the real fix).** Fill the Bridged Device Basic Information
+cluster on every bridged endpoint:
+
+- `NodeLabel` = the device's name in the hub's registry (`entity_names` already holds it, and the
+  app can rename it), so Apple Home shows a name instead of a generic one;
+- `UniqueID` = a stable string derived from the hub identity of the entity (`chip_id` +
+  `entity_id`), which is what lets the controller recognise the device after a restart and keep
+  its room;
+- `ProductName` / `VendorName` — so the bridge's device list is readable.
+
+Needs `CHIP_CONFIG_USE_ENDPOINT_UNIQUE_ID=1` in the build (esp-matter creates the attribute only
+then) and a mirror of `NodeLabel` back into the hub, so a rename in Apple Home becomes a `name.set`
+in the hub.
+
+**Level 2 — no half-populated bridge.** The endpoints are created *when a DECLARE arrives*
+(`ensure_bridged_endpoint`), which is after the bridge is up and possibly after the controller has
+already subscribed. A controller that sees a device appear later treats it as new. Two ways out:
+create every endpoint before the bridge hands itself to the controller, or hold the subscription
+until the entity list is complete. The Homey fix was exactly this: delay the bridge until every
+app is up.
+
+*Looked at the source; there is no such window.* The DNS-SD server — the thing that makes the
+bridge visible to a controller on the network — is started by CHIP's own event handler
+(`device_callback_internal` → `DnssdServer::Instance().StartServer()`), and that handler is
+registered inside `chip_init()`, which runs inside `esp_matter::start()`. **CHIP cannot see the
+address event before that**, so the bridge is not findable on the network before the Matter stack
+is up. The restore of the endpoints from NVS (`app_bridge_initialize`) happens right after
+`esp_matter::start()`, in `matter_bridge::start()` — before the bridge answers the brain or a
+controller. So a controller that connects finds the full list of the devices of the previous run.
+
+What *is* left is the devices the hub gained since the last run: they arrive with the brain's
+mirrored DECLAREs, later. That is the normal way a bridge grows, and the controller is told about
+them (esp-matter reports the change of the aggregator's PartsList). It is not the Homey failure:
+that one is about devices the bridge *had* and did not show.
+
+**Level 3 — actually assigning a room (research, probably a dead end).** The Bridged Device Basic
+Information cluster has a writable attribute `DeviceLocation` (0x0017, `LocationDescriptorStruct`
+with `LocationName`, `FloorNumber`, `AreaType`), added in Matter 1.6. It looks like the mechanism
+for a room. But:
+
+- esp-matter 1.6 (Matter 1.3/1.4 data model) does not generate it — it would need a hand-written
+  attribute, or a newer stack;
+- its access is `write: administer`, i.e. the *controller* writes it, not the bridge;
+- it is unverified whether Apple Home reads it for a bridged device at all.
+
+*Looked at what the controllers actually do — the attribute is not the mechanism.* The Matter Hub
+of Home Assistant (the most used Matter bridge out there) says so in its own FAQ: "You need to
+assign rooms manually in each controller app during or after pairing. The FixedLabel data is kept
+in the bridge for future controller support." Google Home asks for the room itself while setting
+the device up. Nothing writes `DeviceLocation` on a bridged device, because the room belongs to
+the ecosystem, not to Matter.
+
+The same source has the answer to our own problem, in one sentence:
+
+> Alexa reacts to the smaller bridge by re-importing every device and dropping room and group
+> assignments; **Apple Home is unaffected because it keys on the stable device id**.
+
+Apple Home matches a device by its **stable id** — which is exactly the `UniqueID` this bridge
+now publishes (level 1). So the fix was not a room attribute: it was to give the controller
+something stable to match the device against. Level 3 stays undone on purpose.
+
+**Verified on the hardware (the bridge side):** `UniqueID` is created and holds the stable id
+(`1:0100`, `3:0300`), `NodeLabel` carries the hub's name for the device ("office Table"),
+`ProductName` says what the device is ("plug-in unit", "temperature sensor"). The hub re-declares
+the registry every time the co-processor reboots (the name lives in the hub, the co-processor
+restores only the endpoints from NVS) — otherwise the name would be lost on every restart.
+
+**The room survives a restart of the bridge — verified with a phone.** The device was moved out
+of the Default Room in Apple Home, the co-processor was rebooted, and the device stayed in its
+room. That confirms the diagnosis on a live controller: Apple Home matches a bridged device by
+the stable device id, and now the bridge has one.
+
+The research above is from Apple's HomeKit docs, the Matter spec, and the reported behaviour of
+other Matter bridges; the "Apple Home puts unrecognised devices in the Default Room" mechanism is
+documented by Homey — and the fix was checked on a live controller, as described above.
 
 Matter is a stack of independent pieces. Each has its own effort and its own
 failure mode; put together they let Apple Home / Google Home / Alexa see the

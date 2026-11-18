@@ -457,3 +457,44 @@ streams the body straight into `OtaSender`, and reports progress via
 `GET /ota/status`. Open points: authentication (token at minimum) and image
 signing — images are unsigned today, so an open endpoint would let anyone on
 the LAN reflash the hub. Decide together with the app; see [ota.md](ota.md).
+
+## Phone as a presence source
+
+**Question:** should the app know when the person is home, so a rule can say
+"when I come home, the light in the hall goes on"?
+
+**Decided (17.11.2026): yes, and the phone is a virtual entity on the hub.** A
+phone gets an entity with a boolean "at home" attribute, exactly like a motion
+sensor has "occupied". A rule refers to it like any other device, so the rule
+engine does not change. Several phones = several entities, each with its own
+name. The full plan is in [automations.md](automations.md).
+
+**The hard part is not the hub, it is the background execution.** iOS kills
+background apps and Android's Doze does the same, so the geofence must be
+watched by native code (iOS `CLLocationManager` monitoring, Android
+`GeofencingClient`), not by JS in a background task. The native module opens the
+WebSocket itself and sends `presence.report`.
+
+**Open points:**
+
+- **Geofence radius.** A circle around the house catches the neighbour's house
+  at 100 m and misses a long driveway. Hysteresis (enter at 60 m, leave at
+  150 m) and a confirmation window ("gone" = no geofence for N minutes) are the
+  standard cures; both belong in the native module, so the hub only ever sees
+  clean "home / away".
+- **Manual override.** "I'm home" / "I'm away" must always be one tap away,
+  because the geofence will sometimes be wrong.
+- **Stale presence.** If the phone has not reported for 10 minutes, the hub must
+  treat it as *unknown*, not as "away" — otherwise a crashed app turns the lights
+  off.
+- **Trust.** The hub accepts presence from a phone that holds its token. A stolen
+  token could fake "I'm home" — worth deciding whether presence deserves its own
+  credential.
+- **Cost.** Geofence wakes the phone; a chatty phone drains the battery. One
+  report per state change, not per minute.
+- **Wi-Fi as a second signal.** Seeing the home SSID is nearly free and very
+  accurate at "am I in the house"; combining it with the geofence is stronger
+  than either alone.
+- **BLE beacon at the door.** The accurate answer, but it is extra hardware.
+  Later, if the geofence proves too sloppy.
+

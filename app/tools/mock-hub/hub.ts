@@ -151,6 +151,8 @@ export class MockHub {
   rules: Rule[] = [];
   schedules: Schedule[] = [];
   scenes: Scene[] = [];
+  /** The phones that reported their presence, by name. */
+  phones: { name: string; entity: number; home: boolean }[] = [];
   private timers: TimerEntry[] = [];
   private events: MockEvent[] = [];
   private eventSeq = 1;
@@ -737,6 +739,51 @@ export class MockHub {
       case 'location.clear': {
         this.location = null;
         this.broadcast({ type: 'hub', hub: this.hubInfo() });
+        return ok();
+      }
+      case 'presence.report': {
+        // The phone says where its owner is. It becomes an entity, exactly like on
+        // the real hub, and the value goes out as an ordinary STATE — so a rule
+        // watching it fires the same way it would for a motion sensor.
+        const { name, home } = args;
+        if (typeof name !== 'string' || name.length === 0) return no('bad_args', 'name');
+        if (typeof home !== 'boolean') return no('bad_args', 'home: true or false');
+        let phone = this.phones.find((p) => p.name === name);
+        if (!phone) {
+          // The hub's own entity id range for phones (core/presence.hpp).
+          const entity = 0x0f80 + this.phones.length;
+          phone = { name, entity, home };
+          this.phones.push(phone);
+          const phoneEntity: Entity = {
+            id: entity,
+            name,
+            room: null,
+            chip: 0xfe,
+            device: 'phone',
+            attrs: [attr(0x52, 'home', 'bool', ['r', 'rep'], home)],
+          };
+          this.entities.push(phoneEntity);
+          this.broadcast({ type: 'entity', op: 'add', entity: phoneEntity });
+        } else {
+          phone.home = home;
+          this.setValue(phone.entity, 0x52, home);
+        }
+        return ok({ index: phone.entity });
+      }
+      case 'presence.list': {
+        return ok({ phones: this.phones.map((p) => ({ entity: p.entity, name: p.name, known: true, home: p.home })) });
+      }
+      case 'presence.remove': {
+        const { entity } = args;
+        if (typeof entity !== 'number') return no('bad_args', 'entity');
+        const i = this.phones.findIndex((p) => p.entity === entity);
+        if (i < 0) return no('not_found', 'no such phone');
+        this.phones.splice(i, 1);
+        const e = this.entities.findIndex((x) => x.id === entity);
+        if (e >= 0) {
+          this.entities.splice(e, 1);
+          this.broadcast({ type: 'entity', op: 'remove', id: entity });
+        }
         return ok();
       }
       case 'pair': {

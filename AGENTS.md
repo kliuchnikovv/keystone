@@ -132,6 +132,53 @@ hub from it) — see [relay/README.md](relay/README.md) and [docs/relay-security
 
 - `thread-c6` (Matter) builds in the esp-matter Docker image: `scripts/matter-build.sh thread-c6`.
 
+**The Matter build is resource-bounded on purpose.** It compiles ~1700 translation units of
+CHIP and links ~400 KB of objects, and it is memory hungry: measured on a Raspberry Pi 5 (4 GB),
+**one** compile job already peaks at ~3.6 GB of the host's memory, and every extra job adds
+about 2 GB. Two jobs push it over the edge: the kernel compresses pages into **zram** (the Pi's
+swap *is* RAM), which is so CPU-heavy that the machine stops answering. The interactive session
+(ssh/mosh) dies first, and then systemd's hardware watchdog reboots the Pi
+(`RuntimeWatchdogUSec=1min`, `RebootWatchdogUSec=2min`) — so the machine is simply restarted,
+with no log of the failure.
+
+So `scripts/matter-build.sh` picks the **job count** from the total RAM: roughly 1.5 GB for
+everything else plus 2.2 GB per job. A 4 GB Pi gets one job, a 16 GB workstation four. The
+memory limit (`--memory`) is a second line of defence, but it only applies where the kernel has
+the memory cgroup controller — this Pi's cmdline carries `cgroup_disable=memory`, so Docker
+prints "Your kernel does not support memory limit capabilities" and discards it. The script
+checks for the controller and says so when it is missing.
+
+```bash
+MATTER_JOBS=4 MATTER_MEM=4g MATTER_CPUS=3 ./scripts/matter-build.sh thread-c6
+```
+
+Lower `MATTER_JOBS` first if the build feels heavy — it is the parallelism, not the image, that
+costs the memory. Run it in the background (`nohup ... &`) if you want to keep working meanwhile.
+
+**Keep the journal on disk.** The system journal was in `/run/log/journal` (a tmpfs), so every
+reboot threw the previous boot's log away — and on this machine the Pi reboots itself when a
+build makes it stall, which means exactly the log you want is the one that disappears. Run
+`sudo scripts/enable-persistent-journal.sh` once; it keeps the journal in `/var/log/journal`.
+
+⚠️ **Why the obvious fix does not work here — there are TWO traps.** Raspberry Pi OS ships
+`/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf` with `Storage=volatile`
+(package `raspberrypi-sys-mods`). A drop-in beats the main config, and the drop-ins are sorted
+by **filename** (the directory does not matter), so editing `/etc/systemd/journald.conf` alone
+is silently overridden — the journal stays in tmpfs and the script appears to succeed. The
+script therefore writes its own drop-in, `60-keystone-persistent.conf` (the range
+`journald.conf.d(5)` recommends for the administrator: vendor 10-40, admin 60-90).
+
+The second trap: journald opens `/var/log/journal/<machine-id>/system.journal` and **falls back
+to the runtime journal when it cannot** — it does not create that directory itself, and the
+stock tmpfiles rule `z /var/log/journal/%m` only *adjusts* the mode of an existing directory
+(`z` never creates one). So the per-machine directory has to exist. The script creates it and
+declares it in `/etc/tmpfiles.d/60-keystone-journal.conf` (type `d` creates, `z` adjusts) so it
+comes back after a reboot.
+
+The script therefore **checks the result** (`journalctl --header` must show
+`/var/log/journal/…`) instead of reporting success on faith. If it ever fails again, that
+check is the thing to look at.
+
 The CAM needs an external FTDI (SPEC §10); C6 and S3-Zero flash over USB-C.
 Onboard RGB LED GPIO: S3-Zero = 21, C6-DevKitC = 8.
 

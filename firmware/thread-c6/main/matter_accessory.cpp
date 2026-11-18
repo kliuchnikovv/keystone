@@ -204,6 +204,18 @@ extern "C" void matter_accessory_start(core::Bus* bus, std::uint8_t boot_id) {
 
   // The bridge: the registry entities the brain announces become bridged
   // endpoints under the aggregator (docs/matter-backlog.md § 10, Stage B).
+  //
+  // The endpoints of a previous run come back from NVS first, before anything
+  // else: a controller that connects while the list is still short does not
+  // see a device it knew about, drops its record of it, and recreates the
+  // accessory in the Default Room without its automations (see
+  // docs/matter-backlog.md § "Rooms in Apple Home").
+  //
+  // The restore has to be after esp_matter::start(): the DNS-SD server — the
+  // thing that makes the bridge visible to a controller — is brought up by
+  // CHIP's own event handler, and that handler is registered inside
+  // esp_matter::start(). So the bridge cannot be found on the network before
+  // it, and the endpoints are back before the first controller sees it.
   const esp_err_t berr = matter_bridge::start(bus, n, endpoint::get_id(agg), boot_id);
   if (berr != ESP_OK) {
     ESP_LOGE(kTag, "the Matter bridge did not come up: %d", static_cast<int>(berr));

@@ -143,3 +143,29 @@ describe('the hub tab', () => {
     await waitFor(() => expect(hub.wifiForgetCalls).toBe(1));
   });
 });
+
+describe('presence', () => {
+  it('says the phone has not reported yet, and takes a manual answer', async () => {
+    await openHub();
+    expect(screen.getByLabelText('Presence')).toBeTruthy();
+    // Nothing has reported: the phone's presence is unknown, not "away".
+    expect(screen.getByText(/Not known yet/)).toBeTruthy();
+
+    click('I am home');
+    await waitFor(() => expect(hub.phones).toHaveLength(1));
+    expect(hub.phones[0]).toMatchObject({ name: 'My phone', home: true });
+    // The phone becomes a device, so a rule can watch it like any other.
+    expect(await screen.findByText(/My phone/)).toBeTruthy();
+
+    click('I am away');
+    await waitFor(() => expect(hub.phones[0]!.home).toBe(false));
+  });
+
+  it('forgets the phone when asked', async () => {
+    await openHub();
+    click('I am home');
+    await waitFor(() => expect(hub.phones).toHaveLength(1));
+    click('Forget this phone');
+    await waitFor(() => expect(hub.phones).toHaveLength(0));
+  });
+});

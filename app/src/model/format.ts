@@ -8,6 +8,7 @@ const LABELS: Record<string, string> = {
   energy_wh: 'Energy',
   brightness: 'Brightness',
   occupied: 'Presence',
+  home: 'Home',
   temperature: 'Temperature',
   humidity: 'Humidity',
   illuminance: 'Light level',
@@ -79,6 +80,8 @@ export function formatValue(a: Pick<Attr, 'name' | 'value'>): string {
       return `${brightnessPercent(Number(v))} %`;
     case 'occupied':
       return v ? 'Occupied' : 'Clear';
+    case 'home':
+      return v ? 'At home' : 'Away';
     case 'temperature':
     case 'setpoint':
       return `${(Number(v) / 10).toFixed(1)} °C`; // SPEC §6.2: int16 in 0.1 °C

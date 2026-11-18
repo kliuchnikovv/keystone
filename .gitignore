@@ -11,6 +11,7 @@ firmware/*/sdkconfig.old
 firmware/*/sdkconfig.bak
 firmware/*/sdkconfig.bod
 firmware/*/managed_components/
+firmware/*/managed_components_rootowned/
 firmware/*/dependencies.lock
 
 # A crash dump read off a co-processor (scripts/flash-thread-c6-matter.sh

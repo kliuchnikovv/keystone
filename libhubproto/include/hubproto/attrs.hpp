@@ -29,6 +29,7 @@ inline constexpr std::uint8_t kMode = 0x41;      // enum8, Zigbee/Matter SystemM
 // ---- presence / contact / button ----
 inline constexpr std::uint8_t kOccupied = 0x50;  // bool, true = someone is there
 inline constexpr std::uint8_t kContact = 0x51;   // bool, true = closed (Matter BooleanState StateValue)
+inline constexpr std::uint8_t kHome = 0x52;      // bool, true = the phone's owner is home
 inline constexpr std::uint8_t kEvent = 0x60;     // enum8, see ButtonEvent; returns to kIdle after ~0.4 s
 
 // Thermostat SystemMode values we support: the same numbers in ZCL and Matter, so no translation.

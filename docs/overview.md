@@ -103,7 +103,8 @@ Matter-controller в масштабе, Thread border router, полноценн�
 ### 2.5 App (`app/`) — четыре экрана работают
 
 - Стек: Expo (React Native) + web, mock-хаб для тестов (`npm run mock-hub`), 322 vitest.
-- Экраны: Setup (новый хаб через AP), Connect (адрес + токен + fingerprint; список найденных по mDNS), Devices (карточки с switch/яркостью/живыми значениями, Add device, Edit, Remove, Blink), Automations (schedules, timers с live-countdown, rules с окном/условием/cooldown, Scenes с редактированием), Hub (chips, Wi-Fi, Location, скоро — Apple Home bridge), History (события по дням, фильтр по устройству, Live push).
+- Экраны: Setup (новый хаб через AP), Connect (адрес + токен + fingerprint; список найденных по mDNS), Devices (карточки с switch/яркостью/живыми значениями, Add device, Edit, Remove, Blink), Automations (schedules, timers с live-countdown, rules блоками WHEN → AND → THEN с живым предпросмотром, Scenes с редактированием), Hub (chips, Wi-Fi, Location, Presence, скоро — Apple Home bridge), History (события по дням, фильтр по устройству, Live push).
+- **Присутствие телефона:** телефон — виртуальная сущность хаба (`home`, bool), о ней же можно написать правило («когда я дома → свет в коридоре»); присутствие считает нативный геозон (iOS `CLLocationManager`, Android `GeofencingClient`) — работает при закрытом приложении; вручную переключается на карточке Presence. Подробности — [docs/automations.md](automations.md).
 - Нативный модуль `app/modules/keystone-net`: Swift (`URLSessionWebSocketTask` + сверка SHA-256 сертификата, `NetServiceBrowser`) и Kotlin (OkHttp pin, NsdManager).
 - Веб-экспорт работает: `expo export --platform web`.
 - iOS-сборка: симулятор запущен, нативный Swift впервые скомпилировался на Xcode 26.6; **на физическом iPhone не запускался**. Android-сборка не прогонялась.

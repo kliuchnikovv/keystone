@@ -1,5 +1,7 @@
 #include "hubproto/payload.hpp"
 
+#include <cstring>
+
 #include "hubproto/message.hpp"  // kSelfEntityId
 
 namespace hubproto {
@@ -32,9 +34,15 @@ constexpr std::size_t kAttrBytes = hubproto::kDeclareAttrBytes;
 }  // namespace
 
 EncodeResult encode_declare(std::uint16_t entity_id, DeviceType device_type,
-                            const AttrDecl* attrs, std::uint8_t count,
+                            const AttrDecl* attrs, std::uint8_t count, const char* name,
                             std::uint8_t* out, std::size_t cap) noexcept {
-  const std::size_t need = hubproto::declare_size(count);
+  // The name is optional and capped: a name longer than the limit is cut
+  // (the hub's names are shorter anyway).
+  std::size_t name_len = 0;
+  if (name != nullptr) {
+    while (name_len < hubproto::kDeclareNameMax && name[name_len] != '\0') ++name_len;
+  }
+  const std::size_t need = hubproto::declare_size_with_name(count, name_len);
   if (cap < need) return {false, 0};
 
   std::size_t w = 0;
@@ -46,6 +54,11 @@ EncodeResult encode_declare(std::uint16_t entity_id, DeviceType device_type,
     out[w++] = attrs[i].attr_id;
     out[w++] = static_cast<std::uint8_t>(attrs[i].value_type);
     out[w++] = attrs[i].flags;
+  }
+  if (name_len > 0) {
+    out[w++] = static_cast<std::uint8_t>(name_len);
+    std::memcpy(out + w, name, name_len);
+    w += name_len;
   }
   return {true, w};
 }
@@ -65,6 +78,19 @@ bool decode_declare(const std::uint8_t* in, std::size_t len,
   out.device_type = static_cast<DeviceType>(in[2]);
   out.attr_count = count;
   out.attrs = in + hubproto::kDeclareFixed;
+
+  // The name, if the DECLARE carries one. It is optional: a DECLARE without a
+  // tail (the old format) simply has no name.
+  out.name = nullptr;
+  out.name_len = 0;
+  const std::size_t tail = hubproto::declare_size(count);
+  if (len > tail) {
+    const std::uint8_t name_len = in[tail];
+    if (name_len > 0 && len >= tail + 1 + name_len) {
+      out.name = reinterpret_cast<const char*>(in + tail + 1);
+      out.name_len = name_len;
+    }
+  }
   return true;
 }
 
@@ -306,7 +332,7 @@ EncodeResult encode_chip_self_declare(std::uint16_t self_entity_id, std::uint8_t
       {chip_attr::kThreadRole, ValueType::U8, ro},
       {chip_attr::kThreadKids, ValueType::U8, ro},
   };
-  return encode_declare(self_entity_id, DeviceType::Chip, attrs, 8, out, cap);
+  return encode_declare(self_entity_id, DeviceType::Chip, attrs, 8, nullptr, out, cap);
 }
 
 EncodeResult encode_chip_self_state(std::uint16_t self_entity_id, const ChipSelf& s,

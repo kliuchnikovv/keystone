@@ -30,7 +30,7 @@ void declare(Registry& reg, std::uint8_t chip, std::uint16_t id, hubproto::Devic
              std::initializer_list<hubproto::AttrDecl> attrs) {
   std::vector<hubproto::AttrDecl> a(attrs);
   std::array<std::uint8_t, 64> buf{};
-  auto r = hubproto::encode_declare(id, dt, a.data(), static_cast<std::uint8_t>(a.size()), buf.data(), buf.size());
+  auto r = hubproto::encode_declare(id, dt, a.data(), static_cast<std::uint8_t>(a.size()), nullptr, buf.data(), buf.size());
   REQUIRE(r.ok);
   hubproto::DeclareView v{};
   REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));

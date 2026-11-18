@@ -37,7 +37,7 @@ void declare_one(Registry& reg, std::uint8_t chip_id, std::uint16_t entity_id,
                  DeviceType dt, std::uint8_t attr_id, ValueType vt) {
   const std::array<AttrDecl, 1> attrs{{{attr_id, vt, 0x07}}};
   std::array<std::uint8_t, 32> buf{};
-  auto r = hubproto::encode_declare(entity_id, dt, attrs.data(), 1, buf.data(),
+  auto r = hubproto::encode_declare(entity_id, dt, attrs.data(), 1, nullptr, buf.data(),
                                     buf.size());
   REQUIRE(r.ok);
   hubproto::DeclareView v{};

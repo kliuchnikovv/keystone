@@ -30,6 +30,10 @@ enum class DeviceType : std::uint8_t {
   // telemetry (uptime, heap, link counters) reaches the brain as ordinary
   // STATE updates. Not a Matter accessory — the bridge skips it.
   Chip      = 0x0A,
+  // A phone that reports where its owner is (hubproto::attr::kHome). Not a radio
+  // device and not a Matter accessory: the brain makes it an entity so a rule can
+  // watch it like any other device.
+  Phone     = 0x0B,
 };
 
 // Value encoding of an attribute (SPEC §6.2).
@@ -59,9 +63,24 @@ inline constexpr std::uint8_t kFlagReportable = 0x04;
 inline constexpr std::size_t kDeclareFixed    = 4;
 inline constexpr std::size_t kDeclareAttrBytes = 3;
 
+// A DECLARE may carry the entity's name after the attributes: a length byte
+// and the name itself (up to `kDeclareNameMax` bytes). It is optional — a
+// DECLARE without it is still a valid DECLARE — and an older reader ignores
+// the tail, so the two ends can be updated one at a time.
+//
+// The name is what a Matter controller shows for a bridged device, and it is
+// how the hub tells the co-processor what the device is called (the Matter
+// bridge puts it into the Bridged Device Basic Information cluster).
+inline constexpr std::size_t kDeclareNameMax = 31;  // the registry's name limit
+
 /** The buffer size a DECLARE with `count` attributes needs. */
 inline constexpr std::size_t declare_size(std::size_t count) noexcept {
   return kDeclareFixed + count * kDeclareAttrBytes;
+}
+
+/** The buffer size a DECLARE with `count` attributes and a name needs. */
+inline constexpr std::size_t declare_size_with_name(std::size_t count, std::size_t name_len) noexcept {
+  return kDeclareFixed + count * kDeclareAttrBytes + (name_len > 0 ? name_len + 1 : 0);
 }
 
 // CMD_ACK status (SPEC §5).
@@ -89,12 +108,14 @@ std::size_t value_size(ValueType vt) noexcept;
 
 // ---- DECLARE (SPEC §5) ----------------------------------------------------
 // Layout: entity_id(u16) device_type(u8) attr_count(u8) then count x
-//         { attr_id(u8) value_type(u8) flags(u8) }.
+//         { attr_id(u8) value_type(u8) flags(u8) } and, optionally, the
+//         entity's name: name_len(u8) then the name bytes.
 
 // Encode a DECLARE payload for `count` attributes into `out` (capacity `cap`).
+// `name` may be null (or empty): the DECLARE then carries no name.
 EncodeResult encode_declare(std::uint16_t entity_id, DeviceType device_type,
                             const AttrDecl* attrs, std::uint8_t count,
-                            std::uint8_t* out, std::size_t cap) noexcept;
+                            const char* name, std::uint8_t* out, std::size_t cap) noexcept;
 
 // Zero-copy view over a decoded DECLARE payload. `attrs` points into the input
 // buffer, which must outlive the view.
@@ -103,6 +124,10 @@ struct DeclareView {
   DeviceType    device_type;
   std::uint8_t  attr_count;
   const std::uint8_t* attrs;  // count x 3 bytes
+  // The entity's name, or nullptr when the DECLARE carried none. It points
+  // into the input buffer and is *not* zero-terminated — use `name_len`.
+  const char* name;
+  std::uint8_t  name_len;
 };
 
 // Parse a DECLARE payload. Returns false if truncated or an attribute carries an

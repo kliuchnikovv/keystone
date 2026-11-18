@@ -14,6 +14,8 @@ const DEVICE_LABELS: Record<string, string> = {
   lock: 'Lock',
   climate: 'Thermostat',
   button: 'Button',
+  // A phone that reports where its owner is (hubproto::attr::kHome).
+  phone: 'Phone',
 };
 const DEVICE_GLYPHS: Record<string, GlyphName> = {
   light: 'light',
@@ -25,6 +27,7 @@ const DEVICE_GLYPHS: Record<string, GlyphName> = {
   lock: 'lock',
   climate: 'climate',
   button: 'button',
+  phone: 'phone',
 };
 
 export function hexId(id: number): string {

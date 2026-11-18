@@ -85,6 +85,9 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
   mDNS browsing and the Bluetooth scanner (`ios/KeystoneBle.swift` — the central manager is
   created lazily, when the person opens "Find devices", so iOS asks for the Bluetooth
   permission at that moment and not at launch) for phones; `src/native/` is its TypeScript side.
+  It also holds the **geofence watcher** that says "I am home" (`ios/KeystoneGeofence.swift`,
+  `android/GeofenceWatcher.kt`): the watching is native code because iOS and Android both
+  kill the app in the background, but their system's geofence service still wakes it.
   **Never built on a device.**
 
 ## Design system

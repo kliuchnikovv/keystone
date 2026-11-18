@@ -11,6 +11,7 @@
 #ifdef CHIP_HAVE_CONFIG_H
 
 #include <cstring>
+#include <initializer_list>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -37,6 +38,7 @@
 #include <app_bridged_device.h>
 
 #include "core/bus.hpp"
+#include "core/matter_identity.hpp"
 #include "core/matter_plan.hpp"
 #include "core/zcl_profile.hpp"
 #include "hubproto/attrs.hpp"
@@ -275,6 +277,9 @@ void add_extras(esp_matter::endpoint_t* ep, std::uint16_t extras) {
     cluster::illuminance_measurement::create(ep, &c, CLUSTER_FLAG_SERVER);
   }
   if (extras & M::kXBattery) {
+    // The Power Source cluster says what feeds the device. The hub knows the battery level,
+    // so the source *is* a battery: the BAT feature is what says so (the same cluster with
+    // the WIRED feature describes a mains supply, and this endpoint has none).
     cluster::power_source::config_t c;
     c.status = 1;  // Active
     c.feature_flags = cluster::power_source::feature::battery::get_id();
@@ -283,6 +288,8 @@ void add_extras(esp_matter::endpoint_t* ep, std::uint16_t extras) {
     c.features.battery.bat_replaceability = 1;  // not replaceable: we cannot tell
     cluster_t* ps = cluster::power_source::create(ep, &c, CLUSTER_FLAG_SERVER);
     if (ps) {
+      // The battery is there (the hub declares it), even before the first reading arrives.
+      cluster::power_source::attribute::create_bat_present(ps, true);
       cluster::power_source::attribute::create_bat_percent_remaining(
           ps, nullable<std::uint8_t>(), nullable<std::uint8_t>(0), nullable<std::uint8_t>(200));
     }
@@ -313,6 +320,101 @@ void add_extras(esp_matter::endpoint_t* ep, std::uint16_t extras) {
     cluster::electrical_energy_measurement::create(ep, &eem_cfg, CLUSTER_FLAG_SERVER);
     ESP_LOGI(kTag, "added ElectricalEnergyMeasurement cluster to ep %u", epid);
   }
+}
+
+// The name of the entity that is being created right now. The DECLARE carries
+// it (the brain holds the names), and `create_bridged_clusters` runs inside
+// `app_bridge_create_new_device`, so the name is handed over through here.
+// Empty: no name known.
+char g_pending_name[core::matter::kNodeLabelMax + 1] = {};
+
+// The label of the extra humidity endpoint: the same name with a short suffix, so
+// a person can tell the two accessories apart. `node_label_for()` cuts at a UTF-8
+// boundary; cutting it again with room for the suffix keeps that property.
+void make_node_label(const char* name, const char* suffix, char* out, std::size_t cap) {
+  if (suffix == nullptr || suffix[0] == '\0') {
+    M::node_label_for(name, out, cap);
+    return;
+  }
+  std::size_t slen = std::strlen(suffix);
+  if (cap <= slen + 1) {
+    out[0] = '\0';
+    return;
+  }
+  std::size_t n = M::node_label_for(name, out, cap - slen);
+  // An unnamed device must not get a label starting with a space.
+  if (n == 0 && suffix[0] == ' ') {
+    ++suffix;
+    --slen;
+  }
+  while (n > 0 && (static_cast<unsigned char>(out[n - 1]) == ' ')) --n;
+  std::memcpy(out + n, suffix, slen);
+  out[n + slen] = '\0';
+}
+
+// Fill the Bridged Device Basic Information cluster of a bridged endpoint: the
+// name the controller shows, and the identity it uses to recognise the device
+// after a restart.
+//
+// The identity is what makes the controller keep its records. Apple Home drops
+// an accessory it cannot match and creates a new one — in the Default Room,
+// without the old automations. `UniqueID` is what it matches against, and it
+// has to survive a bridge restart: the hub's own address of the entity (the
+// chip that owns it and the entity id) never changes. The main endpoint keeps
+// that exact string; the extra humidity endpoint gets a suffix.
+void fill_identity(esp_matter::endpoint_t* ep, std::uint8_t chip_id, std::uint16_t entity_id,
+                   std::uint16_t matter_kind, std::uint8_t channel) {
+  namespace BDB = chip::app::Clusters::BridgedDeviceBasicInformation;
+  const std::uint16_t ep_id = esp_matter::endpoint::get_id(ep);
+  cluster_t* bdb = cluster::get(ep, BDB::Id);
+  if (bdb == nullptr) {
+    ESP_LOGW(kTag, "endpoint %u has no Bridged Device Basic Information cluster",
+             static_cast<unsigned>(ep_id));
+    return;
+  }
+
+  // Set a string attribute: the value is written when the attribute exists,
+  // and the attribute is created when it does not (esp-matter creates some of
+  // them only in a build with CHIP_CONFIG_USE_ENDPOINT_UNIQUE_ID).
+  auto set_string = [&](std::uint32_t attr_id, char* value, std::size_t len, const char* what) {
+    if (len == 0) return;
+    esp_matter_attr_val_t v = esp_matter_char_str(value, static_cast<std::uint16_t>(len));
+    if (attribute::update(ep_id, BDB::Id, attr_id, &v) == ESP_OK) {
+      ESP_LOGI(kTag, "endpoint %u: the %s (0x%04x) is %.*s", static_cast<unsigned>(ep_id), what,
+               static_cast<unsigned>(attr_id), static_cast<int>(len), value);
+      return;
+    }
+    // The attribute is not there yet: make it, and write the value into it.
+    attribute_t* attr = attribute::create(bdb, attr_id, ATTRIBUTE_FLAG_NONE, v,
+                                          static_cast<std::uint16_t>(len + 1));
+    if (attr == nullptr) {
+      ESP_LOGW(kTag, "endpoint %u: cannot create the %s (0x%04x)", static_cast<unsigned>(ep_id),
+               what, static_cast<unsigned>(attr_id));
+      return;
+    }
+    ESP_LOGI(kTag, "endpoint %u: created the %s (0x%04x) = %.*s", static_cast<unsigned>(ep_id),
+             what, static_cast<unsigned>(attr_id), static_cast<int>(len), value);
+  };
+
+  // The stable identity. The main endpoint keeps the old string so Apple Home
+  // keeps the room and the automations; the humidity endpoint is a new accessory.
+  char unique[core::matter::kUniqueIdMax + 1] = {0};
+  set_string(BDB::Attributes::UniqueID::Id, unique,
+             M::unique_id_for(chip_id, entity_id, unique, sizeof(unique), channel), "unique id");
+
+  // The name a person gave the device. It is optional: an unnamed device gets
+  // the controller's own default. The extra endpoint says what it measures.
+  char label[core::matter::kNodeLabelMax + 1] = {0};
+  make_node_label(g_pending_name,
+                  channel == M::kChannelHumidity ? " humidity" : nullptr, label, sizeof(label));
+  set_string(BDB::Attributes::NodeLabel::Id, label, std::strlen(label), "node label");
+
+  // What the device is: the Matter device type of the endpoint. The
+  // controller's device list then reads like a list of devices.
+  char product[core::matter::kProductNameMax + 1] = {0};
+  set_string(BDB::Attributes::ProductName::Id, product,
+             M::node_label_for(M::product_name_for_kind(matter_kind), product, sizeof(product)),
+             "product name");
 }
 
 // Bridged endpoint creation callback: populate the newly created endpoint
@@ -417,7 +519,43 @@ esp_err_t create_bridged_clusters(esp_matter::endpoint_t* ep, std::uint32_t pack
   }
   if (err != ESP_OK) return err;
   add_extras(ep, extras);
+  // The name and the identity are *not* filled here: at this point the bridge's
+  // own table does not know yet which entity the endpoint mirrors (the table
+  // is filled after the endpoint is resumed), so the address is not available.
+  // `fill_identities()` does it once the table is ready.
   return ESP_OK;
+}
+
+// Fill the name and the identity of every bridged endpoint the bridge holds.
+//
+// It runs after the bridge's table is complete: an endpoint knows which entity
+// it mirrors only then (the address — the chip that owns the entity and the
+// entity id — lives in the table, and it is what the stable UniqueID is made
+// of). The name comes from the hub: it is in the DECLARE, and the pending
+// name is what was last declared.
+void fill_identities() {
+  std::uint16_t eps[MAX_BRIDGED_DEVICE_COUNT]{};
+  esp_matter_bridge::get_bridged_endpoint_ids(eps);
+  ESP_LOGI(kTag, "filling the identities of %d bridged endpoint(s)", MAX_BRIDGED_DEVICE_COUNT);
+  for (int i = 0; i < MAX_BRIDGED_DEVICE_COUNT; ++i) {
+    if (eps[i] == chip::kInvalidEndpointId || eps[i] == 0) continue;
+    app_bridged_device_t* bd = app_bridge_get_device(eps[i]);
+    if (bd == nullptr) {
+      ESP_LOGW(kTag, "endpoint %u: no device in the bridge table", static_cast<unsigned>(eps[i]));
+      continue;
+    }
+    auto* kbd = static_cast<keystone::BridgedDevice*>(bd);
+    const keystone::BridgedAddr addr = kbd->addr();
+    if (addr.entity_id == 0) {
+      ESP_LOGW(kTag, "endpoint %u: no address yet", static_cast<unsigned>(eps[i]));
+      continue;
+    }
+    esp_matter::endpoint_t* ep = esp_matter::endpoint::get(g_node, eps[i]);
+    if (ep == nullptr) continue;
+    // The Matter device type of the endpoint is in its persisted plan.
+    const std::uint32_t stored = bd->get_matter_device()->persistent_info.device_type_id;
+    fill_identity(ep, addr.chip_id, addr.entity_id, M::kind_of(stored), addr.channel);
+  }
 }
 
 void forget_endpoint_state(std::uint16_t ep) {
@@ -437,21 +575,33 @@ void remove_endpoint(std::uint16_t ep, app_bridged_device_t* bd, const char* why
            static_cast<unsigned>(ep), err == ESP_OK ? "ok" : esp_err_to_name(err));
 }
 
-// Look up (or create) the Matter endpoint that mirrors a given hubproto entity.
+// Look up (or create) one Matter endpoint that mirrors a hubproto entity. An
+// entity may own two (main + humidity), distinguished by `channel`.
 std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id,
-                                      const M::Plan& plan) {
+                                      const M::Plan& plan, std::uint8_t channel) {
   if (plan.kind == M::kNone) return chip::kInvalidEndpointId;
-  keystone::BridgedAddr addr{chip_id, entity_id};
+  keystone::BridgedAddr addr{chip_id, entity_id, channel};
   std::uint16_t ep = app_bridge_get_endpoint(&addr);
   if (ep != chip::kInvalidEndpointId) {
     app_bridged_device_t* old = app_bridge_get_device(ep);
     const std::uint32_t stored = old ? old->get_matter_device()->persistent_info.device_type_id : 0;
-    if (old == nullptr || M::stored_matches(stored, plan)) return ep;
+    if (old == nullptr || M::stored_matches(stored, plan)) {
+      // The endpoint exists: the name may have changed (the hub re-declares an
+      // entity when it is renamed), so the identity it shows is refreshed.
+      if (old != nullptr) {
+        esp_matter::endpoint_t* ep_obj = esp_matter::endpoint::get(g_node, ep);
+        if (ep_obj != nullptr) {
+          fill_identity(ep_obj, chip_id, entity_id, M::kind_of(stored), channel);
+        }
+      }
+      return ep;
+    }
     // The entity changed shape (a lamp's colour modes were read, a sensor
     // gained a battery...): the cluster set of an endpoint cannot change once
     // created, so replace it. Controllers see a new accessory.
-    ESP_LOGW(kTag, "entity 0x%04x changed shape (0x%08lx -> 0x%08lx): re-creating its endpoint",
-             entity_id, static_cast<unsigned long>(stored),
+    ESP_LOGW(kTag,
+             "entity 0x%04x channel %u changed shape (0x%08lx -> 0x%08lx): re-creating its endpoint",
+             entity_id, static_cast<unsigned>(channel), static_cast<unsigned long>(stored),
              static_cast<unsigned long>(plan.packed()));
     remove_endpoint(ep, old, "reshape", entity_id);
   }
@@ -464,14 +614,25 @@ std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity
   const std::uint16_t new_ep =
       err == ESP_OK ? app_bridge_get_endpoint(&addr) : chip::kInvalidEndpointId;
   if (new_ep == chip::kInvalidEndpointId) {
-    ESP_LOGE(kTag, "app_bridge_create_new_device failed for entity 0x%04x: %d", entity_id, err);
+    ESP_LOGE(kTag, "app_bridge_create_new_device failed for entity 0x%04x channel %u: %d",
+             entity_id, static_cast<unsigned>(channel), err);
     matter_bridge::log_table();
     return chip::kInvalidEndpointId;
   }
   forget_endpoint_state(new_ep);
-  ESP_LOGI(kTag, "bridged: entity 0x%04x (chip 0x%02x) -> Matter endpoint %u (kind 0x%04x, extras 0x%02x)",
-           entity_id, chip_id, static_cast<unsigned>(new_ep), static_cast<unsigned>(plan.kind),
-           static_cast<unsigned>(plan.extras));
+  // The endpoint is in the table now, so its address is known: fill in the
+  // name and the stable identity.
+  {
+    esp_matter::endpoint_t* ep_obj = esp_matter::endpoint::get(g_node, new_ep);
+    if (ep_obj != nullptr) {
+      fill_identity(ep_obj, chip_id, entity_id, plan.kind, channel);
+    }
+  }
+  ESP_LOGI(kTag,
+           "bridged: entity 0x%04x (chip 0x%02x, channel %u) -> Matter endpoint %u "
+           "(kind 0x%04x, extras 0x%02x)",
+           entity_id, chip_id, static_cast<unsigned>(channel), static_cast<unsigned>(new_ep),
+           static_cast<unsigned>(plan.kind), static_cast<unsigned>(plan.extras));
   return new_ep;
 }
 
@@ -479,15 +640,20 @@ std::uint16_t ensure_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity
 // endpoint that mirrored it, so controllers (Apple Home...) stop listing a
 // dead accessory. Also forgets it in NVS (app_bridge_remove_device).
 void remove_bridged_endpoint(std::uint8_t chip_id, std::uint16_t entity_id) {
-  keystone::BridgedAddr addr{chip_id, entity_id};
-  const std::uint16_t ep = app_bridge_get_endpoint(&addr);
-  if (ep == chip::kInvalidEndpointId) {
-    ESP_LOGI(kTag, "undeclare entity 0x%04x: no bridged endpoint for it", entity_id);
-    return;
+  bool removed = false;
+  // A combined sensor owns two endpoints; unpairing must take both away.
+  for (std::uint8_t channel : {M::kChannelMain, M::kChannelHumidity}) {
+    keystone::BridgedAddr addr{chip_id, entity_id, channel};
+    const std::uint16_t ep = app_bridge_get_endpoint(&addr);
+    if (ep == chip::kInvalidEndpointId) continue;
+    app_bridged_device_t* bd = app_bridge_get_device(ep);
+    if (bd == nullptr) continue;
+    remove_endpoint(ep, bd, "undeclare", entity_id);
+    removed = true;
   }
-  app_bridged_device_t* bd = app_bridge_get_device(ep);
-  if (bd == nullptr) return;
-  remove_endpoint(ep, bd, "undeclare", entity_id);
+  if (!removed) {
+    ESP_LOGI(kTag, "undeclare entity 0x%04x: no bridged endpoint for it", entity_id);
+  }
 }
 
 // ---- STATE from the brain -> the mirrored Matter attribute ------------------------
@@ -523,6 +689,24 @@ void update_attr(std::uint16_t ep, std::uint32_t cluster_id, std::uint32_t attr_
   const esp_err_t err = attribute::update(ep, cluster_id, attr_id, &v);
   ESP_LOGI(kTag, "STATE -> Matter ep=%u %s=%ld%s", static_cast<unsigned>(ep), what, shown,
            err == ESP_OK ? "" : " (update failed)");
+}
+
+// The RelativeHumidityMeasurement cluster is code-driven: the controller reads
+// the CHIP cluster object, not esp-matter's legacy attribute store. Returns
+// false when this endpoint has no such object (e.g. the main endpoint of an
+// endpoint created by the new build, where humidity lives on its own endpoint).
+bool set_humidity_cluster(std::uint16_t ep, std::uint16_t centi) {
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+  auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
+      chip::app::ConcreteClusterPath(ep, RelativeHumidityMeasurement::Id));
+  if (sci == nullptr) return false;
+  const chip::ChipError err =
+      static_cast<chip::app::Clusters::RelativeHumidityMeasurementCluster*>(sci)->SetMeasuredValue(
+          chip::app::DataModel::Nullable<std::uint16_t>(centi));
+  if (err != CHIP_NO_ERROR) {
+    ESP_LOGW(kTag, "failed to set the Matter humidity: %" CHIP_ERROR_FORMAT, err.Format());
+  }
+  return true;
 }
 
 void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& v) {
@@ -603,16 +787,22 @@ void apply_value(std::uint16_t ep, std::uint8_t attr_id, const hubproto::Value& 
       update_attr(ep, RelativeHumidityMeasurement::Id,
                   RelativeHumidityMeasurement::Attributes::MeasuredValue::Id, nullable_u16(centi),
                   "Humidity", centi);
-      // RelativeHumidityMeasurement is code-driven too: update its CHIP cluster object.
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      auto* sci = esp_matter::data_model::provider::get_instance().registry().Get(
-          chip::app::ConcreteClusterPath(ep, RelativeHumidityMeasurement::Id));
-      if (sci != nullptr) {
-        const chip::ChipError err =
-            static_cast<chip::app::Clusters::RelativeHumidityMeasurementCluster*>(sci)->SetMeasuredValue(
-                chip::app::DataModel::Nullable<std::uint16_t>(centi));
-        if (err != CHIP_NO_ERROR) {
-          ESP_LOGW(kTag, "failed to set the Matter humidity: %" CHIP_ERROR_FORMAT, err.Format());
+      if (!set_humidity_cluster(ep, centi)) {
+        ESP_LOGW(kTag, "STATE -> Matter ep=%u Humidity=%u (no RH cluster object)",
+                 static_cast<unsigned>(ep), static_cast<unsigned>(centi));
+      }
+      // An endpoint persisted before the split still has an RH cluster on its main
+      // endpoint. Keep it in sync too, so any controller that reads the old cluster
+      // sees the same value. New main endpoints have no cluster; the helper is silent.
+      app_bridged_device_t* bd = app_bridge_get_device(ep);
+      if (bd != nullptr) {
+        const keystone::BridgedAddr addr = static_cast<keystone::BridgedDevice*>(bd)->addr();
+        if (addr.channel == M::kChannelHumidity) {
+          const keystone::BridgedAddr main_addr{addr.chip_id, addr.entity_id, M::kChannelMain};
+          const std::uint16_t main_ep = app_bridge_get_endpoint(&main_addr);
+          if (main_ep != chip::kInvalidEndpointId && main_ep != ep) {
+            set_humidity_cluster(main_ep, centi);
+          }
         }
       }
       break;
@@ -734,11 +924,27 @@ std::uint8_t owner_chip(std::uint8_t from_chip, std::uint16_t entity_id) {
   return hi != 0 ? hi : from_chip;
 }
 
+std::uint16_t endpoint_for_entity(std::uint8_t chip_id, std::uint16_t entity_id) {
+  const keystone::BridgedAddr main_addr{chip_id, entity_id, M::kChannelMain};
+  return app_bridge_get_endpoint(&main_addr);
+}
+
+// Route a STATE attribute to the right endpoint of the entity. Everything but
+// humidity stays on the main endpoint; humidity goes to its own 0x0307 endpoint
+// when the entity has one (older single-endpoint sensors fall back to main).
+std::uint16_t endpoint_for_attr(std::uint8_t chip_id, std::uint16_t entity_id,
+                                std::uint8_t attr_id) {
+  const std::uint16_t main_ep = endpoint_for_entity(chip_id, entity_id);
+  if (attr_id != A::kHumidity) return main_ep;
+  const keystone::BridgedAddr hum_addr{chip_id, entity_id, M::kChannelHumidity};
+  const std::uint16_t hum_ep = app_bridge_get_endpoint(&hum_addr);
+  return hum_ep != chip::kInvalidEndpointId ? hum_ep : main_ep;
+}
+
 void apply_state(std::uint8_t chip_id, const hubproto::Header& h, const std::uint8_t* payload,
                  std::size_t len) {
-  keystone::BridgedAddr addr{owner_chip(chip_id, h.entity_id), h.entity_id};
-  const std::uint16_t ep = app_bridge_get_endpoint(&addr);
-  if (ep == chip::kInvalidEndpointId) return;
+  const std::uint8_t owner = owner_chip(chip_id, h.entity_id);
+  if (endpoint_for_entity(owner, h.entity_id) == chip::kInvalidEndpointId) return;
   auto rd = hubproto::state_reader(payload, len);
   if (!rd.valid) return;
   while (rd.remaining > 0 && rd.valid) {
@@ -756,7 +962,7 @@ void apply_state(std::uint8_t chip_id, const hubproto::Header& h, const std::uin
     }
     hubproto::Value v{};
     if (!hubproto::state_consume(rd, vt, v)) break;
-    apply_value(ep, attr_id, v);
+    apply_value(endpoint_for_attr(owner, h.entity_id, attr_id), attr_id, v);
   }
 }
 
@@ -784,8 +990,10 @@ void log_table() {
     if (eps[i] == chip::kInvalidEndpointId || eps[i] == 0) continue;
     ++used;
     auto* bd = static_cast<keystone::BridgedDevice*>(app_bridge_get_device(eps[i]));
-    ESP_LOGI(kTag, "  bridge slot %d: endpoint %u -> %s entity 0x%04x", i, static_cast<unsigned>(eps[i]),
-             bd ? "device" : "NO DEVICE", bd ? static_cast<unsigned>(bd->addr().entity_id) : 0u);
+    ESP_LOGI(kTag, "  bridge slot %d: endpoint %u -> %s entity 0x%04x channel %u", i,
+             static_cast<unsigned>(eps[i]), bd ? "device" : "NO DEVICE",
+             bd ? static_cast<unsigned>(bd->addr().entity_id) : 0u,
+             bd ? static_cast<unsigned>(bd->addr().channel) : 0u);
   }
   ESP_LOGI(kTag, "bridge table: %d of %d slots used", used, MAX_BRIDGED_DEVICE_COUNT);
 }
@@ -891,8 +1099,24 @@ void on_bus_message(const hubproto::Header& h, const std::uint8_t* payload, std:
       for (std::uint8_t i = 0; i < view.attr_count; ++i) {
         attrs.add(hubproto::declare_attr_at(view, i).attr_id);
       }
-      ensure_bridged_endpoint(owner_chip(h.chip_id, view.entity_id), view.entity_id,
-                              M::plan_for(view.device_type, attrs));
+      // The name the hub knows the entity by (the DECLARE carries it, if the
+      // brain knows one). The endpoint that is created next shows it to the
+      // controller.
+      g_pending_name[0] = '\0';
+      if (view.name != nullptr && view.name_len > 0) {
+        const std::size_t n = view.name_len < sizeof(g_pending_name) - 1 ? view.name_len
+                                                                        : sizeof(g_pending_name) - 1;
+        std::memcpy(g_pending_name, view.name, n);
+        g_pending_name[n] = '\0';
+      }
+      const std::uint8_t owner = owner_chip(h.chip_id, view.entity_id);
+      const M::PlanSet plans = M::plans_for(view.device_type, attrs);
+      // Create the original endpoint first, so a controller that reconnects in
+      // the middle still finds the accessory it already had.
+      ensure_bridged_endpoint(owner, view.entity_id, plans.main, M::kChannelMain);
+      if (plans.has_humidity()) {
+        ensure_bridged_endpoint(owner, view.entity_id, plans.humidity, M::kChannelHumidity);
+      }
       return;
     }
     case hubproto::MsgType::State:
@@ -913,15 +1137,17 @@ esp_err_t start(core::Bus* bus, esp_matter::node_t* node, std::uint16_t aggregat
   g_aggregator_endpoint_id = aggregator_ep;
   g_boot_id = boot_id;
 
-  // Controller changes to level/colour/thermostat are debounced before they
-  // go to the brain.
-  g_q_mu = xSemaphoreCreateMutex();
-  if (g_q_mu == nullptr) return ESP_ERR_NO_MEM;
-  xTaskCreate(forward_task, "ks_fwd", 3072, nullptr, 4, nullptr);
-
   // Bring bridged endpoints back from NVS. Fires create_bridged_clusters for
   // each restored endpoint. New devices from live DECLAREs go through the
   // same callback via app_bridge_create_new_device.
+  //
+  // This is the first thing the bridge does, before it answers the brain or
+  // the controller: a controller that connects while the list is still short
+  // does not see a device it knew about, drops its record of it, and
+  // recreates the accessory in the Default Room without its automations (see
+  // docs/matter-backlog.md § "Rooms in Apple Home"). The DNS-SD server — the
+  // thing that makes the bridge visible — is already up by now, so every
+  // controller that can reach us finds the full list.
   g_building = true;
   const esp_err_t err = app_bridge_initialize(node, create_bridged_clusters, alloc_bridged,
                                                free_bridged);
@@ -930,6 +1156,16 @@ esp_err_t start(core::Bus* bus, esp_matter::node_t* node, std::uint16_t aggregat
     ESP_LOGE(kTag, "app_bridge_initialize: %d", err);
     return err;
   }
+  // Now that the table knows which entity every endpoint mirrors, the names
+  // and the stable identities can be filled in.
+  fill_identities();
+
+  // Controller changes to level/colour/thermostat are debounced before they
+  // go to the brain.
+  g_q_mu = xSemaphoreCreateMutex();
+  if (g_q_mu == nullptr) return ESP_ERR_NO_MEM;
+  xTaskCreate(forward_task, "ks_fwd", 3072, nullptr, 4, nullptr);
+
   ESP_LOGI(kTag, "bridge up under aggregator endpoint %u", static_cast<unsigned>(aggregator_ep));
   log_table();
   return ESP_OK;

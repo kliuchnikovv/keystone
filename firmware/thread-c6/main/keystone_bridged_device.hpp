@@ -12,6 +12,10 @@ namespace keystone {
 struct BridgedAddr {
   std::uint8_t  chip_id;
   std::uint16_t entity_id;
+  // Which Matter endpoint of the same entity this is. 0 is the original/main
+  // endpoint, 1 the extra humidity sensor. Old NVS records have only the first
+  // two fields and are restored with channel = 0.
+  std::uint8_t  channel = 0;
 };
 
 class BridgedDevice : public app_bridged_device_t {

@@ -59,6 +59,18 @@ export interface NativeBleStatus {
   authorization: BleAuthorization;
 }
 
+/**
+ * What the native geofence watcher says.
+ *
+ * `home: true` means the phone crossed into the zone; `home: false` means it
+ * left and stayed out long enough (the confirmation window is in the native
+ * code, so the hub only ever sees clean "home" / "away").
+ */
+export interface NativePresenceEvent {
+  home?: boolean;
+  error?: string;
+}
+
 export interface KeystoneNetModule {
   /** Open `url` (wss://) trusting only the certificate whose SHA-256 is `fingerprint`. */
   connect(id: string, url: string, fingerprint: string): void;
@@ -77,9 +89,24 @@ export interface KeystoneNetModule {
   stopBleScan(): void;
   /** What the Bluetooth stack says about itself, without starting a scan. */
   bleStatus(): NativeBleStatus;
+  /**
+   * Watch a circular zone and say when the phone enters or leaves it.
+   *
+   * The watching happens in the native code: iOS and Android both kill the app
+   * in the background, but their system's geofence service still wakes the app
+   * when the phone crosses the zone. `radius` is in metres.
+   */
+  startGeofence(latitude: number, longitude: number, radius: number): void;
+  /** Stop watching. */
+  stopGeofence(): void;
+  /** Whether the app may watch a zone at all ("granted" / "notDetermined"). */
+  geofenceStatus(): { authorization: string };
+  /** Ask for the location permission the geofence needs. */
+  requestLocationPermission(): void;
   addListener(event: 'onSocketEvent', listener: (e: NativeSocketEvent) => void): NativeSubscription;
   addListener(event: 'onHubFound', listener: (h: NativeHub) => void): NativeSubscription;
   addListener(event: 'onHubLost', listener: (h: { instance: string }) => void): NativeSubscription;
   addListener(event: 'onBleAdvertisement', listener: (a: NativeBleAdvertisement) => void): NativeSubscription;
   addListener(event: 'onBleState', listener: (s: NativeBleStatus) => void): NativeSubscription;
+  addListener(event: 'onPresence', listener: (p: NativePresenceEvent) => void): NativeSubscription;
 }

@@ -5,7 +5,8 @@ import { describeRule, describeScene, describeSchedule, describeTimer } from '..
 import type { Commands } from '../hooks/useCommands';
 import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
-import { RuleFormView, SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
+import { SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
+import { RuleEditor } from './RuleEditor';
 import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
 import { ScreenHeader } from './ScreenHeader';
 import { useTheme } from './theme';
@@ -167,7 +168,7 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         {section === 'rules' && (
           <>
             {adding?.section === 'rules' ? (
-              <RuleFormView entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('rule.add', 'Rule saved')} onCancel={() => setAdding(null)} />
+              <RuleEditor entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('rule.add', 'Rule saved')} onCancel={() => setAdding(null)} />
             ) : (
               <Button label="Add rule" onPress={() => open('rules')} />
             )}

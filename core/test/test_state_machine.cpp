@@ -35,7 +35,7 @@ void declare_sensor(Registry& reg, std::uint8_t chip_id, std::uint16_t entity_id
   }};
   std::array<std::uint8_t, 64> buf{};
   auto r = hubproto::encode_declare(entity_id, DeviceType::Sensor, attrs.data(),
-                                    2, buf.data(), buf.size());
+                                    2, nullptr, buf.data(), buf.size());
   REQUIRE(r.ok);
   hubproto::DeclareView v{};
   REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));

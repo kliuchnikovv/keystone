@@ -31,7 +31,7 @@ using Reader = BasicJsonReader<192>;
 void declare(Registry& reg, std::uint8_t chip, std::uint16_t id, hubproto::DeviceType dt,
              std::vector<hubproto::AttrDecl> attrs) {
   std::array<std::uint8_t, 64> buf{};
-  auto r = hubproto::encode_declare(id, dt, attrs.data(), static_cast<std::uint8_t>(attrs.size()), buf.data(), buf.size());
+  auto r = hubproto::encode_declare(id, dt, attrs.data(), static_cast<std::uint8_t>(attrs.size()), nullptr, buf.data(), buf.size());
   REQUIRE(r.ok);
   hubproto::DeclareView v{};
   REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));
@@ -837,6 +837,50 @@ TEST_CASE("location.set takes numeric lat/lon in range and nothing else") {
                           R"({"lat":true,"lon":1})", R"({"lat":1e999,"lon":1})"}) {
     CAPTURE(bad);
     const auto o = parse(bad, lat, lon);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}
+
+TEST_CASE("presence.report takes a name and a boolean and refuses anything else") {
+  auto parse = [](const std::string& args, char* name, std::size_t cap, bool& home) {
+    const std::string frame = R"({"type":"req","id":1,"op":"presence.report","args":)" + args + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return core::app::presence_report_parse(r, m.args, name, cap, home);
+  };
+  char name[24] = {0};
+  bool home = false;
+  CHECK(parse(R"({"name":"Anna phone","home":true})", name, sizeof(name), home).ok);
+  CHECK(std::string(name) == "Anna phone");
+  CHECK(home);
+  CHECK(parse(R"({"name":"Anna phone","home":false})", name, sizeof(name), home).ok);
+  CHECK_FALSE(home);
+  for (const char* bad : {R"({})", R"({"name":"Anna"})", R"({"home":true})", R"({"name":"","home":true})",
+                          R"({"name":"Anna","home":"yes"})", R"({"name":"Anna","home":2})",
+                          R"({"name":"Anna","home":null})", R"({"name":42,"home":true})"}) {
+    CAPTURE(bad);
+    const auto o = parse(bad, name, sizeof(name), home);
+    CHECK_FALSE(o.ok);
+    CHECK(o.err == Err::BadArgs);
+  }
+}
+
+TEST_CASE("presence.remove takes an entity id") {
+  auto parse = [](const std::string& args, std::int64_t& entity) {
+    const std::string frame = R"({"type":"req","id":1,"op":"presence.remove","args":)" + args + "}";
+    Reader r;
+    const ClientMsg m = decode_client(r, frame.data(), frame.size());
+    REQUIRE(m.kind == ClientMsg::Kind::Req);
+    return core::app::presence_remove_parse(r, m.args, entity);
+  };
+  std::int64_t entity = 0;
+  CHECK(parse(R"({"entity":3968})", entity).ok);
+  CHECK(entity == 3968);
+  for (const char* bad : {R"({})", R"({"entity":-1})", R"({"entity":70000})", R"({"entity":"x"})"}) {
+    CAPTURE(bad);
+    const auto o = parse(bad, entity);
     CHECK_FALSE(o.ok);
     CHECK(o.err == Err::BadArgs);
   }

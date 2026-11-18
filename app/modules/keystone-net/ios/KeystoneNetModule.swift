@@ -224,6 +224,7 @@ public final class KeystoneNetModule: Module {
   private var sockets: [String: PinnedSocket] = [:]
   private var browser: HubBrowser?
   private var ble: BleScanner?
+  private var geofence: GeofenceWatcher?
   private let lock = NSLock()
 
   private func emit(_ id: String, _ kind: String, _ extra: [String: Any?]) {
@@ -237,7 +238,7 @@ public final class KeystoneNetModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("KeystoneNet")
-    Events("onSocketEvent", "onHubFound", "onHubLost", "onBleAdvertisement", "onBleState")
+    Events("onSocketEvent", "onHubFound", "onHubLost", "onBleAdvertisement", "onBleState", "onPresence")
 
     Function("connect") { (id: String, url: String, fingerprint: String) in
       guard let pin = parsePin(fingerprint), let u = URL(string: url) else {
@@ -316,12 +317,53 @@ public final class KeystoneNetModule: Module {
       ]
     }
 
+    // ---- presence: the geofence that says "I am home" ------------------------------
+    //
+    // The region monitoring lives in the native code, not in JS: iOS kills the
+    // app in the background, but the system's region monitor still wakes us when
+    // the phone crosses the zone.
+
+    Function("startGeofence") { (latitude: Double, longitude: Double, radius: Double) in
+      DispatchQueue.main.async {
+        if self.geofence == nil {
+          self.geofence = GeofenceWatcher(
+            onChange: { home in self.sendEvent("onPresence", ["home": home]) },
+            onError: { message in self.sendEvent("onPresence", ["error": message]) })
+        }
+        self.geofence?.start(latitude: latitude, longitude: longitude, radius: radius)
+      }
+    }
+
+    Function("stopGeofence") {
+      DispatchQueue.main.async {
+        self.geofence?.stop()
+        self.geofence = nil
+      }
+    }
+
+    Function("geofenceStatus") { () -> [String: Any?] in
+      return ["authorization": self.geofence?.authorizationStatus() ?? "notDetermined"]
+    }
+
+    Function("requestLocationPermission") {
+      DispatchQueue.main.async {
+        if self.geofence == nil {
+          self.geofence = GeofenceWatcher(
+            onChange: { home in self.sendEvent("onPresence", ["home": home]) },
+            onError: { message in self.sendEvent("onPresence", ["error": message]) })
+        }
+        self.geofence?.requestAuthorization()
+      }
+    }
+
     OnDestroy {
       DispatchQueue.main.async {
         self.browser?.stop()
         self.browser = nil
         self.ble?.stop()
         self.ble = nil
+        self.geofence?.stop()
+        self.geofence = nil
       }
       self.lock.lock()
       let all = Array(self.sockets.values)

@@ -51,6 +51,29 @@ one predicate, one action). To make rules richer:
 - Consider a small DSL (Berry/Lua) later, but not before we hit a wall with
   the in-code table (SPEC §7 already flags this as a later option).
 
+### 1.1 «Ушёл из комнаты» (`last_seen`)
+
+**Question:** can a rule ask "nobody has been in the hall for 15 minutes"? Today it
+cannot. `occupied == false` only means "the sensor sees no one right now" — a PIR
+reports the same thing when someone walks past, so the two are indistinguishable.
+
+**Idea:** keep the timestamp of the last `occupied == true` per entity, and add a
+derived attribute (e.g. `last_seen`, u32 seconds since the hub's epoch, or a bool
+`empty_for_15min` refreshed by the brain). A rule then reads "the hall has been empty
+for 15 minutes" as an ordinary condition.
+
+**What it touches:** a new attribute id (`hubproto::attr`), a per-entity timestamp in
+the brain, a way to age it out (the brain's clock may be unsynced — fall back to
+uptime), and one more comparison kind or a periodically refreshed bool attribute.
+
+**Why it is not folded into `occupied`:** changing the meaning of `occupied` would
+break every existing rule and every Matter mirror (OccupancySensing models "right
+now", not "for how long").
+
+**Status:** open. The app-side phrasing ("Никого нет 15 минут") is deliberately **not**
+promised until this exists — today it would be a lie. See
+[automations.md §5.1](automations.md).
+
 ## 2. Time
 
 Done (`91de2c2`): SNTP over WiFi (`pool.ntp.org`), console `time` (shows time,

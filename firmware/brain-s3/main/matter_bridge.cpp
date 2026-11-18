@@ -67,6 +67,10 @@ constexpr std::uint16_t kDescriptorEndpointWildcard = 0xFFFF;
 constexpr std::uint32_t kDescriptorCluster = 0x001D;
 constexpr std::uint32_t kDeviceTypeListAttribute = 0x0000;
 constexpr std::uint32_t kServerListAttribute = 0x0001;
+// The feature map of a cluster (0xFFFD): the bits that say what the cluster supports. The
+// Power Source cluster uses it to say whether it describes a battery (BAT) or a mains supply
+// (WIRED) — the cluster itself is the same either way.
+constexpr std::uint32_t kFeatureMapAttribute = 0xFFFD;
 // ClientList (0x0002) is deliberately not read. The one cluster the hub looks
 // for here — Identify, the blink — is a *server* cluster on the device that
 // blinks, so the ServerList is where it lives.
@@ -133,6 +137,7 @@ enum class Op : std::uint8_t {
   kAttribute,            // a value reported by a subscription
   kDescriptorDone,       // the descriptor read finished; the data is in g_build
   kDescriptorFailed,     // it did not
+  kPowerSourceDone,      // the Power Source feature maps were read; the data is in g_build
   kCommissioned,         // CHIP finished the commissioning of a node
   kCommissionFailed,     // ... and it failed
   kRestoreNext,          // read the descriptor of the next saved node
@@ -214,6 +219,11 @@ struct DescriptorEndpoint {
   // ServerList — and flagged as the list is decoded rather than searched for
   // afterwards, so a server list longer than `clusters` cannot hide it.
   bool has_identify = false;
+  // The feature map of the Power Source cluster on this endpoint (0xFFFD of that cluster).
+  // The cluster describes *a* power source: a mains-powered device carries it with the WIRED
+  // feature and no battery, so only the BAT bit makes it a battery. 0 = not read (or no such
+  // cluster on the endpoint).
+  std::uint32_t power_source_features = 0;
 };
 
 struct DescriptorBuild {
@@ -290,8 +300,10 @@ void publish_declare(const RuntimeEntity& entity) {
   // one byte short makes the encoder fail — and the DECLARE would be lost
   // without a word.
   std::uint8_t buf[hubproto::declare_size(kAttrsPerEntity)] = {};
+  // No name: the hub's registry holds the names, and it mirrors its own
+  // DECLAREs to the co-processor with them.
   const auto enc = hubproto::encode_declare(entity.id, entity.device_type, attrs,
-                                            entity.attr_count, buf, sizeof(buf));
+                                            entity.attr_count, nullptr, buf, sizeof(buf));
   if (!enc.ok) {
     ESP_LOGE(kTag, "the DECLARE of entity 0x%04x does not fit into %u bytes",
              static_cast<unsigned>(entity.id), static_cast<unsigned>(sizeof(buf)));
@@ -597,6 +609,136 @@ void start_descriptor_read(std::uint8_t slot) {
   }
 }
 
+// ---- the Power Source feature map ---------------------------------------------------------
+//
+// The Descriptor says *which* clusters an endpoint has, but not what the Power Source cluster
+// is: the same cluster describes a mains supply (WIRED) and a battery (BAT). The difference
+// is the cluster's feature map (attribute 0xFFFD), read per endpoint — so it is a second
+// read, once the Descriptor has told us which endpoints have the cluster at all.
+void start_power_source_read(std::uint8_t slot) {
+  RuntimeNode& node = g_nodes[slot];
+  g_build.active = true;
+  g_build.node_id = node.node_id;
+  g_build.slot = slot;
+
+  using chip::app::AttributePathParams;
+  using chip::Platform::ScopedMemoryBufferWithSize;
+
+  // The endpoints that have a Power Source cluster.
+  std::uint16_t endpoints[kMaxEndpoints];
+  std::size_t count = 0;
+  for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
+    const DescriptorEndpoint& ep = g_build.endpoints[i];
+    bool has_power_source = false;
+    for (std::uint8_t c = 0; c < ep.cluster_count; ++c) {
+      if (ep.clusters[c] == core::matter::kPowerSource) {
+        has_power_source = true;
+        break;
+      }
+    }
+    if (has_power_source && count < kMaxEndpoints) endpoints[count++] = ep.endpoint;
+  }
+  if (count == 0) {
+    // Nothing to ask: no endpoint has the cluster, so no endpoint has a battery.
+    g_build.active = false;
+    Request req;
+    req.op = Op::kPowerSourceDone;
+    req.node_id = node.node_id;
+    xQueueSend(g_queue, &req, 0);
+    return;
+  }
+
+  ScopedMemoryBufferWithSize<AttributePathParams> paths;
+  ScopedMemoryBufferWithSize<EventPathParams> events;
+  paths.Alloc(count);
+  events.Alloc(0);
+  if (paths.Get() == nullptr) {
+    g_build.active = false;
+    ESP_LOGE(kTag, "no memory for the Power Source read");
+    if (g_attempt_active.load()) fail_attempt(hubproto::MatterCode::Failed);
+    return;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    paths[i] = AttributePathParams(endpoints[i], core::matter::kPowerSource, kFeatureMapAttribute);
+  }
+
+  auto on_attribute = [](std::uint64_t remote_node,
+                         const chip::app::ConcreteDataAttributePath& path,
+                         chip::TLV::TLVReader* data, const chip::app::StatusIB& status) {
+    if (!g_build.active || remote_node != g_build.node_id || data == nullptr) return;
+    if (status.ToChipError() != CHIP_NO_ERROR) return;
+    if (path.mClusterId != core::matter::kPowerSource) return;
+    if (path.mAttributeId != kFeatureMapAttribute) return;
+
+    std::uint32_t features = 0;
+    if (chip::app::DataModel::Decode(*data, features) != CHIP_NO_ERROR) return;
+
+    for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
+      DescriptorEndpoint& ep = g_build.endpoints[i];
+      if (ep.endpoint != path.mEndpointId) continue;
+      ep.power_source_features = features;
+      break;
+    }
+  };
+
+  auto on_done = [](std::uint64_t remote_node, const ScopedMemoryBufferWithSize<AttributePathParams>&,
+                    const ScopedMemoryBufferWithSize<EventPathParams>&) {
+    if (!g_build.active || remote_node != g_build.node_id) return;
+    g_build.active = false;
+    Request req;
+    req.op = Op::kPowerSourceDone;
+    req.node_id = remote_node;
+    if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+      ESP_LOGE(kTag, "the request queue is full: the Power Source result is lost");
+    }
+  };
+
+  auto on_error = [](std::uint64_t remote_node, CHIP_ERROR error) {
+    ESP_LOGW(kTag, "the Power Source feature map read failed: %s", chip::ErrorStr(error));
+    if (!g_build.active || remote_node != g_build.node_id) return;
+    g_build.active = false;
+    Request req;
+    req.op = Op::kPowerSourceDone;
+    req.node_id = remote_node;
+    if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+      ESP_LOGE(kTag, "the request queue is full: the Power Source failure is lost");
+    }
+  };
+
+  auto on_connect_failure = [](void*, const chip::ScopedNodeId& peer, CHIP_ERROR error) {
+    ESP_LOGW(kTag, "cannot reach Matter node 0x%016llx for its Power Source: %s",
+             static_cast<unsigned long long>(peer.GetNodeId()), chip::ErrorStr(error));
+    if (!g_build.active || peer.GetNodeId() != g_build.node_id) return;
+    g_build.active = false;
+    Request req;
+    req.op = Op::kPowerSourceDone;
+    req.node_id = peer.GetNodeId();
+    if (xQueueSend(g_queue, &req, pdMS_TO_TICKS(50)) != pdTRUE) {
+      ESP_LOGE(kTag, "the request queue is full: the Power Source failure is lost");
+    }
+  };
+
+  auto* cmd = chip::Platform::New<esp_matter::controller::read_command>(
+      node.node_id, std::move(paths), std::move(events), on_attribute, on_done, nullptr,
+      on_connect_failure, on_error);
+  if (cmd == nullptr) {
+    g_build.active = false;
+    ESP_LOGE(kTag, "no memory for the Power Source read command");
+    if (g_attempt_active.load()) fail_attempt(hubproto::MatterCode::Failed);
+    return;
+  }
+
+  const esp_err_t err = [&] {
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    return cmd->send_command();
+  }();
+  if (err != ESP_OK) {
+    g_build.active = false;
+    ESP_LOGE(kTag, "cannot start the Power Source read: %s", esp_err_to_name(err));
+    if (g_attempt_active.load()) fail_attempt(hubproto::MatterCode::Failed);
+  }
+}
+
 // ---- subscription ------------------------------------------------------------------------
 void on_attribute_report(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
                          chip::TLV::TLVReader* data, const chip::app::StatusIB& status) {
@@ -699,6 +841,16 @@ void handle_descriptor(bool ok) {
     return;
   }
 
+  // The Descriptor says which clusters an endpoint has; the Power Source's feature map says
+  // whether that cluster is a battery or a mains supply. Read it before the plan is built,
+  // so the battery attribute is there only for a device that really has a battery.
+  start_power_source_read(g_build.slot);
+}
+
+// The Power Source feature maps are in g_build: build the plan and publish the entities.
+void handle_power_source() {
+  const bool attempt = g_attempt_active.load();
+
   core::matter::EndpointView views[kMaxEndpoints];
   for (std::uint8_t i = 0; i < g_build.endpoint_count; ++i) {
     views[i].endpoint_id = g_build.endpoints[i].endpoint;
@@ -706,6 +858,7 @@ void handle_descriptor(bool ok) {
     views[i].device_type_count = g_build.endpoints[i].device_type_count;
     views[i].clusters = g_build.endpoints[i].clusters;
     views[i].cluster_count = g_build.endpoints[i].cluster_count;
+    views[i].power_source_features = g_build.endpoints[i].power_source_features;
   }
 
   // The hub's own Matter accessory (the bridge on the co-processor) is not a
@@ -1327,6 +1480,10 @@ void worker(void*) {
 
       case Op::kDescriptorFailed:
         handle_descriptor(false);
+        break;
+
+      case Op::kPowerSourceDone:
+        handle_power_source();
         break;
 
       case Op::kCommissioned:

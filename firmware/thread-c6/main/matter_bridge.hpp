@@ -39,7 +39,13 @@ namespace matter_bridge {
 
 // Bring the bridge up: the bus to the brain, the Matter node, the aggregator
 // endpoint the bridged devices hang under and our boot id (it goes into every
-// frame we send). Restores the endpoints of a previous run from NVS.
+// frame we send).
+//
+// The endpoints of a previous run are restored from NVS first, before the
+// bridge answers the brain or a controller: a controller that connects while
+// the list is still short does not see a device it knew about, drops its
+// record of it, and recreates the accessory in the Default Room without its
+// automations (docs/matter-backlog.md § "Rooms in Apple Home").
 esp_err_t start(core::Bus* bus, esp_matter::node_t* node, std::uint16_t aggregator_ep,
                 std::uint8_t boot_id);
 

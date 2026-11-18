@@ -101,6 +101,34 @@ export function actionText(a: Action): string {
   return a === 'on' ? 'On' : a === 'off' ? 'Off' : 'Toggle';
 }
 
+// ---- presence: how a bool about people reads ----------------------------------------------
+
+/**
+ * The attributes that say whether someone is there, and how their two values read.
+ *
+ * "occupied == false" does not mean "left" — a motion sensor says the same thing
+ * when someone walks past. So the wording stays honest: "nobody is there", never
+ * "left". A rule that really means "has been empty for 15 minutes" needs the
+ * `last_seen` attribute, which does not exist yet (docs/brain-backlog.md §1.1).
+ */
+const PRESENCE_VALUES: Record<string, { yes: string; no: string }> = {
+  occupied: { yes: 'Someone is there', no: 'Nobody is there' },
+  home: { yes: 'At home', no: 'Away' },
+  contact: { yes: 'Closed', no: 'Open' },
+};
+
+/** How a value of a presence attribute reads: "Someone is there", or null for other attributes. */
+export function presenceValueText(attrName: string, value: Value): string | null {
+  const wording = PRESENCE_VALUES[attrName];
+  if (!wording || typeof value !== 'boolean') return null;
+  return value ? wording.yes : wording.no;
+}
+
+/** Is this attribute one of the ones that says whether someone is there? */
+export function isPresenceAttr(attrName: string): boolean {
+  return attrName in PRESENCE_VALUES;
+}
+
 /** What a schedule or timer does, in words: "Off plug1" or "Scene evening". */
 function doText(x: { entity?: number; action?: Action; scene?: string }, entities: Entity[]): string {
   if (x.scene !== undefined) return `Scene ${x.scene}`;
@@ -138,10 +166,16 @@ export function describeScene(sc: Scene, entities: Entity[]): { title: string; d
 export function describeRule(r: Rule, entities: Entity[]): { when: string; then: string; extras: string[] } {
   const who = entityName(entities, r.when.entity);
   const what = attrName(entities, r.when.entity, r.when.attr);
+  // A presence attribute carries its own wording: "the hall sensor sees someone"
+  // reads better than "the hall sensor presence is occupied".
+  const attr = attrOf(entities, r.when.entity, r.when.attr);
+  const presence = attr !== undefined && isPresenceAttr(attr.name);
   const when =
     r.when.op === 'any'
       ? `When ${who} ${what} changes`
-      : `When ${who} ${what} ${opText(r.when.op)} ${valueFor(entities, r.when.entity, r.when.attr, r.when.value ?? null)}`;
+      : presence
+        ? `When ${who} ${presenceValueText(attr!.name, r.when.value ?? null) ?? String(r.when.value)}`
+        : `When ${who} ${what} ${opText(r.when.op)} ${valueFor(entities, r.when.entity, r.when.attr, r.when.value ?? null)}`;
   let then: string;
   if ('scene' in r.then) {
     then = `apply scene ${r.then.scene}`;
@@ -162,6 +196,192 @@ export function describeRule(r: Rule, entities: Entity[]): { when: string; then:
   }
   if (r.cooldown_s) extras.push(`at most once per ${formatCountdown(r.cooldown_s)}`);
   return { when, then, extras };
+}
+
+// ---- the rule being edited (a draft) ------------------------------------------------------
+//
+// The hub takes one trigger, one action and one extra condition today (core::Rule).
+// The draft is shaped for what comes next: the conditions are a LIST and the action is
+// a SLOT. So when the hub grows more conditions or several actions, the forms do not
+// have to be rewritten — only the request builder and the hub change.
+
+/** What a rule looks at: a device, one of its attributes, and a comparison. */
+export interface ConditionDraft {
+  option: AttrOption | null;
+  op: CmpOp;
+  /** The value as it is typed (in the person's units), not yet parsed. */
+  value: string;
+}
+
+/** What a rule does: set an attribute, or apply a scene. */
+export interface ActionDraft {
+  option: AttrOption | null;
+  /** The value as it is typed, not yet parsed. */
+  value: string;
+  /** Set to apply a scene instead of setting an attribute. */
+  scene?: string | null;
+}
+
+export interface RuleDraft {
+  /** WHEN — what starts the rule. */
+  trigger: ConditionDraft | null;
+  /** AND — extra conditions that must hold too. The hub takes one today. */
+  conditions: ConditionDraft[];
+  /** THEN — what happens. The hub takes one today. */
+  action: ActionDraft | null;
+  /** Only between these times. */
+  window: { from: string; to: string } | null;
+  /** At most once per this many seconds. */
+  cooldown_s: number | null;
+}
+
+export const EMPTY_CONDITION: ConditionDraft = { option: null, op: '==', value: '' };
+
+export function emptyDraft(): RuleDraft {
+  return { trigger: null, conditions: [], action: null, window: null, cooldown_s: null };
+}
+
+/**
+ * How many extra conditions the hub can store. One today (`and` in `rule.add`).
+ * The editor may hold more in the draft, but it must not promise more than the hub
+ * can keep.
+ */
+export const MAX_EXTRA_CONDITIONS = 1;
+
+/** The comparisons that make sense for an attribute: presence is on/off, numbers compare. */
+export function opsFor(option: AttrOption | null): CmpOp[] {
+  if (!option) return COMPARISONS.map((c) => c.op);
+  // A boolean has nothing to order: only "is" / "is not" (and "changed" for the trigger).
+  if (option.vt === 'bool') return ['any', '==', '!='];
+  // "changed" only reads for the trigger, not for an extra condition.
+  return COMPARISONS.map((c) => c.op).filter((op) => op !== 'any');
+}
+
+/** The value of a condition, as it reads in a sentence: "Someone is there" for presence. */
+function conditionValueText(option: AttrOption | null, value: string): string {
+  if (!option) return value;
+  if (option.vt === 'bool') {
+    const t = value.trim().toLowerCase();
+    if (t === 'on' || t === 'true') return presenceValueText(option.name, true) ?? 'On';
+    if (t === 'off' || t === 'false') return presenceValueText(option.name, false) ?? 'Off';
+    return value;
+  }
+  return value;
+}
+
+/**
+ * The whole rule as one sentence: "When the hall sensor sees someone → the hall light
+ * at 80 %". This is what the person reads while editing, so it has to be right even
+ * when the rule is half-built.
+ */
+export function draftToSentence(d: RuleDraft): string {
+  const parts: string[] = [];
+  const trig = d.trigger;
+  const trigOpt = trig?.option ?? null;
+  if (trig && trigOpt) {
+    const t = trig;
+    const who = trigOpt.label.split(' · ')[0];
+    const what = trigOpt.label.split(' · ')[1] ?? '';
+    // A presence attribute says it all in its value: "the hall sensor sees someone"
+    // reads better than "the hall sensor presence is someone is there". So for
+    // these the value replaces both the attribute name and the comparison.
+    const presence = isPresenceAttr(trigOpt.name);
+    const cmp = t.op === 'any' ? 'changes' : opText(t.op);
+    const val = t.op === 'any' ? '' : ` ${conditionValueText(trigOpt, t.value)}`;
+    const subject = presence ? who : `${who} ${what}`;
+    const middle = presence && t.op !== 'any' ? '' : ` ${cmp}`;
+    parts.push(`When ${subject}${middle}${val}`.replace(/\s+/g, ' ').trim());
+  } else {
+    parts.push('When …');
+  }
+  for (const c of d.conditions) {
+    if (!c.option) continue;
+    const who = c.option.label.split(' · ')[0];
+    const what = c.option.label.split(' · ')[1] ?? '';
+    // Same as the trigger: a presence attribute carries its own wording.
+    const presence = isPresenceAttr(c.option.name);
+    const subject = presence ? who : `${who} ${what}`;
+    const middle = presence ? '' : ` ${opText(c.op)}`;
+    parts.push(`only while ${subject}${middle} ${conditionValueText(c.option, c.value)}`.replace(/\s+/g, ' ').trim());
+  }
+  if (d.action) {
+    if (d.action.scene) parts.push(`apply scene ${d.action.scene}`);
+    else if (d.action.option) {
+      const who = d.action.option.label.split(' · ')[0];
+      const what = d.action.option.label.split(' · ')[1] ?? '';
+      const val = d.action.option.vt === 'bool'
+        ? (d.action.value.trim().toLowerCase() === 'on' ? 'on' : 'off')
+        : d.action.value;
+      parts.push(`set ${who} ${what} to ${val}`.replace(/\s+/g, ' ').trim());
+    }
+  } else {
+    parts.push('then …');
+  }
+  if (d.window) parts.push(`between ${describeTimePoint(d.window.from)} and ${describeTimePoint(d.window.to)}`);
+  if (d.cooldown_s) parts.push(`at most once per ${formatCountdown(d.cooldown_s)}`);
+  return parts.join(' → ');
+}
+
+/**
+ * The draft as the arguments of `rule.add`. The same checks the form needs: a trigger
+ * and an action are required, the values must fit their attributes, and the hub only
+ * keeps one extra condition.
+ */
+export function draftRequest(d: RuleDraft): Built {
+  if (!d.trigger) return { ok: false, error: 'When: pick what starts the rule' };
+  const when = draftCondition(d.trigger, 'When', true);
+  if (!when.ok) return when;
+
+  let thenArgs: Record<string, unknown>;
+  if (d.action?.scene) {
+    thenArgs = { scene: d.action.scene };
+  } else {
+    if (!d.action?.option) return { ok: false, error: 'Then: pick what to set' };
+    const v = parseInput(d.action.option.name, d.action.option.vt, d.action.value);
+    if (!v.ok) return { ok: false, error: `Then: ${v.error}` };
+    thenArgs = { entity: d.action.option.entity, attr: d.action.option.attr, value: v.value };
+  }
+
+  const args: Record<string, unknown> = { when: when.value, then: thenArgs };
+
+  if (d.conditions.length > MAX_EXTRA_CONDITIONS) {
+    return { ok: false, error: `The hub keeps ${MAX_EXTRA_CONDITIONS} extra condition. Remove one.` };
+  }
+  for (const c of d.conditions) {
+    const and = draftCondition(c, 'Only while', false);
+    if (!and.ok) return and;
+    args.and = and.value;
+  }
+
+  if (d.window) {
+    if (!validTimePoint(d.window.from) || !validTimePoint(d.window.to)) {
+      return { ok: false, error: 'Between: times must look like 18:00, sunset or sunset+30' };
+    }
+    if (d.window.from === d.window.to) return { ok: false, error: 'Between: start and end must differ' };
+    args.between = { from: d.window.from, to: d.window.to };
+  }
+
+  if (d.cooldown_s !== null) {
+    const s = d.cooldown_s;
+    if (!Number.isInteger(s) || s < 1 || s > 65535) {
+      return { ok: false, error: 'At most once per: 1 second to 18 hours' };
+    }
+    args.cooldown_s = s;
+  }
+
+  return { ok: true, value: args };
+}
+
+/** One condition as the hub wants it: {entity, attr, op, value}. */
+function draftCondition(c: ConditionDraft, label: string, allowAny: boolean): Built {
+  if (!c.option) return { ok: false, error: `${label}: pick what to look at` };
+  if (c.op === 'any') {
+    if (!allowAny) return { ok: false, error: `${label}: pick a comparison` };
+    return { ok: true, value: { entity: c.option.entity, attr: c.option.attr, op: 'any' } };
+  }
+  const v = parseInput(c.option.name, c.option.vt, c.value);
+  if (!v.ok) return { ok: false, error: `${label}: ${v.error}` };
+  return { ok: true, value: { entity: c.option.entity, attr: c.option.attr, op: c.op, value: v.value } };
 }
 
 // ---- what can be picked ------------------------------------------------------------

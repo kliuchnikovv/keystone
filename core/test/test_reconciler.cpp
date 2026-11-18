@@ -42,7 +42,7 @@ void declare_switch(Registry& reg, std::uint16_t entity_id) {
   const std::array<AttrDecl, 1> attrs{{{0x01, ValueType::Bool, 0x07}}};
   std::array<std::uint8_t, 32> buf{};
   auto r = hubproto::encode_declare(entity_id, DeviceType::Switch, attrs.data(), 1,
-                                    buf.data(), buf.size());
+                                    nullptr, buf.data(), buf.size());
   REQUIRE(r.ok);
   hubproto::DeclareView v{};
   REQUIRE(hubproto::decode_declare(buf.data(), r.len, v));

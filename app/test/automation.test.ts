@@ -4,6 +4,9 @@ import {
   addableSettings, draftsFromCurrentState, draftsRequest, inputText, sceneDrafts, describeWifi, signalText, wifiRequest, describeLocation, describeTimePoint, isSunPoint, locationRequest, validTimePoint, attrOptions, captureScene, describeScene, sceneRequest, describeDays, describeRule, describeSchedule, describeTimer, validDate, localDate, describeDate, formatCountdown, inputUnit,
   opText, parseInput, ruleRequest, scheduleRequest, switchTargets, timerRequest, validTime,
   type RuleForm,
+  // the draft model (the rule being edited)
+  emptyDraft, draftToSentence, draftRequest, opsFor, presenceValueText, isPresenceAttr, MAX_EXTRA_CONDITIONS,
+  type RuleDraft,
 } from '../src/model/automation';
 import { nameProblem, sceneNameProblem } from '../src/model/names';
 import { defaultEntities } from '../tools/mock-hub/hub';
@@ -50,7 +53,7 @@ describe('wording', () => {
       cooldown_s: 300,
     };
     expect(describeRule(r, ents)).toEqual({
-      when: 'When Motion sensor 0x0102 presence is Occupied',
+      when: 'When Motion sensor 0x0102 Someone is there',
       then: 'turn lamp on',
       extras: ['between 18:00 and 23:00', 'only while plug1 power draw is above 5 W', 'at most once per 5 min'],
     });
@@ -433,5 +436,96 @@ describe('editing a scene', () => {
     expect(now.map((d) => d.value)).toEqual(['on', '50']);   // mock home: plug1 on, lamp at 128/254
     const unknown: Entity[] = ents.map((e) => ({ ...e, attrs: e.attrs.map((a) => ({ ...a, value: null })) }));
     expect(draftsFromCurrentState(drafts, unknown).map((d) => d.value)).toEqual(['on', '100']);
+  });
+});
+
+// ---- the rule being edited -------------------------------------------------------------
+
+describe('presence', () => {
+  it('reads as people, not as a flag', () => {
+    expect(presenceValueText('occupied', true)).toBe('Someone is there');
+    expect(presenceValueText('occupied', false)).toBe('Nobody is there');
+    expect(presenceValueText('home', true)).toBe('At home');
+    expect(presenceValueText('home', false)).toBe('Away');
+    expect(presenceValueText('on_off', true)).toBe(null);   // not a presence attribute
+    expect(presenceValueText('occupied', 'yes' as never)).toBe(null); // not a boolean
+  });
+  it('knows which attributes are about people', () => {
+    expect(isPresenceAttr('occupied')).toBe(true);
+    expect(isPresenceAttr('home')).toBe(true);
+    expect(isPresenceAttr('brightness')).toBe(false);
+  });
+});
+
+describe('the draft of a rule', () => {
+  const presence = opt('Motion sensor 0x0102 · Presence');
+  const brightness = opt('lamp · Brightness');
+  const lampPower = opt('lamp · Power');
+
+  const draft = (): RuleDraft => ({
+    ...emptyDraft(),
+    trigger: { option: presence, op: '==', value: 'on' },
+    action: { option: brightness, value: '80' },
+  });
+
+  it('reads as one sentence, so the person sees what they are building', () => {
+    expect(draftToSentence(draft())).toBe(
+      'When Motion sensor 0x0102 Someone is there → set lamp Brightness to 80',
+    );
+  });
+  it('says what is missing while the rule is half-built', () => {
+    const d = draft();
+    d.trigger = null;
+    d.action = null;
+    expect(draftToSentence(d)).toBe('When … → then …');
+  });
+  it('keeps the extra conditions and the window in the sentence', () => {
+    const d = draft();
+    d.conditions = [{ option: lampPower, op: '>', value: '5' }];
+    d.window = { from: '18:00', to: '23:00' };
+    d.cooldown_s = 300;
+    expect(draftToSentence(d)).toBe(
+      'When Motion sensor 0x0102 Someone is there → only while lamp Power is above 5 → set lamp Brightness to 80 → between 18:00 and 23:00 → at most once per 5 min',
+    );
+  });
+  it('applies a scene by name', () => {
+    const d = draft();
+    d.action = { option: null, value: '', scene: 'evening' };
+    expect(draftToSentence(d)).toContain('apply scene evening');
+  });
+
+  it('builds the request the hub understands', () => {
+    expect(draftRequest(draft())).toEqual({
+      ok: true,
+      value: { when: { entity: 0x0102, attr: 0x50, op: '==', value: true }, then: { entity: 0x0101, attr: 2, value: 203 } },
+    });
+  });
+  it('refuses a rule without a trigger or without an action', () => {
+    const d = draft();
+    d.trigger = null;
+    expect(draftRequest(d)).toMatchObject({ ok: false, error: expect.stringMatching(/When/) });
+    const e = draft();
+    e.action = null;
+    expect(draftRequest(e)).toMatchObject({ ok: false, error: expect.stringMatching(/Then/) });
+  });
+  it('refuses more extra conditions than the hub can keep', () => {
+    const d = draft();
+    d.conditions = [
+      { option: lampPower, op: '>', value: '5' },
+      { option: lampPower, op: '<', value: '100' },
+    ];
+    expect(draftRequest(d)).toMatchObject({ ok: false, error: expect.stringMatching(/extra condition/) });
+    expect(MAX_EXTRA_CONDITIONS).toBe(1);
+  });
+  it('checks the values against their attribute', () => {
+    const d = draft();
+    d.action = { option: brightness, value: '500' };
+    expect(draftRequest(d)).toMatchObject({ ok: false, error: expect.stringMatching(/Then/) });
+  });
+  it('offers only the comparisons that make sense', () => {
+    expect(opsFor(presence)).toEqual(['any', '==', '!=']);
+    expect(opsFor(brightness)).toContain('>');
+    expect(opsFor(brightness)).not.toContain('any');
+    expect(opsFor(null)).toContain('any');
   });
 });

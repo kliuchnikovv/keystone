@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  COMPARISONS, WEEK, actionText, localDate, attrOptions, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, ruleRequest, sceneRequest, scheduleRequest, switchTargets, timerRequest,
-  type AttrOption, type ConditionForm, type RuleForm,
+  WEEK, actionText, localDate, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, sceneRequest, scheduleRequest, switchTargets, timerRequest,
+  type AttrOption,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
-import type { Action, CmpOp, Days, Entity, Scene, Weekday } from '../protocol/messages';
+import type { Action, Days, Entity, Scene, Weekday } from '../protocol/messages';
 import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
 import { useTheme } from './theme';
 
@@ -237,143 +237,6 @@ function ValueField({ scope, option, value, onChange }: { scope: string; option:
   }
   const unit = inputUnit(option.name);
   return <Input label={`${scope} value`} value={value} onChangeText={onChange} placeholder={unit ? `number, in ${unit}` : 'number'} keyboardType="numbers-and-punctuation" />;
-}
-
-function ConditionEditor({ name, options, value, onChange, allowAny }: { name: string; options: AttrOption[]; value: ConditionForm; onChange(c: ConditionForm): void; allowAny: boolean }) {
-  const isBool = value.option?.vt === 'bool';
-  const ops = COMPARISONS.filter((c) => (allowAny || c.op !== 'any') && (!isBool || c.op === 'any' || c.op === '==' || c.op === '!='));
-  return (
-    <View>
-      <Picker
-        label={`${name} attribute`}
-        placeholder="Choose a device and what to look at"
-        options={options}
-        selected={value.option}
-        onSelect={(o) => onChange({ option: o, op: o.vt === 'bool' && value.op !== 'any' ? '==' : value.op === 'any' && !allowAny ? '==' : value.op, value: '' })}
-        keyOf={(o) => `${o.entity}:${o.attr}`}
-        textOf={(o) => o.label}
-      />
-      {value.option && (
-        <View style={{ marginTop: 8 }}>
-          <ChipRow>
-            {ops.map((c) => (
-              <Chip key={c.op} label={c.label} a11y={`${name} ${c.label}`} selected={value.op === c.op} onPress={() => onChange({ ...value, op: c.op })} />
-            ))}
-          </ChipRow>
-          {value.op !== 'any' && (
-            <View style={{ marginTop: 8 }}>
-              <ValueField scope={name} option={value.option} value={value.value} onChange={(v) => onChange({ ...value, value: v })} />
-            </View>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
-
-const EMPTY: ConditionForm = { option: null, op: '==', value: '' };
-
-export function RuleFormView({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
-  const t = useTheme();
-  const all = attrOptions(entities);
-  const writable = attrOptions(entities, { writable: true });
-  const [when, setWhen] = useState<ConditionForm>({ ...EMPTY, op: 'any' });
-  const [then, setThen] = useState<{ option: AttrOption | null; value: string }>({ option: null, value: '' });
-  const [more, setMore] = useState(false);
-  const [useWindow, setUseWindow] = useState(false);
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [useAnd, setUseAnd] = useState(false);
-  const [and, setAnd] = useState<ConditionForm>({ ...EMPTY, op: '>' });
-  const [cooldown, setCooldown] = useState('');
-  const [thenTarget, setThenTarget] = useState<Target>('device');
-  const [thenScene, setThenScene] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    const form: RuleForm = {
-      when,
-      then: { ...then, scene: thenTarget === 'scene' ? thenScene ?? '' : null },
-      between: useWindow ? { from, to } : null,
-      and: useAnd ? and : null,
-      cooldown,
-    };
-    const r = ruleRequest(form);
-    if (!r.ok) return setError(r.error);
-    setError(null);
-    await onSubmit(r.value);
-  };
-
-  return (
-    <FormShell title="New rule" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save rule">
-      <Field label="When">
-        <ConditionEditor name="When" options={all} value={when} onChange={setWhen} allowAny />
-      </Field>
-      <TargetToggle scenes={scenes} value={thenTarget} onChange={setThenTarget} />
-      {thenTarget === 'scene' ? (
-        <Field label="Then apply scene">
-          <SceneChoice scenes={scenes} value={thenScene} onChange={setThenScene} />
-        </Field>
-      ) : (
-      <Field label="Then set">
-        <Picker
-          label="Then attribute"
-          placeholder="Choose what to change"
-          options={writable}
-          selected={then.option}
-          onSelect={(o) => setThen({ option: o, value: '' })}
-          keyOf={(o) => `${o.entity}:${o.attr}`}
-          textOf={(o) => o.label}
-        />
-        <View style={{ marginTop: 8 }}>
-          <ValueField scope="Then" option={then.option} value={then.value} onChange={(v) => setThen({ ...then, value: v })} />
-        </View>
-      </Field>
-      )}
-
-      <View style={{ marginTop: 14 }}>
-        <Button kind="plain" label={more ? 'Fewer options' : 'More options'} onPress={() => setMore((m) => !m)} />
-      </View>
-      {more && (
-        <View>
-          <Field label="Only between">
-            <ChipRow>
-              <Chip label="Any time" selected={!useWindow} onPress={() => setUseWindow(false)} />
-              <Chip label="Between times" selected={useWindow} onPress={() => setUseWindow(true)} />
-            </ChipRow>
-            {useWindow && (
-              <View>
-                <TimePointInput label="From" value={from} onChange={setFrom} placeholder="18:00 or sunset" hasLocation={hasLocation} />
-                <View style={{ height: 8 }} />
-                <TimePointInput label="To" value={to} onChange={setTo} placeholder="23:00 or sunrise-15" hasLocation={hasLocation} />
-              </View>
-            )}
-          </Field>
-          <Field label="Only while">
-            <ChipRow>
-              <Chip label="No condition" selected={!useAnd} onPress={() => setUseAnd(false)} />
-              <Chip label="Add a condition" selected={useAnd} onPress={() => setUseAnd(true)} />
-            </ChipRow>
-            {useAnd && (
-              <View style={{ marginTop: 8 }}>
-                <ConditionEditor name="Only while" options={all} value={and} onChange={setAnd} allowAny={false} />
-              </View>
-            )}
-          </Field>
-          <Field label="At most once per (seconds)" hint="Leave empty to allow every time it matches.">
-            <ChipRow>
-              {[30, 60, 300, 600].map((s) => (
-                <Chip key={s} label={s < 60 ? `${s} s` : `${s / 60} min`} a11y={`Preset ${s} seconds`} selected={cooldown === String(s)} onPress={() => setCooldown(String(s))} />
-              ))}
-            </ChipRow>
-            <View style={{ marginTop: 8 }}>
-              <Input label="Cooldown (seconds)" value={cooldown} onChangeText={setCooldown} placeholder="e.g. 300" keyboardType="number-pad" />
-            </View>
-          </Field>
-        </View>
-      )}
-    </FormShell>
-  );
 }
 
 // ---- editing a scene -------------------------------------------------------------------------

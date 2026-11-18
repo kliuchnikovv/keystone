@@ -240,6 +240,41 @@ describe('Timers', () => {
 });
 
 describe('Rules', () => {
+  it('a rule can watch the phone: "when I am home, the hall light on"', async () => {
+    // The phone reports first, so it becomes a device the rule can point at.
+    hub.entities.push({
+      id: 0x0f80,
+      name: 'My phone',
+      room: null,
+      chip: 0xfe,
+      device: 'phone',
+      attrs: [{ id: 0x52, name: 'home', vt: 'bool', flags: ['r', 'rep'], value: true }],
+    });
+    await openApp();
+    await gotoAutomations();
+    click('Rules');
+    click('Add rule');
+
+    click('When: what to look at');
+    click('Choose My phone · Home');
+    click('When: comparison');
+    click('When is');
+    click('When: At home');
+
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: On');
+    click('Save rule');
+
+    await screen.findByLabelText('rule 1');
+    expect(hub.rules[0]).toMatchObject({
+      when: { entity: 0x0f80, attr: 0x52, op: '==', value: true },
+      then: { entity: 0x0101, attr: 1, value: true },
+    });
+    // The rule reads in words, like every other rule.
+    expect(screen.getByText(/When My phone At home/)).toBeTruthy();
+  });
+
   it('builds a rule with every option and reads it back as a sentence', async () => {
     await openApp();
     await gotoAutomations();
@@ -247,29 +282,31 @@ describe('Rules', () => {
     expect(screen.getByText(/No rules/)).toBeTruthy();
     click('Add rule');
 
-    click('When attribute');
+    // The rule is built from blocks: WHEN, then AND, then THEN.
+    click('When: what to look at');
     click('Choose Motion sensor 0x0102 · Presence');
+    click('When: comparison');
     click('When is');
-    click('When value On');
+    click('When: Someone is there');
 
-    click('Then attribute');
+    click('Then: what to set');
     click('Choose lamp · Power');
-    click('Then value On');
-
+    click('Then: On');
     click('More options');
     click('Between times');
     type('From', '18:00');
     type('To', '23:00');
     click('Add a condition');
-    click('Only while attribute');
+    click('Only while 1: what to look at');
     click('Choose plug1 · Power draw');
-    click('Only while is above');
-    type('Only while value', '5');
+    click('Only while 1: comparison');
+    click('Only while 1 is above');
+    type('Only while 1 value', '5');
     type('Cooldown (seconds)', '300');
     click('Save rule');
 
     const item = await screen.findByLabelText('rule 1');
-    expect(within(item).getByText(/When Motion sensor 0x0102 presence is Occupied, turn lamp on/)).toBeTruthy();
+    expect(within(item).getByText(/When Motion sensor 0x0102 Someone is there, turn lamp on/)).toBeTruthy();
     expect(within(item).getByText(/between 18:00 and 23:00 · only while plug1 power draw is above 5 W · at most once per 5 min/)).toBeTruthy();
     expect(hub.rules[0]).toMatchObject({
       when: { entity: 258, attr: 0x50, op: '==', value: true },
@@ -285,15 +322,31 @@ describe('Rules', () => {
     expect(hub.rules).toHaveLength(0);
   });
 
+  it('shows the rule as a sentence while it is being built', async () => {
+    await openApp();
+    await gotoAutomations();
+    click('Rules');
+    click('Add rule');
+    // A half-built rule says what is missing rather than pretending to be complete.
+    expect(screen.getByText('When … → then …')).toBeTruthy();
+    click('When: what to look at');
+    click('Choose Motion sensor 0x0102 · Presence');
+    click('When: comparison');
+    click('When is');
+    click('When: Someone is there');
+    expect(screen.getByText(/When Motion sensor 0x0102 Someone is there/)).toBeTruthy();
+  });
+
   it('says what is missing, in the order the form reads', async () => {
     await openApp();
     await gotoAutomations();
     click('Rules');
     click('Add rule');
     click('Save rule');
-    expect(await screen.findByText('When: pick what to look at')).toBeTruthy();
-    click('When attribute');
+    expect(await screen.findByText('When: pick what starts the rule')).toBeTruthy();
+    click('When: what to look at');
     click('Choose plug1 · Power draw');
+    click('When: comparison');
     click('When is above');
     type('When value', 'lots');
     click('Save rule');
@@ -309,9 +362,9 @@ describe('Rules', () => {
     await gotoAutomations();
     click('Rules');
     click('Add rule');
-    click('When attribute');
+    click('When: what to look at');
     click('Choose Motion sensor 0x0102 · Presence');
-    click('Then attribute');
+    click('Then: what to set');
     click('Choose lamp · Brightness');
     type('Then value', '50');
     click('Save rule');
@@ -325,7 +378,7 @@ describe('Rules', () => {
     await gotoAutomations();
     click('Rules');
     click('Add rule');
-    click('Then attribute');
+    click('Then: what to set');
     expect(screen.getByLabelText('Choose lamp · Brightness')).toBeTruthy();
     expect(screen.queryByLabelText('Choose plug1 · Power draw')).toBeNull();
     expect(screen.queryByLabelText('Choose Motion sensor 0x0102 · Presence')).toBeNull();
@@ -552,9 +605,9 @@ describe('Automations that apply a scene', () => {
 
     click('Rules');
     click('Add rule');
-    click('Target a scene');
+    click('Apply a scene');
     click('Scene night');
-    fireEvent.click(screen.getByLabelText('When attribute')); // pick the trigger
+    fireEvent.click(screen.getByLabelText('When: what to look at')); // pick the trigger
     fireEvent.click(await screen.findByText('Motion sensor 0x0102 · Presence'));
     click('Save rule');
     await screen.findByLabelText('rule 1');

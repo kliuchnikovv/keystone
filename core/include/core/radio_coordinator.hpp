@@ -34,6 +34,12 @@ class RadioCoordinator {
   // True once a HELLO from the chip has been seen.
   bool chip_known(std::uint8_t chip_id) const noexcept;
 
+  // The boot counter of the chip — it changes when the chip reboots, which is
+  // how the hub notices that the chip lost everything it had in RAM (and, for
+  // the co-processor, that it restored its endpoints from NVS and has to be
+  // told again what the entities are called). 0: the chip is not known.
+  std::uint8_t boot_id_of(std::uint8_t chip_id) const noexcept;
+
  private:
   struct ChipState {
     std::uint8_t chip_id;
@@ -98,6 +104,13 @@ template <typename Registry, std::size_t MaxChips>
 bool RadioCoordinator<Registry, MaxChips>::chip_known(std::uint8_t chip_id)
     const noexcept {
   return find_chip(chip_id) != nullptr;
+}
+
+template <typename Registry, std::size_t MaxChips>
+std::uint8_t RadioCoordinator<Registry, MaxChips>::boot_id_of(std::uint8_t chip_id)
+    const noexcept {
+  const ChipState* c = find_chip(chip_id);
+  return c != nullptr ? c->boot_id : 0;
 }
 
 template <typename Registry, std::size_t MaxChips>
