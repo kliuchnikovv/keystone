@@ -14,16 +14,14 @@ export interface BannerAction {
 export function connectionNotice(s: HomeState): { text: string; tone: 'warn' | 'bad' } | null {
   switch (s.status) {
     case 'ready':
-      return null;
     case 'idle':
     case 'connecting':
     case 'authenticating':
-      return { text: `Connecting…${staleNote(s)}`, tone: 'warn' };
+      // On the initial load we show the last known state instead of a banner.
+      return null;
     case 'reconnecting':
-      return {
-        text: `${s.error === 'busy' ? 'The hub has too many clients; retrying…' : 'Reconnecting after a drop'}${staleNote(s)}`,
-        tone: 'warn',
-      };
+      // No banner while reconnecting: the last known state stays on screen.
+      return null;
     case 'unauthorized':
       return { text: 'Authentication failed', tone: 'bad' };
     case 'incompatible':

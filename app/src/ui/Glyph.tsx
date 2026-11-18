@@ -239,8 +239,12 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
       return (
         <>
           <Circle cx="12" cy="12" r="9" {...c} />
-          <Circle cx="9" cy="12" r="2" {...c} />
-          <Circle cx="15" cy="12" r="2" {...c} />
+          {/* ground pin: vertical bars at 0° and 180° (top and bottom), a bit shorter */}
+          <Rect x="11" y="4" width="2" height="4" rx="1" {...c} />
+          <Rect x="11" y="16" width="2" height="4" rx="1" {...c} />
+          {/* socket holes at 90° and 270° (left and right), a bit wider */}
+          <Circle cx="8" cy="12" r="1.8" {...c} />
+          <Circle cx="16" cy="12" r="1.8" {...c} />
         </>
       );
   }

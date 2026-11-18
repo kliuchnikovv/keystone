@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { MAX_NAME_CHARS, nameProblem } from '../model/names';
-import { allRooms, roomOf } from '../model/rooms';
+import { allRooms, roomOf, stripRoomPrefix } from '../model/rooms';
 import { attrLabel, formatValue } from '../model/format';
 import {
   attrOf,
@@ -86,7 +86,8 @@ export function DeviceSheet({
   const [changingRoom, setChangingRoom] = useState(false);
   const [updating, setUpdating] = useState(false);
   const sw = primarySwitch(entity);
-  const title = deviceTitle(entity);
+  const title = stripRoomPrefix(deviceTitle(entity)) || deviceTitle(entity);
+  const battery = attrOf(entity, 'battery');
   const powered = isPowered(entity);
   // A dimmer of a light that is off has nothing to say — but only if we know it is off.
   const off = isKnownOff(entity);
@@ -166,6 +167,7 @@ export function DeviceSheet({
           {updatedText ? <Text style={[styles.updated, { color: t.muted }]}>updated {updatedText}</Text> : null}
         </View>
       )}
+      {/* battery is shown in the readings above when present */}
 
       {colour && (
         <ColorRow attr={colour} title={title} reachable={reachable} off={off} onSet={send} />

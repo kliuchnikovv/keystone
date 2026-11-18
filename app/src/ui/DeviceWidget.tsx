@@ -228,6 +228,7 @@ export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpe
               {value}
             </Text>
           )}
+          {/* battery is shown in the readings when present */}
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
@@ -257,6 +258,7 @@ export function DeviceWidget({ entity, shape, status, reachable, onToggle, onOpe
                 {value}
               </Text>
             )}
+            {/* battery is shown in the readings when present */}
             {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
           </View>
         </Pressable>

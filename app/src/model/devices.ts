@@ -148,18 +148,24 @@ export function sortedDevices(entities: Entity[]): Entity[] {
   });
 }
 
-/** A device is reachable while the chip that owns it is. */
+/** A device is reachable while the chip that owns it is. While the hub is still
+ * loading we trust the last known chip state; only a real loss of contact makes
+ * a device unreachable. */
 export function isReachable(s: HomeState, e: Entity): boolean {
+  const loading = s.status === 'idle' || s.status === 'connecting' || s.status === 'authenticating';
+  if (s.status !== 'ready' && !loading) return false;
   const chip = s.chips.find((c) => c.id === e.chip);
   return chip === undefined || chip.status === 'ready';
 }
 
 /** How the device looks from the outside: online, offline (its chip went quiet) or
- * unreachable (the hub itself is not answering). */
+ * unreachable (the hub itself is not answering). Unreachable is shown only once we
+ * actually failed to reach the hub, not while it is still loading. */
 export type DeviceStatus = 'online' | 'offline' | 'unreachable';
 
 export function deviceStatus(s: HomeState, e: Entity): DeviceStatus {
-  if (s.status !== 'ready') return 'unreachable';
+  const loading = s.status === 'idle' || s.status === 'connecting' || s.status === 'authenticating';
+  if (s.status !== 'ready' && !loading) return 'unreachable';
   const chip = s.chips.find((c) => c.id === e.chip);
   return chip === undefined || chip.status === 'ready' ? 'online' : 'offline';
 }

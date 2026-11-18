@@ -214,10 +214,9 @@ describe('Connection problems', () => {  it('a wrong token is explained and can 
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.dropAll());
-    await screen.findByText(/Reconnecting after a drop/);
+    // No banner while reconnecting: the last known state stays on screen.
     expect(screen.queryByText('plug1')).toBeTruthy(); // the last known state stays on screen
-    expect(screen.getByText(/the last known state/)).toBeTruthy();
-    await waitFor(() => expect(screen.queryByText(/Reconnecting after a drop/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText('plug1')).toBeTruthy());
     expect(screen.queryByText('plug1')).toBeTruthy();
   });
 });
@@ -393,7 +392,6 @@ describe('The state cache', () => {
     );
 
     await screen.findByText('plug1'); // from the cache: the devices are still there
-    expect(screen.getByText(/the last known state/)).toBeTruthy();
     expect(screen.getByLabelText('Device plug1')).toBeTruthy();
   });
 

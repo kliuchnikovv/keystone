@@ -4083,11 +4083,19 @@ void app_handle_req(const appsrv::Inbound& in, ChipRouter& bus, Dispatcher& disp
     if (o.ok) {
       persist_names(reg.names());
       // The Matter co-processor shows the name for the bridged device: tell
-      // it the new one.
+      // it the new one. Also broadcast the entity event to app clients.
       std::int64_t renamed = -1;
       if (core::app::detail::get_int(reader, m.args, "entity", renamed) && renamed >= 0 &&
           renamed <= 0xFFFF) {
         republish_entity_name(bus, static_cast<std::uint16_t>(renamed));
+        const auto* ent = reg.find(static_cast<std::uint16_t>(renamed));
+        if (ent != nullptr) {
+          char b[512];
+          core::JsonWriter w(b, sizeof(b));
+          core::app::encode_entity_event(w, *ent, reg.name_of(static_cast<std::uint16_t>(renamed)),
+                                       reg.room_of(static_cast<std::uint16_t>(renamed)));
+          if (w.ok()) hub_broadcast(b, w.size());
+        }
       }
     }
   } else if (!std::strcmp(op, "name.clear")) {
@@ -4098,14 +4106,48 @@ void app_handle_req(const appsrv::Inbound& in, ChipRouter& bus, Dispatcher& disp
       if (core::app::detail::get_int(reader, m.args, "entity", renamed) && renamed >= 0 &&
           renamed <= 0xFFFF) {
         republish_entity_name(bus, static_cast<std::uint16_t>(renamed));
+        const auto* ent = reg.find(static_cast<std::uint16_t>(renamed));
+        if (ent != nullptr) {
+          char b[512];
+          core::JsonWriter w(b, sizeof(b));
+          core::app::encode_entity_event(w, *ent, reg.name_of(static_cast<std::uint16_t>(renamed)),
+                                       reg.room_of(static_cast<std::uint16_t>(renamed)));
+          if (w.ok()) hub_broadcast(b, w.size());
+        }
       }
     }
   } else if (!std::strcmp(op, "room.set")) {
     o = room_set(reg, reader, m.args);
-    if (o.ok) persist_rooms(reg.rooms());
+    if (o.ok) {
+      persist_rooms(reg.rooms());
+      std::int64_t eid = 0;
+      if (reader.get_i64(reader.find(m.args, "entity"), eid) && eid >= 0 && eid <= 0xFFFF) {
+        const auto* ent = reg.find(static_cast<std::uint16_t>(eid));
+        if (ent != nullptr) {
+          char b[512];
+          core::JsonWriter w(b, sizeof(b));
+          core::app::encode_entity_event(w, *ent, reg.name_of(static_cast<std::uint16_t>(eid)),
+                                       reg.room_of(static_cast<std::uint16_t>(eid)));
+          if (w.ok()) hub_broadcast(b, w.size());
+        }
+      }
+    }
   } else if (!std::strcmp(op, "room.clear")) {
     o = room_clear(reg, reader, m.args);
-    if (o.ok) persist_rooms(reg.rooms());
+    if (o.ok) {
+      persist_rooms(reg.rooms());
+      std::int64_t eid = 0;
+      if (reader.get_i64(reader.find(m.args, "entity"), eid) && eid >= 0 && eid <= 0xFFFF) {
+        const auto* ent = reg.find(static_cast<std::uint16_t>(eid));
+        if (ent != nullptr) {
+          char b[512];
+          core::JsonWriter w(b, sizeof(b));
+          core::app::encode_entity_event(w, *ent, reg.name_of(static_cast<std::uint16_t>(eid)),
+                                       reg.room_of(static_cast<std::uint16_t>(eid)));
+          if (w.ok()) hub_broadcast(b, w.size());
+        }
+      }
+    }
   } else if (!std::strcmp(op, "rule.add")) {
     o = rule_add(reg, scenes, rules, reader, m.args);
     if (o.ok) persist_rules(rules);
