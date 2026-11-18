@@ -1696,9 +1696,14 @@ bool ensure_phone_entity(Registry& reg, const core::PhonePresence& phone) {
 /**
  * Publish the phone's presence as an ordinary STATE, so everything downstream works
  * unchanged: the rule engine fires, the app sees the value, the event history records
- * it. The phone is not a radio device, but on the wire it is just a STATE.
+ * it.
+ *
+ * The phone is not a radio device and has no UART, so the message cannot go out
+ * through a bound chip: the router would find no chip to send it to. It goes into
+ * the fan-out directly instead — the same path the Matter bridge uses for its own
+ * chip 0x03, which also has no UART.
  */
-void publish_phone_presence(core::Bus& bus, Registry& reg, const core::PhonePresence& phone,
+void publish_phone_presence(ChipRouter& bus, Registry& reg, const core::PhonePresence& phone,
                             bool home) {
   if (!ensure_phone_entity(reg, phone)) return;
   hubproto::StateEntry entry{};
@@ -1712,7 +1717,7 @@ void publish_phone_presence(core::Bus& bus, Registry& reg, const core::PhonePres
   h.type = hubproto::MsgType::State;
   h.chip_id = kPhoneChipId;
   h.entity_id = phone.entity_id;
-  bus.publish(h, buf, r.len);
+  bus.inject_inbound(h, buf, r.len);
 }
 
 // ---- `rule` console command: parsing + handling (runs on the main loop) ----
@@ -4043,7 +4048,7 @@ void hub_action_request(HubAction kind, std::uint32_t now, std::uint32_t delay_m
   }
 }
 
-void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp, Registry& reg, Rules& rules,
+void app_handle_req(const appsrv::Inbound& in, ChipRouter& bus, Dispatcher& disp, Registry& reg, Rules& rules,
                     Schedules& sched, core::TimerTable<8>& timers, Scenes& scenes, std::uint32_t now) {
   using namespace core::app;
   core::JsonReader reader;
@@ -4234,14 +4239,17 @@ void app_handle_req(const appsrv::Inbound& in, core::Bus& bus, Dispatcher& disp,
   } else if (!std::strcmp(op, "presence.list")) {
     o = presence_list_parse(reader, m.args);
     if (o.ok) {
+      // The list goes out as an event (so every client sees it), and the request
+      // still gets its usual `res` — a client that only waits for `res` must not
+      // wait for ever.
       char pb[512];
       core::JsonWriter pw(pb, sizeof(pb));
       core::app::encode_presence_list(pw, g_presence, now / 1000);
       if (pw.ok()) {
         hub_send(in.fd, pb, pw.size());
-        return;  // the answer is the frame itself
+      } else {
+        o = Outcome::fail(Err::Internal, "presence list too large");
       }
-      o = Outcome::fail(Err::Internal, "presence list too large");
     }
   } else if (!std::strcmp(op, "presence.remove")) {
     std::int64_t entity = 0;
