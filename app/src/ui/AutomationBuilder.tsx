@@ -235,7 +235,7 @@ export function AutomationBuilder({ entities, scenes, hasLocation, initial, busy
 
   return (
     <View>
-      <Block title="WHEN" note={TRIGGER_KINDS.find((k) => k.kind === draft.kind)?.hint}>
+      <Block title="WHEN">
         <ChipRow>
           <Choice
             label="When: what starts it"
@@ -248,6 +248,9 @@ export function AutomationBuilder({ entities, scenes, hasLocation, initial, busy
             optionLabel={(k) => `Choose ${k.label}`}
           />
         </ChipRow>
+        <Text style={{ color: t.muted, fontSize: 11.5, marginTop: 6 }}>
+          {TRIGGER_KINDS.find((k) => k.kind === draft.kind)?.hint}
+        </Text>
 
         <View style={{ marginTop: 10 }}>
           {draft.kind === 'device' && (
