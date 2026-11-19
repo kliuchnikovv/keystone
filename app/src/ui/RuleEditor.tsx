@@ -17,7 +17,7 @@ import {
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
 import type { Entity, Scene } from '../protocol/messages';
-import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
+import { Button, Chip, ChipRow, Choice, ErrorText, Field, Input, Picker } from './controls';
 import { useTheme } from './theme';
 
 // The rule editor: blocks with chips, not a list of fields.
@@ -37,62 +37,6 @@ export interface RuleEditorProps {
   busy: boolean;
   onSubmit(args: Record<string, unknown>): Promise<boolean>;
   onCancel(): void;
-}
-
-// ---- one chip that opens a sheet of choices ----------------------------------------------
-
-/**
- * A chip that shows a choice and lets it be changed. `placeholder` is what an empty
- * choice looks like, so the person can see that something is still missing.
- */
-function Choice<T>({ label, placeholder, options, selected, onSelect, keyOf, textOf, optionLabel }: {
-  label: string;
-  placeholder: string;
-  options: T[];
-  selected: T | null;
-  onSelect(o: T): void;
-  keyOf(o: T): string;
-  textOf(o: T): string;
-  /** How an option is announced. Defaults to "Choose <what it says>"; a comparison
-   *  reads better as the plain word ("is", "is above"). */
-  optionLabel?(o: T): string;
-}) {
-  const t = useTheme();
-  const [open, setOpen] = useState(false);
-  const announce = (o: T) => (optionLabel ? optionLabel(o) : `Choose ${textOf(o)}`);
-  return (
-    <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={() => setOpen((o) => !o)}
-        style={[styles.chip, { borderColor: selected ? t.accent : t.border, backgroundColor: selected ? t.accentSoft : 'transparent' }]}
-      >
-        <Text style={{ color: selected ? t.text : t.muted, fontSize: 12.5, fontWeight: selected ? '600' : '500' }}>
-          {selected ? textOf(selected) : placeholder}
-        </Text>
-      </Pressable>
-      {open && (
-        <View style={[styles.sheet, { borderColor: t.border, backgroundColor: t.card }]}>
-          {options.length === 0 && <Text style={{ color: t.muted, padding: 10 }}>Nothing to choose from yet</Text>}
-          {options.map((o) => (
-            <Pressable
-              key={keyOf(o)}
-              accessibilityRole="button"
-              accessibilityLabel={announce(o)}
-              onPress={() => {
-                onSelect(o);
-                setOpen(false);
-              }}
-              style={styles.sheetRow}
-            >
-              <Text style={{ color: t.text, fontSize: 14 }}>{textOf(o)}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-    </View>
-  );
 }
 
 // ---- blocks ---------------------------------------------------------------------------------
@@ -361,7 +305,4 @@ const styles = StyleSheet.create({
   line: { width: 2, height: 10, marginBottom: 2 },
   preview: { borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 14 },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 16 },
-  chip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6 },
-  sheet: { borderWidth: 1, borderRadius: 12, marginTop: 6, overflow: 'hidden' },
-  sheetRow: { paddingHorizontal: 12, paddingVertical: 10 },
 });

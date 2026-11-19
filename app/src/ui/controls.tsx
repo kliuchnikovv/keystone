@@ -50,6 +50,60 @@ export function ChipRow({ children }: { children: ReactNode }) {
   return <View style={styles.chips}>{children}</View>;
 }
 
+/**
+ * A chip that shows a choice and lets it be changed. `placeholder` is what an empty
+ * choice looks like, so the person can see that something is still missing.
+ */
+export function Choice<T>({ label, placeholder, options, selected, onSelect, keyOf, textOf, optionLabel }: {
+  label: string;
+  placeholder: string;
+  options: T[];
+  selected: T | null;
+  onSelect(o: T): void;
+  keyOf(o: T): string;
+  textOf(o: T): string;
+  /** How an option is announced. Defaults to "Choose <what it says>"; a comparison
+   *  reads better as the plain word ("is", "is above"). */
+  optionLabel?(o: T): string;
+}) {
+  const t = useTheme();
+  const [open, setOpen] = useState(false);
+  const announce = (o: T) => (optionLabel ? optionLabel(o) : `Choose ${textOf(o)}`);
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={() => setOpen((o) => !o)}
+        style={[styles.chip, { borderColor: selected ? t.accent : t.border, backgroundColor: selected ? t.accentSoft : 'transparent' }]}
+      >
+        <Text style={{ color: selected ? t.text : t.muted, fontSize: 12.5, fontWeight: selected ? '600' : '500' }}>
+          {selected ? textOf(selected) : placeholder}
+        </Text>
+      </Pressable>
+      {open && (
+        <View style={[styles.sheet, { borderColor: t.border, backgroundColor: t.card }]}>
+          {options.length === 0 && <Text style={{ color: t.muted, padding: 10 }}>Nothing to choose from yet</Text>}
+          {options.map((o) => (
+            <Pressable
+              key={keyOf(o)}
+              accessibilityRole="button"
+              accessibilityLabel={announce(o)}
+              onPress={() => {
+                onSelect(o);
+                setOpen(false);
+              }}
+              style={styles.sheetRow}
+            >
+              <Text style={{ color: t.text, fontSize: 14 }}>{textOf(o)}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string | null }) {
   const t = useTheme();
   return (
@@ -219,6 +273,8 @@ export function Note({ text, title, tone = 'good' }: { text: string; title?: str
 const styles = StyleSheet.create({
   chip: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 11, paddingVertical: 6 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+  sheet: { borderWidth: 1, borderRadius: 12, marginTop: 6, overflow: 'hidden' },
+  sheetRow: { paddingHorizontal: 12, paddingVertical: 10 },
   field: { marginTop: space.md },
   fieldLabel: { fontSize: 13, fontWeight: '500', marginBottom: space.xs },
   hint: { fontSize: 11.5, marginTop: space.xs, lineHeight: 17 },

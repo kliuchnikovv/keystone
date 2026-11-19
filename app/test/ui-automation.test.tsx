@@ -7,7 +7,9 @@ import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
 import { locatePhone } from '../src/native/position';
 import { Home } from '../src/ui/Home';
-import { MockHub } from '../tools/mock-hub/hub';
+import { AutomationBuilder, type AutomationBuilderProps } from '../src/ui/AutomationBuilder';
+import { emptyAutomationDraft, PRESET_AUTOMATIONS, type AutomationDraft } from '../src/model/automation';
+import { MockHub, defaultEntities } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
 vi.mock('../src/native/position', () => ({ locatePhone: vi.fn() }));
@@ -700,5 +702,114 @@ describe('Scenes', () => {
     await screen.findByLabelText('Apply scene night');
     click('Apply scene night');
     await screen.findByText(/Applied 'night': 0 sent, 1 skipped/);
+  });
+});
+
+// ---- the one builder every automation is made in -------------------------------------------
+
+describe('The automation builder', () => {
+  const entities = defaultEntities();
+  const scenes = [{ name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] }];
+
+  const renderBuilder = (initial: AutomationDraft, over: Partial<AutomationBuilderProps> = {}) => {
+    const onSubmit = vi.fn(async () => true);
+    const onCancel = vi.fn();
+    render(
+      <AutomationBuilder
+        entities={entities}
+        scenes={[]}
+        hasLocation={false}
+        initial={initial}
+        busy={false}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        {...over}
+      />,
+    );
+    return { onSubmit, onCancel };
+  };
+
+  it('says what it is while the draft is half-built, and grows as it is filled', async () => {
+    renderBuilder(emptyAutomationDraft('device'));
+    expect(screen.getByText('When … → then …')).toBeTruthy();
+    click('When: what to look at');
+    click('Choose Motion sensor 0x0102 · Presence');
+    expect(screen.getByText(/When Motion sensor 0x0102/)).toBeTruthy();
+  });
+
+  it('a time of day has a time slot and no condition slot', () => {
+    renderBuilder(emptyAutomationDraft('timeOfDay'));
+    expect(screen.getByLabelText('Time')).toBeTruthy();
+    expect(screen.queryByLabelText('More options')).toBeNull();
+    expect(screen.queryByText(/Only while/)).toBeNull();
+  });
+
+  it('a device has the extra options: a condition, a window and a cool-down', () => {
+    renderBuilder(emptyAutomationDraft('device'));
+    click('More options');
+    expect(screen.getByLabelText('Add a condition')).toBeTruthy();
+    expect(screen.getByLabelText('Between times')).toBeTruthy();
+    expect(screen.getByLabelText('Cooldown (seconds)')).toBeTruthy();
+  });
+
+  it('saves a time of day as a schedule', async () => {
+    const { onSubmit } = renderBuilder(emptyAutomationDraft('timeOfDay'));
+    type('Time', '22:00');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: Off');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '22:00', days: 'daily', entity: 257, action: 'off' }));
+  });
+
+  it('saves a delay as a timer, and a date as a one-off schedule', async () => {
+    const { onSubmit } = renderBuilder(emptyAutomationDraft('delay'));
+    type('Minutes', '10');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: On');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('timer.add', { entity: 257, action: 'on', delay_s: 600 }));
+
+    cleanup();
+    const second = renderBuilder(emptyAutomationDraft('date'));
+    type('Date', '2099-12-31');
+    type('Time', '19:00');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: Off');
+    click('Save automation');
+    await waitFor(() => expect(second.onSubmit).toHaveBeenCalledWith('schedule.add', { time: '19:00', date: '2099-12-31', entity: 257, action: 'off' }));
+  });
+
+  it('a scene is offered as the action only when there are scenes', () => {
+    renderBuilder(emptyAutomationDraft('device'));
+    expect(screen.queryByLabelText('Apply a scene')).toBeNull();
+    cleanup();
+    renderBuilder(emptyAutomationDraft('device'), { scenes });
+    expect(screen.getByLabelText('Apply a scene')).toBeTruthy();
+  });
+
+  it('an example that still needs a device says so instead of sending anything', async () => {
+    const preset = PRESET_AUTOMATIONS.find((p) => p.id === 'off-after-delay')!.make();
+    const { onSubmit } = renderBuilder({ ...preset, minutes: '5' });
+    click('Save automation');
+    expect(await screen.findByText('Pick a device')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('the kind can be changed, and the old kind leaves nothing behind', async () => {
+    const { onSubmit } = renderBuilder(emptyAutomationDraft('device'));
+    click('When: what to look at');
+    click('Choose Motion sensor 0x0102 · Presence');
+    // switch to "a time of day": the rule's trigger must not travel with the schedule
+    click('When: what starts it');
+    click('Choose A time of day');
+    type('Time', '07:30');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: On');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '07:30', days: 'daily', entity: 257, action: 'on' }));
   });
 });
