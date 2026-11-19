@@ -8,6 +8,7 @@ import type { SocketLike } from '../src/protocol/client';
 import { locatePhone } from '../src/native/position';
 import { Home } from '../src/ui/Home';
 import { AutomationBuilder, type AutomationBuilderProps } from '../src/ui/AutomationBuilder';
+import { NewAutomation, type NewAutomationProps } from '../src/ui/NewAutomation';
 import { emptyAutomationDraft, PRESET_AUTOMATIONS, type AutomationDraft } from '../src/model/automation';
 import { MockHub, defaultEntities } from '../tools/mock-hub/hub';
 
@@ -811,5 +812,64 @@ describe('The automation builder', () => {
     click('Then: On');
     click('Save automation');
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '07:30', days: 'daily', entity: 257, action: 'on' }));
+  });
+});
+
+// ---- the way in: examples first, then the builder -----------------------------------------
+
+describe('The examples screen', () => {
+  const entities = defaultEntities();
+
+  const renderExamples = (over: Partial<NewAutomationProps> = {}) => {
+    const onSubmit = vi.fn(async () => true);
+    const onCancel = vi.fn();
+    render(
+      <NewAutomation
+        entities={entities}
+        scenes={[]}
+        hasLocation={false}
+        busy={false}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        {...over}
+      />,
+    );
+    return { onSubmit, onCancel };
+  };
+
+  it('lists every example, plus a way to start from scratch', () => {
+    renderExamples();
+    for (const p of PRESET_AUTOMATIONS) expect(screen.getByLabelText(p.label)).toBeTruthy();
+    expect(screen.getByLabelText('From scratch')).toBeTruthy();
+  });
+
+  it('an example opens the builder with its fields filled in', () => {
+    renderExamples();
+    click('Turn something off at night');
+    expect((screen.getByLabelText('Time') as HTMLInputElement).value).toBe('23:00');
+    expect(screen.getByLabelText('Save automation')).toBeTruthy();
+  });
+
+  it('"from scratch" asks what starts it, then opens an empty builder', () => {
+    renderExamples();
+    click('From scratch');
+    click('When: what starts it');
+    click('Choose A time of day');
+    expect((screen.getByLabelText('Time') as HTMLInputElement).value).toBe('');
+  });
+
+  it('the builder saves what the person built', async () => {
+    const { onSubmit } = renderExamples();
+    click('Turn something off at night');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '23:00', days: 'daily', entity: 257, action: 'off' }));
+  });
+
+  it('cancelling goes back out', () => {
+    const { onCancel } = renderExamples();
+    click('Cancel');
+    expect(onCancel).toHaveBeenCalled();
   });
 });
