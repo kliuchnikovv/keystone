@@ -1,89 +1,16 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
-  WEEK, actionText, localDate, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, sceneRequest, scheduleRequest, switchTargets, timerRequest,
+  addableSettings, captureScene, describeScene, draftsFromCurrentState, draftsRequest, sceneDrafts, inputUnit, sceneRequest,
   type AttrOption,
+  type SceneDraft,
 } from '../model/automation';
 import { deviceTitle } from '../model/devices';
-import type { Action, Days, Entity, Scene, Weekday } from '../protocol/messages';
+import type { Entity, Scene } from '../protocol/messages';
 import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
 import { useTheme } from './theme';
 
 type Submit = (args: Record<string, unknown>) => Promise<boolean>;
-
-const ACTIONS: Action[] = ['on', 'off', 'toggle'];
-const DAY_LABEL: Record<Weekday, string> = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
-
-function DevicePicker({ label, devices, value, onChange }: { label: string; devices: Entity[]; value: number | null; onChange(id: number): void }) {
-  return (
-    <Picker
-      label={label}
-      placeholder="Choose a device"
-      options={devices}
-      selected={devices.find((d) => d.id === value) ?? null}
-      onSelect={(d) => onChange(d.id)}
-      keyOf={(d) => String(d.id)}
-      textOf={deviceTitle}
-    />
-  );
-}
-
-function ActionChips({ value, onChange }: { value: Action; onChange(a: Action): void }) {
-  return (
-    <ChipRow>
-      {ACTIONS.map((a) => (
-        <Chip key={a} label={actionText(a)} a11y={`Action ${actionText(a)}`} selected={value === a} onPress={() => onChange(a)} />
-      ))}
-    </ChipRow>
-  );
-}
-
-type Target = 'device' | 'scene';
-
-/** "A device" or "A scene": shown only when the hub has scenes. */
-function TargetToggle({ scenes, value, onChange }: { scenes: Scene[]; value: Target; onChange(t: Target): void }) {
-  if (scenes.length === 0) return null;
-  return (
-    <ChipRow>
-      <Chip label="A device" a11y="Target a device" selected={value === 'device'} onPress={() => onChange('device')} />
-      <Chip label="A scene" a11y="Target a scene" selected={value === 'scene'} onPress={() => onChange('scene')} />
-    </ChipRow>
-  );
-}
-
-function SceneChoice({ scenes, value, onChange }: { scenes: Scene[]; value: string | null; onChange(name: string): void }) {
-  return (
-    <ChipRow>
-      {scenes.map((s) => (
-        <Chip key={s.name} label={s.name} a11y={`Scene ${s.name}`} selected={value === s.name} onPress={() => onChange(s.name)} />
-      ))}
-    </ChipRow>
-  );
-}
-
-/** "07:30", or sunrise / sunset with an offset: a text field plus quick chips that fill in the sun words. */
-function TimePointInput({ label, value, onChange, placeholder, hasLocation }: {
-  label: string; value: string; onChange(v: string): void; placeholder: string; hasLocation: boolean;
-}) {
-  const t = useTheme();
-  return (
-    <View>
-      <Input label={label} value={value} onChangeText={onChange} placeholder={placeholder} maxLength={14} />
-      <View style={{ marginTop: 6 }}>
-        <ChipRow>
-          <Chip label="Sunrise" a11y={`${label}: sunrise`} selected={/^sunrise/.test(value)} onPress={() => onChange('sunrise')} />
-          <Chip label="Sunset" a11y={`${label}: sunset`} selected={/^sunset/.test(value)} onPress={() => onChange('sunset')} />
-        </ChipRow>
-      </View>
-      {isSunPoint(value) && (
-        <Text style={{ color: hasLocation ? t.muted : t.warn, fontSize: 12, marginTop: 6 }}>
-          {describeTimePoint(value)}
-          {hasLocation ? '. Add +30 or -15 for minutes after or before.' : ". The hub needs its location first (Hub tab); until then this waits."}
-        </Text>
-      )}
-    </View>
-  );
-}
 
 function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }: {
   title: string; children: React.ReactNode; error: string | null; onCancel(): void; onSave(): void; busy: boolean; saveLabel: string;
@@ -102,127 +29,7 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
   );
 }
 
-// ---- schedule ---------------------------------------------------------------------------
-
-export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
-  const [time, setTime] = useState('');
-  const [days, setDays] = useState<Days>('daily');
-  const [date, setDate] = useState<string | null>(null);  // set = a one-off on that day
-  const [entity, setEntity] = useState<number | null>(null);
-  const [action, setAction] = useState<Action>('off');
-  const [target, setTarget] = useState<Target>('device');
-  const [scene, setScene] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const custom = date === null && Array.isArray(days);
-  const toggleDay = (d: Weekday) => {
-    const cur = Array.isArray(days) ? days : [];
-    setDays(cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]);
-  };
-
-  const save = async () => {
-    const r = scheduleRequest({ time, days, date, entity, action, scene: target === 'scene' ? scene ?? '' : null });
-    if (!r.ok) return setError(r.error);
-    setError(null);
-    await onSubmit(r.value);
-  };
-
-  return (
-    <FormShell title="New schedule" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save schedule">
-      <Field label="Time (24 h, hub's time zone — or at the sun)">
-        <TimePointInput label="Time" value={time} onChange={setTime} placeholder="07:30 or sunset+30" hasLocation={hasLocation} />
-      </Field>
-      <Field label="Days">
-        <ChipRow>
-          <Chip label="Every day" selected={date === null && days === 'daily'} onPress={() => { setDate(null); setDays('daily'); }} />
-          <Chip label="Weekdays" selected={date === null && days === 'weekdays'} onPress={() => { setDate(null); setDays('weekdays'); }} />
-          <Chip label="Weekends" selected={date === null && days === 'weekends'} onPress={() => { setDate(null); setDays('weekends'); }} />
-          <Chip label="Pick days" selected={custom} onPress={() => { setDate(null); setDays(custom ? 'daily' : []); }} />
-          <Chip label="Once, on a date" selected={date !== null} onPress={() => setDate(date === null ? localDate() : null)} />
-        </ChipRow>
-        {date !== null && (
-          <View style={{ marginTop: 8 }}>
-            <Input label="Date" value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" autoCapitalize="none" />
-          </View>
-        )}
-        {custom && (
-          <View style={{ marginTop: 8 }}>
-            <ChipRow>
-              {WEEK.map((d) => (
-                <Chip key={d} label={DAY_LABEL[d]} a11y={`Day ${DAY_LABEL[d]}`} selected={(days as Weekday[]).includes(d)} onPress={() => toggleDay(d)} />
-              ))}
-            </ChipRow>
-          </View>
-        )}
-      </Field>
-      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
-      {target === 'scene' ? (
-        <Field label="Scene">
-          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
-        </Field>
-      ) : (
-        <>
-          <Field label="Device">
-            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
-          </Field>
-          <Field label="Do">
-            <ActionChips value={action} onChange={setAction} />
-          </Field>
-        </>
-      )}
-    </FormShell>
-  );
-}
-
-// ---- timer ------------------------------------------------------------------------------
-
-export function TimerForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
-  const [entity, setEntity] = useState<number | null>(null);
-  const [action, setAction] = useState<Action>('off');
-  const [minutes, setMinutes] = useState('');
-  const [target, setTarget] = useState<Target>('device');
-  const [scene, setScene] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    const r = timerRequest({ entity, action, minutes, scene: target === 'scene' ? scene ?? '' : null });
-    if (!r.ok) return setError(r.error);
-    setError(null);
-    await onSubmit(r.value);
-  };
-
-  return (
-    <FormShell title="New timer" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Start timer">
-      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
-      {target === 'scene' ? (
-        <Field label="Scene">
-          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
-        </Field>
-      ) : (
-        <>
-          <Field label="Device">
-            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
-          </Field>
-          <Field label="Then">
-            <ActionChips value={action} onChange={setAction} />
-          </Field>
-        </>
-      )}
-      <Field label="After (minutes)">
-        <ChipRow>
-          {['5', '15', '30', '60'].map((m) => (
-            <Chip key={m} label={`${m} min`} a11y={`Preset ${m} minutes`} selected={minutes === m} onPress={() => setMinutes(m)} />
-          ))}
-        </ChipRow>
-        <View style={{ marginTop: 8 }}>
-          <Input label="Minutes" value={minutes} onChangeText={setMinutes} placeholder="or type minutes" keyboardType="decimal-pad" />
-        </View>
-      </Field>
-    </FormShell>
-  );
-}
-
-// ---- rule -------------------------------------------------------------------------------
+// ---- editing a scene -------------------------------------------------------------------------
 
 /** `scope` ("When", "Then", "Only while") keeps the labels of the three value fields distinct. */
 function ValueField({ scope, option, value, onChange }: { scope: string; option: AttrOption | null; value: string; onChange(v: string): void }) {
@@ -238,8 +45,6 @@ function ValueField({ scope, option, value, onChange }: { scope: string; option:
   const unit = inputUnit(option.name);
   return <Input label={`${scope} value`} value={value} onChangeText={onChange} placeholder={unit ? `number, in ${unit}` : 'number'} keyboardType="numbers-and-punctuation" />;
 }
-
-// ---- editing a scene -------------------------------------------------------------------------
 
 /** Change the values of an existing scene, drop settings, add others, or take everything from the devices' state right now. Saves under the same name. */
 export function SceneEditor({ scene, entities, busy, onSubmit, onCancel }: { scene: Scene; entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
@@ -339,6 +144,5 @@ const styles = StyleSheet.create({
   form: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 14 },
   title: { fontSize: 17, fontWeight: '700' },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 16 },
-  pair: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   setting: { marginTop: 10, gap: 6 },
 });

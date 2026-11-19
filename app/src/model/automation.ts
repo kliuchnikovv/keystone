@@ -465,6 +465,18 @@ function automationTarget(action: ActionDraft | null): Parsed<{ entity: number |
 }
 
 /**
+ * The trigger's own fields, checked before the "what happens": a wrong time is worth
+ * saying before a missing device. The dummy device makes the check about the time, the
+ * date and the days only.
+ */
+function automationWhen(d: AutomationDraft): Parsed<{ time: string; days: Days; date: string | null }> {
+  const date = d.kind === 'date' ? d.date : null;
+  const probe = scheduleRequest({ time: d.time, days: d.days, date, entity: 1, action: 'toggle', scene: null });
+  if (!probe.ok) return { ok: false, error: probe.error };
+  return { ok: true, value: { time: d.time, days: d.days, date } };
+}
+
+/**
  * The draft as the hub wants it. The kind picks the call, and the arguments are built
  * only from the fields that kind owns — so a rule's condition or window can never
  * travel with a schedule, where the hub has no place for it.
@@ -498,12 +510,14 @@ export function automationRequest(d: AutomationDraft): AutomationRequest {
 
   // 'timeOfDay' and 'date' are both schedules; the date is the one that runs once.
   if (d.kind === 'date' && !d.date) return { ok: false, error: 'Pick a date' };
+  const when = automationWhen(d);
+  if (!when.ok) return { ok: false, error: when.error };
   const target = automationTarget(d.action);
   if (!target.ok) return { ok: false, error: target.error };
   const r = scheduleRequest({
-    time: d.time,
-    days: d.days,
-    date: d.kind === 'date' ? d.date : null,
+    time: when.value.time,
+    days: when.value.days,
+    date: when.value.date,
     entity: target.value.entity,
     action: target.value.action,
     scene: target.value.scene,

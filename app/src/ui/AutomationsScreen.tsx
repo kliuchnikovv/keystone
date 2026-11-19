@@ -5,13 +5,13 @@ import { describeRule, describeScene, describeSchedule, describeTimer } from '..
 import type { Commands } from '../hooks/useCommands';
 import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
-import { SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
-import { RuleEditor } from './RuleEditor';
+import { SceneEditor, SceneForm } from './AutomationForms';
+import { NewAutomation } from './NewAutomation';
 import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
 import { ScreenHeader } from './ScreenHeader';
 import { useTheme } from './theme';
 
-type Section = 'scenes' | 'schedules' | 'timers' | 'rules';
+type Section = 'automations' | 'scenes';
 
 /** Which form is open. The id tells the forms apart: a late answer to one form
  * must not close another one that has been opened in the meantime. */
@@ -20,9 +20,18 @@ interface OpenForm {
   id: number;
 }
 
+/**
+ * The automations of the home, in one list.
+ *
+ * The hub keeps three kinds of them (rules, schedules, timers), but a person does not
+ * think in kinds: they think "when this, do that". So they all stand in one list, each
+ * row saying in words when it happens and what it does. Scenes are a different thing —
+ * a reusable block of settings, not something that happens — so they keep their own
+ * section.
+ */
 export function AutomationsScreen({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
-  const [section, setSection] = useState<Section>('scenes');
+  const [section, setSection] = useState<Section>('automations');
   const [adding, setAdding] = useState<OpenForm | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // the name of the scene being edited
   const lastId = useRef(0);
@@ -37,13 +46,27 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
     lastId.current += 1;
     setAdding({ section: s, id: lastId.current });
   };
-  const add = (op: string, done?: string) => async (args: Record<string, unknown>) => {
+  /** Close only the form that asked — another one may be open by now. */
+  const close = (mine: OpenForm | null) =>
+    setAdding((cur) => (cur && mine && cur.id === mine.id ? null : cur));
+
+  // The model already decided which of the hub's three calls the new automation is,
+  // so the screen only sends what it was given.
+  const addAutomation = async (op: string, args: Record<string, unknown>) => {
     const mine = adding;
     const ok = (await commands.request(op, args)) !== null;
     if (ok) {
-      // Close only the form that asked — another one may be open by now.
-      setAdding((cur) => (cur && mine && cur.id === mine.id ? null : cur));
-      if (done) commands.notify(done);
+      close(mine);
+      commands.notify('Automation saved');
+    }
+    return ok;
+  };
+  const addScene = async (args: Record<string, unknown>) => {
+    const mine = adding;
+    const ok = (await commands.request('scene.put', args)) !== null;
+    if (ok) {
+      close(mine);
+      commands.notify('Scene saved');
     }
     return ok;
   };
@@ -70,21 +93,64 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
     </View>
   );
 
+  // One row per automation, whatever kind it is inside the hub. The wording is the one
+  // each kind already had: a rule reads as a sentence, a schedule as a time, a timer as
+  // a countdown.
+  const rows = [
+    ...home.rules.map((r) => {
+      const d = describeRule(r, home.entities);
+      return {
+        key: `r${r.index}`,
+        title: `${d.when}, ${d.then}`,
+        detail: d.extras.join(' · '),
+        label: `rule ${r.index + 1}`,
+        onDelete: del('rule.del', r.index),
+      };
+    }),
+    ...home.schedules.map((s) => {
+      const d = describeSchedule(s, home.entities, { hasLocation: !!home.hub?.location });
+      return { key: `s${s.index}`, title: d.title, detail: d.detail, label: `schedule ${d.title}`, onDelete: del('schedule.del', s.index) };
+    }),
+    ...home.timers.map((tm) => {
+      const d = describeTimer(tm, home.entities, left(tm));
+      return { key: `t${tm.index}`, title: d.title, detail: d.detail, label: `timer ${d.title}`, onDelete: del('timer.cancel', tm.index) };
+    }),
+  ];
+
   return (
     <ScrollView contentContainerStyle={styles.page}>
       <ScreenHeader title="Automations" />
       <ChipRow>
+        <Chip label={`Automations (${rows.length})`} a11y="All automations" selected={section === 'automations'} onPress={() => switchTo('automations')} />
         <Chip label={`Scenes (${home.scenes.length})`} a11y="Scenes" selected={section === 'scenes'} onPress={() => switchTo('scenes')} />
-        <Chip label={`Schedules (${home.schedules.length})`} a11y="Schedules" selected={section === 'schedules'} onPress={() => switchTo('schedules')} />
-        <Chip label={`Timers (${home.timers.length})`} a11y="Timers" selected={section === 'timers'} onPress={() => switchTo('timers')} />
-        <Chip label={`Rules (${home.rules.length})`} a11y="Rules" selected={section === 'rules'} onPress={() => switchTo('rules')} />
       </ChipRow>
 
       <View style={{ marginTop: 14 }}>
+        {section === 'automations' && (
+          <>
+            {adding?.section === 'automations' ? (
+              <NewAutomation
+                entities={home.entities}
+                scenes={home.scenes}
+                hasLocation={!!home.hub?.location}
+                busy={commands.busy}
+                onSubmit={addAutomation}
+                onCancel={() => setAdding(null)}
+              />
+            ) : (
+              <Button label="Create automation" onPress={() => open('automations')} />
+            )}
+            <View style={{ marginTop: 12 }}>
+              {rows.length === 0 && !adding && empty('No automations yet. One of them says when something happens and what happens then.')}
+              {rows.map((r) => card(r.key, r.title, r.detail, r.onDelete, r.label))}
+            </View>
+          </>
+        )}
+
         {section === 'scenes' && (
           <>
             {adding?.section === 'scenes' ? (
-              <SceneForm entities={home.entities} busy={commands.busy} onSubmit={add('scene.put', 'Scene saved')} onCancel={() => setAdding(null)} />
+              <SceneForm entities={home.entities} busy={commands.busy} onSubmit={addScene} onCancel={() => setAdding(null)} />
             ) : (
               <Button label="Add scene" onPress={() => open('scenes')} />
             )}
@@ -125,63 +191,6 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
                     const skipped = Number(res.skipped ?? 0);
                     commands.notify(skipped > 0 ? `Scene '${sc.name}' applied: ${sent} sent, ${skipped} skipped` : `Scene '${sc.name}' applied`);
                   },
-                );
-              })}
-            </View>
-          </>
-        )}
-
-        {section === 'schedules' && (
-          <>
-            {adding?.section === 'schedules' ? (
-              <ScheduleForm entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('schedule.add', 'Schedule saved')} onCancel={() => setAdding(null)} />
-            ) : (
-              <Button label="Add schedule" onPress={() => open('schedules')} />
-            )}
-            <View style={{ marginTop: 12 }}>
-              {home.schedules.length === 0 && !adding && empty('No schedules. A schedule runs every day (or on chosen days) at a set time.')}
-              {home.schedules.map((s) => {
-                const d = describeSchedule(s, home.entities, { hasLocation: !!home.hub?.location });
-                return card(`s${s.index}`, d.title, d.detail, del('schedule.del', s.index), `schedule ${d.title}`);
-              })}
-            </View>
-          </>
-        )}
-
-        {section === 'timers' && (
-          <>
-            {adding?.section === 'timers' ? (
-              <TimerForm entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('timer.add', 'Timer saved')} onCancel={() => setAdding(null)} />
-            ) : (
-              <Button label="Add timer" onPress={() => open('timers')} />
-            )}
-            <View style={{ marginTop: 12 }}>
-              {home.timers.length === 0 && !adding && empty('No timers running.')}
-              {home.timers.map((tm) => {
-                const d = describeTimer(tm, home.entities, left(tm));
-                return card(`t${tm.index}`, d.title, d.detail, del('timer.cancel', tm.index), `timer ${d.title}`);
-              })}
-            </View>
-          </>
-        )}
-
-        {section === 'rules' && (
-          <>
-            {adding?.section === 'rules' ? (
-              <RuleEditor entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('rule.add', 'Rule saved')} onCancel={() => setAdding(null)} />
-            ) : (
-              <Button label="Add rule" onPress={() => open('rules')} />
-            )}
-            <View style={{ marginTop: 12 }}>
-              {home.rules.length === 0 && !adding && empty('No rules. A rule reacts to a change on one device by setting another.')}
-              {home.rules.map((r) => {
-                const d = describeRule(r, home.entities);
-                return card(
-                  `r${r.index}`,
-                  `${d.when}, ${d.then}`,
-                  d.extras.join(' · '),
-                  del('rule.del', r.index),
-                  `rule ${r.index + 1}`,
                 );
               })}
             </View>

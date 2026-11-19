@@ -38,9 +38,24 @@ const type = (label: string, value: string) => fireEvent.change(screen.getByLabe
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
 const gotoAutomations = async () => {
   click('Automations');
-  await screen.findByLabelText('Add scene'); // scenes are the first section
-  click('Schedules');
-  await screen.findByLabelText('Add schedule');
+  await screen.findByLabelText('Create automation');
+};
+/** The way in: the examples, then "from scratch", then what starts it. */
+const createAutomation = async (kind: string) => {
+  click('Create automation');
+  click('From scratch');
+  click('When: what starts it');
+  click(`Choose ${kind}`);
+};
+/** A request straight to the hub, as another client would make it. */
+const hubRequest = async (op: string, args: Record<string, unknown>) => {
+  const ws = new NodeWebSocket(hub.url);
+  await new Promise<void>((r) => ws.on('open', () => r()));
+  ws.send(JSON.stringify({ type: 'hello', v: 1, token: hub.token }));
+  await new Promise((r) => setTimeout(r, 100));
+  ws.send(JSON.stringify({ type: 'req', id: 1, op, args }));
+  await new Promise((r) => setTimeout(r, 100));
+  ws.close();
 };
 
 describe('Renaming a device', () => {
@@ -120,52 +135,51 @@ describe('Rooms', () => {
   });
 });
 
-describe('Schedules', () => {
+describe('A time of day', () => {
   it('creates a schedule and deletes it after a second tap', async () => {
     await openApp();
     await gotoAutomations();
-    expect(screen.getByText(/No schedules/)).toBeTruthy();
+    expect(screen.getByText(/No automations/)).toBeTruthy();
 
-    click('Add schedule');
-    click('Save schedule'); // nothing filled in
+    await createAutomation('A time of day');
+    click('Save automation'); // nothing filled in
     expect(await screen.findByText(/Time must look like 07:30/)).toBeTruthy();
     type('Time', '22:00');
-    click('Save schedule');
+    click('Save automation');
     expect(await screen.findByText('Pick a device')).toBeTruthy();
-    click('Device');
-    click('Choose lamp');
+    click('Then: what to set');
+    click('Choose lamp · Power');
     click('Weekdays');
-    click('Action Off');
-    click('Save schedule');
+    click('Then: Off');
+    click('Save automation');
 
     const item = await screen.findByLabelText('schedule 22:00 · Off lamp');
     expect(within(item).getByText('Weekdays')).toBeTruthy();
     expect(hub.schedules).toHaveLength(1);
-    expect(screen.getByLabelText('Schedules').textContent).toContain('(1)');
+    expect(screen.getByLabelText('All automations').textContent).toContain('(1)');
 
     click('Delete schedule 22:00 · Off lamp');
     expect(hub.schedules).toHaveLength(1); // the first tap only arms it
     fireEvent.click(screen.getByText('Confirm'));
     await waitFor(() => expect(hub.schedules).toHaveLength(0));
-    await screen.findByText(/No schedules/);
+    await screen.findByText(/No automations/);
   });
 
   it('a one-off on a date: the form asks for the date, refuses a past or invalid one, the card says "Once"', async () => {
     await openApp();
     await gotoAutomations();
-    click('Add schedule');
+    await createAutomation('A date, once');
     type('Time', '19:00');
-    click('Device');
-    click('Choose lamp');
-    click('Once, on a date');
     type('Date', '2001-01-01');
-    click('Save schedule');
+    click('Save automation');
     expect(await screen.findByText('That date has already passed')).toBeTruthy();
     type('Date', '2099-02-30');
-    click('Save schedule');
+    click('Save automation');
     expect(await screen.findByText(/Date must look like/)).toBeTruthy();
     type('Date', '2099-10-20');
-    click('Save schedule');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Save automation');
     const item = await screen.findByLabelText('schedule 19:00 · Off lamp');
     expect(within(item).getByText('Once, 20 Oct 2099')).toBeTruthy();
     expect(hub.schedules[0]).toMatchObject({ days: 'once', date: '2099-10-20' });
@@ -174,49 +188,47 @@ describe('Schedules', () => {
   it('picking individual days works, and none selected is refused', async () => {
     await openApp();
     await gotoAutomations();
-    click('Add schedule');
+    await createAutomation('A time of day');
     type('Time', '06:30');
-    click('Device');
-    click('Choose plug1');
+    click('Then: what to set');
+    click('Choose plug1 · Power');
     click('Pick days');
-    click('Save schedule');
+    click('Save automation');
     expect(await screen.findByText('Pick at least one day')).toBeTruthy();
     click('Day Mon');
     click('Day Fri');
-    click('Save schedule');
+    click('Save automation');
     await screen.findByLabelText('schedule 06:30 · Off plug1');
     expect(hub.schedules[0]!.days).toEqual(['mon', 'fri']);
     expect(screen.getByText('Mon, Fri')).toBeTruthy();
   });
 });
 
-describe('Timers', () => {
+describe('After a delay', () => {
   it('starts a timer from a preset, shows the countdown and cancels it', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
-    click('Add timer');
-    click('Device');
-    click('Choose lamp');
-    click('Action On');
+    await createAutomation('After a delay');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Then: On');
     click('Preset 15 minutes');
-    click('Start timer');
+    click('Save automation');
     const item = await screen.findByLabelText('timer On lamp');
     expect(within(item).getByText('in 15 min')).toBeTruthy();
     click('Delete timer On lamp');
     fireEvent.click(screen.getByText('Confirm'));
-    await screen.findByText('No timers running.');
+    await screen.findByText(/No automations/);
   });
 
   it('a typed number of minutes is checked', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
-    click('Add timer');
-    click('Device');
-    click('Choose lamp');
+    await createAutomation('After a delay');
+    click('Then: what to set');
+    click('Choose lamp · Power');
     type('Minutes', 'soon');
-    click('Start timer');
+    click('Save automation');
     expect(await screen.findByText('Enter how many minutes')).toBeTruthy();
     expect(hub.timersCount()).toBe(0);
   });
@@ -224,7 +236,6 @@ describe('Timers', () => {
   it('a timer that fires disappears from the list and switches the device', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
     await act(async () => {
       // 1 s is below the form's smallest preset, so ask the hub directly, as another client would.
       const ws = new NodeWebSocket(hub.url);
@@ -242,7 +253,7 @@ describe('Timers', () => {
   });
 });
 
-describe('Rules', () => {
+describe('A device changes', () => {
   it('a rule can watch the phone: "when I am home, the hall light on"', async () => {
     // The phone reports first, so it becomes a device the rule can point at.
     hub.entities.push({
@@ -255,8 +266,7 @@ describe('Rules', () => {
     });
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    click('Add rule');
+    await createAutomation('A device changes');
 
     click('When: what to look at');
     click('Choose My phone · Home');
@@ -267,7 +277,7 @@ describe('Rules', () => {
     click('Then: what to set');
     click('Choose lamp · Power');
     click('Then: On');
-    click('Save rule');
+    click('Save automation');
 
     await screen.findByLabelText('rule 1');
     expect(hub.rules[0]).toMatchObject({
@@ -281,11 +291,9 @@ describe('Rules', () => {
   it('builds a rule with every option and reads it back as a sentence', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    expect(screen.getByText(/No rules/)).toBeTruthy();
-    click('Add rule');
+    await createAutomation('A device changes');
 
-    // The rule is built from blocks: WHEN, then AND, then THEN.
+    // The rule is built from blocks: WHEN, then DO, then the extra options.
     click('When: what to look at');
     click('Choose Motion sensor 0x0102 · Presence');
     click('When: comparison');
@@ -306,7 +314,7 @@ describe('Rules', () => {
     click('Only while 1 is above');
     type('Only while 1 value', '5');
     type('Cooldown (seconds)', '300');
-    click('Save rule');
+    click('Save automation');
 
     const item = await screen.findByLabelText('rule 1');
     expect(within(item).getByText(/When Motion sensor 0x0102 Someone is there, turn lamp on/)).toBeTruthy();
@@ -321,15 +329,14 @@ describe('Rules', () => {
 
     click('Delete rule 1');
     fireEvent.click(screen.getByText('Confirm'));
-    await screen.findByText(/No rules/);
+    await screen.findByText(/No automations/);
     expect(hub.rules).toHaveLength(0);
   });
 
   it('shows the rule as a sentence while it is being built', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    click('Add rule');
+    await createAutomation('A device changes');
     // A half-built rule says what is missing rather than pretending to be complete.
     expect(screen.getByText('When … → then …')).toBeTruthy();
     click('When: what to look at');
@@ -343,19 +350,18 @@ describe('Rules', () => {
   it('says what is missing, in the order the form reads', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    click('Add rule');
-    click('Save rule');
+    await createAutomation('A device changes');
+    click('Save automation');
     expect(await screen.findByText('When: pick what starts the rule')).toBeTruthy();
     click('When: what to look at');
     click('Choose plug1 · Power draw');
     click('When: comparison');
     click('When is above');
     type('When value', 'lots');
-    click('Save rule');
+    click('Save automation');
     expect(await screen.findByText('When: Enter a number')).toBeTruthy();
     type('When value', '1500');
-    click('Save rule');
+    click('Save automation');
     expect(await screen.findByText('Then: pick what to set')).toBeTruthy();
     expect(hub.rules).toHaveLength(0);
   });
@@ -363,14 +369,13 @@ describe('Rules', () => {
   it('brightness is entered in percent', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    click('Add rule');
+    await createAutomation('A device changes');
     click('When: what to look at');
     click('Choose Motion sensor 0x0102 · Presence');
     click('Then: what to set');
     click('Choose lamp · Brightness');
     type('Then value', '50');
-    click('Save rule');
+    click('Save automation');
     await screen.findByLabelText('rule 1');
     expect(hub.rules[0]!.then).toMatchObject({ attr: 0x02, value: 127 });
     expect(screen.getByText(/set lamp brightness to 50 %/)).toBeTruthy();
@@ -379,8 +384,7 @@ describe('Rules', () => {
   it('only writable attributes are offered for the action', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
-    click('Add rule');
+    await createAutomation('A device changes');
     click('Then: what to set');
     expect(screen.getByLabelText('Choose lamp · Brightness')).toBeTruthy();
     expect(screen.queryByLabelText('Choose plug1 · Power draw')).toBeNull();
@@ -398,6 +402,7 @@ describe('Editing a scene', () => {
     hub.scenes.push(evening());
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Edit scene evening');
     await screen.findByText('Edit scene evening');
     click('plug1 · Power value Off');                     // flip plug1 to off
@@ -420,6 +425,7 @@ describe('Editing a scene', () => {
     hub.scenes.push(evening());
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Edit scene evening');
     click('Remove setting lamp · Brightness');
     click('Save changes');
@@ -435,6 +441,7 @@ describe('Editing a scene', () => {
     hub.scenes.push(evening());
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Edit scene evening');
     type('lamp · Brightness value', '250');
     click('Save changes');
@@ -452,6 +459,7 @@ describe('Editing a scene', () => {
     ] });
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Edit scene evening');
     expect(await screen.findByText(/1 setting refer to devices that are gone/)).toBeTruthy();
     click('Use current state');
@@ -548,15 +556,15 @@ describe('The sun', () => {
   it('a schedule can be set at sunset; without a location the card says it waits, with one it does not', async () => {
     await openApp();
     await gotoAutomations();
-    click('Add schedule');
+    await createAutomation('A time of day');
     click('Time: sunset');
     expect((screen.getByLabelText('Time') as HTMLInputElement).value).toBe('sunset');
     expect(screen.getByText(/needs its location first/)).toBeTruthy();
     type('Time', 'sunset+30');
-    expect(screen.getByText(/30 min after sunset/)).toBeTruthy();
-    click('Device');
-    fireEvent.click(await screen.findByText('plug1'));
-    click('Save schedule');
+    expect(screen.getByText(/30 min after sunset\. The hub needs/)).toBeTruthy();
+    click('Then: what to set');
+    click('Choose plug1 · Power');
+    click('Save automation');
     await screen.findByLabelText('schedule 30 min after sunset · Off plug1');
     expect(hub.schedules[0]).toMatchObject({ time: 'sunset+30', entity: 0x0100 });
     expect(screen.getByText(/waiting for the hub's location/)).toBeTruthy();
@@ -568,7 +576,6 @@ describe('The sun', () => {
     click('Save location');
     await screen.findByText(/sunrise 06:00/);
     click('Automations');
-    click('Schedules');
     await screen.findByLabelText('schedule 30 min after sunset · Off plug1');
     expect(screen.queryByText(/waiting for the hub's location/)).toBeNull();
   });
@@ -580,8 +587,8 @@ describe('Automations that apply a scene', () => {
   it('without scenes the forms offer only devices', async () => {
     await openApp();
     await gotoAutomations();
-    click('Add schedule');
-    expect(screen.queryByLabelText('Target a scene')).toBeNull();
+    await createAutomation('A time of day');
+    expect(screen.queryByLabelText('Apply a scene')).toBeNull();
   });
 
   it('a schedule, a timer and a rule can each target a scene', async () => {
@@ -589,30 +596,28 @@ describe('Automations that apply a scene', () => {
     await openApp();
     await gotoAutomations();
 
-    click('Add schedule');
-    click('Target a scene');
+    await createAutomation('A time of day');
+    click('Apply a scene');
     click('Scene night');
     type('Time', '22:00');
-    click('Save schedule');
+    click('Save automation');
     await screen.findByLabelText('schedule 22:00 · Scene night');
     expect(hub.schedules[0]).toMatchObject({ time: '22:00', scene: 'night' });
 
-    click('Timers');
-    click('Add timer');
-    click('Target a scene');
+    await createAutomation('After a delay');
+    click('Apply a scene');
     click('Scene night');
     click('Preset 5 minutes');
-    click('Start timer');
+    click('Save automation');
     await screen.findByLabelText('timer Scene night');
     expect(hub.timersCount()).toBe(1);
 
-    click('Rules');
-    click('Add rule');
+    await createAutomation('A device changes');
     click('Apply a scene');
     click('Scene night');
-    fireEvent.click(screen.getByLabelText('When: what to look at')); // pick the trigger
-    fireEvent.click(await screen.findByText('Motion sensor 0x0102 · Presence'));
-    click('Save rule');
+    click('When: what to look at');
+    click('Choose Motion sensor 0x0102 · Presence');
+    click('Save automation');
     await screen.findByLabelText('rule 1');
     expect(hub.rules[0]!.then).toEqual({ scene: 'night' });
     expect(screen.getByLabelText('rule 1').textContent).toContain('apply scene night');
@@ -623,6 +628,7 @@ describe('Automations that apply a scene', () => {
     hub.schedules.push({ index: 0, time: '22:00', days: 'daily', scene: 'night' });
     await openApp();
     click('Automations');
+    click('Scenes');
     await screen.findByLabelText('scene night');
     click('Delete scene night');
     click('Delete scene night');
@@ -635,6 +641,7 @@ describe('Scenes', () => {
   it('saves the chosen devices as they are now, shows the scene, and deletes it after a second tap', async () => {
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Add scene');
     type('Scene name', 'evening');
     click('Include plug1');
@@ -662,6 +669,7 @@ describe('Scenes', () => {
   it('refuses a bad name or no devices without asking the hub', async () => {
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Add scene');
     type('Scene name', 'Evening');
     click('Include plug1');
@@ -677,6 +685,7 @@ describe('Scenes', () => {
   it('a read-only device is not offered (the motion sensor has nothing to set)', async () => {
     await openApp();
     click('Automations');
+    click('Scenes');
     click('Add scene');
     expect(screen.queryByLabelText('Include Motion sensor 0x0102')).toBeNull();
     expect(screen.getByLabelText('Include plug1')).toBeTruthy();
@@ -871,5 +880,63 @@ describe('The examples screen', () => {
     const { onCancel } = renderExamples();
     click('Cancel');
     expect(onCancel).toHaveBeenCalled();
+  });
+});
+
+// ---- one list for every automation ---------------------------------------------------------
+
+describe('One list for every automation', () => {
+  const seed = async () => {
+    hub.rules.push({ index: 0, when: { entity: 258, attr: 0x50, op: '==', value: true }, then: { entity: 257, attr: 1, value: true } });
+    hub.schedules.push({ index: 0, time: '22:00', days: 'daily', entity: 256, attr: 1, action: 'off' });
+    await hubRequest('timer.add', { entity: 257, action: 'on', delay_s: 600 });
+  };
+
+  it('rules, schedules and timers stand in one list, not in three tabs', async () => {
+    await seed();
+    await openApp();
+    await gotoAutomations();
+    expect(screen.getByLabelText('All automations').textContent).toContain('(3)');
+    expect(screen.getByLabelText('rule 1')).toBeTruthy();
+    expect(screen.getByLabelText('schedule 22:00 · Off plug1')).toBeTruthy();
+    expect(screen.getByLabelText('timer On lamp')).toBeTruthy();
+    // the old tabs are gone
+    expect(screen.queryByLabelText('Schedules')).toBeNull();
+    expect(screen.queryByLabelText('Timers')).toBeNull();
+    expect(screen.queryByLabelText('Rules')).toBeNull();
+  });
+
+  it('each row is deleted with the call of its own kind', async () => {
+    await seed();
+    await openApp();
+    await gotoAutomations();
+    click('Delete schedule 22:00 · Off plug1');
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(hub.schedules).toHaveLength(0));
+    click('Delete timer On lamp');
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(hub.timersCount()).toBe(0));
+    click('Delete rule 1');
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(hub.rules).toHaveLength(0));
+  });
+
+  it('scenes stay in their own section', async () => {
+    hub.scenes.push({ name: 'evening', actions: [{ entity: 0x0101, attr: 1, value: true }] });
+    await openApp();
+    await gotoAutomations();
+    // the list of automations is what the screen opens on
+    expect(screen.queryByLabelText('scene evening')).toBeNull();
+    click('Scenes');
+    await screen.findByLabelText('scene evening');
+    expect(screen.getByLabelText('Add scene')).toBeTruthy();
+  });
+
+  it('"create automation" opens the examples', async () => {
+    await openApp();
+    await gotoAutomations();
+    click('Create automation');
+    expect(await screen.findByText('What should happen?')).toBeTruthy();
+    for (const p of PRESET_AUTOMATIONS) expect(screen.getByLabelText(p.label)).toBeTruthy();
   });
 });
