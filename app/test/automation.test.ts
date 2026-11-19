@@ -10,6 +10,8 @@ import {
   // the unified automation draft (when → do)
   emptyAutomationDraft, automationRequest, automationToSentence,
   type AutomationDraft,
+  // the examples a person starts from
+  PRESET_AUTOMATIONS,
 } from '../src/model/automation';
 import { nameProblem, sceneNameProblem } from '../src/model/names';
 import { defaultEntities } from '../tools/mock-hub/hub';
@@ -677,5 +679,69 @@ describe('the unified automation draft', () => {
     expect(automationToSentence(emptyAutomationDraft('timeOfDay'))).toContain('…');
     expect(automationToSentence(emptyAutomationDraft('date'))).toContain('…');
     expect(automationToSentence(emptyAutomationDraft('delay'))).toContain('…');
+  });
+});
+
+// ---- the examples a person starts from ----------------------------------------------------
+
+describe('the example automations', () => {
+  const preset = (id: string) => PRESET_AUTOMATIONS.find((p) => p.id === id)!;
+
+  it('every example is one of the four kinds, with something to read', () => {
+    expect(PRESET_AUTOMATIONS.length).toBeGreaterThan(0);
+    for (const p of PRESET_AUTOMATIONS) {
+      expect(['device', 'timeOfDay', 'date', 'delay']).toContain(p.make().kind);
+      expect(p.label.length).toBeGreaterThan(0);
+      expect(p.icon.length).toBeGreaterThan(0);
+      expect(p.id.length).toBeGreaterThan(0);
+    }
+    // The ids are unique: the list keys them.
+    expect(new Set(PRESET_AUTOMATIONS.map((p) => p.id)).size).toBe(PRESET_AUTOMATIONS.length);
+  });
+
+  it('"off at night" prefills the time and the action, and leaves the device to the person', () => {
+    const d = preset('night-off').make();
+    expect(d.kind).toBe('timeOfDay');
+    expect(d.time).toBe('23:00');
+    expect(d.days).toBe('daily');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('off');
+  });
+
+  it('"the light on when I arrive" hints at a presence, but names no device', () => {
+    const d = preset('light-on-arrive').make();
+    expect(d.kind).toBe('device');
+    expect(d.trigger?.option).toBeNull();
+    expect(d.trigger?.value).toBe('on');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('on');
+  });
+
+  it('"off after a while" waits for a device and for the minutes', () => {
+    const d = preset('off-after-delay').make();
+    expect(d.kind).toBe('delay');
+    expect(d.minutes).toBe('');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('off');
+  });
+
+  it('"apply a scene at a time" asks for a scene, not for a device', () => {
+    const d = preset('scene-on-time').make();
+    expect(d.kind).toBe('timeOfDay');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.scene).toBe('');        // a scene is wanted, none is chosen yet
+  });
+
+  it('an example that still needs a device is refused with a clear message, not a crash', () => {
+    const d = preset('off-after-delay').make();
+    const r = automationRequest({ ...d, minutes: '5' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/device/i);
+  });
+
+  it('an example that needs a scene says which one is missing', () => {
+    const r = automationRequest({ ...preset('scene-on-time').make(), time: '22:00' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/scene/i);
   });
 });

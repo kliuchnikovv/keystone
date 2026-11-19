@@ -538,6 +538,72 @@ export function automationToSentence(d: AutomationDraft): string {
   return `${when} → ${tail}`;
 }
 
+// ---- the examples a person starts from ----------------------------------------------------
+//
+// An empty screen is frightening, so the flow starts from examples: a ready-made
+// automation, described in words. An example fills in only what does not depend on this
+// home — the kind, the time, which way the switch goes — and leaves the devices to the
+// person, because only they know which lamp is in the hallway.
+
+/** A ready-made automation: the parts that do not depend on this home, and a label. */
+export interface PresetAutomation {
+  id: string;
+  icon: string;
+  label: string;
+  /** The draft the example opens, with only the device-independent parts filled in. */
+  make(): AutomationDraft;
+}
+
+export const PRESET_AUTOMATIONS: PresetAutomation[] = [
+  {
+    id: 'night-off',
+    icon: '🌙',
+    label: 'Turn something off at night',
+    make: () => ({
+      ...emptyAutomationDraft('timeOfDay'),
+      time: '23:00',
+      days: 'daily',
+      action: { option: null, value: 'off', scene: null },
+    }),
+  },
+  {
+    id: 'light-on-arrive',
+    icon: '🚶',
+    label: 'Turn the light on when I arrive',
+    make: () => ({
+      ...emptyAutomationDraft('device'),
+      // "someone is there" — but which sensor is the person's to say.
+      trigger: { option: null, op: '==', value: 'on' },
+      action: { option: null, value: 'on', scene: null },
+    }),
+  },
+  {
+    id: 'off-after-delay',
+    icon: '⏱️',
+    label: 'Turn something off after a while',
+    make: () => ({
+      ...emptyAutomationDraft('delay'),
+      action: { option: null, value: 'off', scene: null },
+    }),
+  },
+  {
+    id: 'react-to-sensor',
+    icon: '📈',
+    label: 'React to a sensor',
+    make: () => emptyAutomationDraft('device'),
+  },
+  {
+    id: 'scene-on-time',
+    icon: '🎬',
+    label: 'Apply a scene at a time',
+    make: () => ({
+      ...emptyAutomationDraft('timeOfDay'),
+      days: 'daily',
+      action: { option: null, value: '', scene: '' }, // a scene is wanted, none is chosen yet
+    }),
+  },
+];
+
 // ---- what can be picked ------------------------------------------------------------
 
 export interface AttrOption {
