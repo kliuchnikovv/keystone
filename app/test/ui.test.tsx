@@ -119,9 +119,10 @@ describe('Adding, finding and removing devices', () => {
     // The search is a screen of its own.
     expect(await screen.findByText('Find devices')).toBeTruthy();
     // Opening it opens the Zigbee network for two minutes.
-    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
+    expect(await screen.findByText(/Put the device in pairing mode/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
-    expect(screen.getByText(/^\d:\d\d$/)).toBeTruthy();
+    // The countdown lives in the finder panel.
+    expect(screen.getByLabelText('Looking for new devices').textContent ?? '').toMatch(/\d:\d\d/);
     act(() => hub.simulateJoin(0x0200, 'new_plug'));
     await screen.findByText('new_plug');
     expect(screen.getByText(/joined/)).toBeTruthy();

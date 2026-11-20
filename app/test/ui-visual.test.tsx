@@ -114,7 +114,7 @@ describe('Devices list', () => {
     expect(add).toBeTruthy();
     fireEvent.click(add);
     expect(await screen.findByText('Find devices')).toBeTruthy();
-    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
+    expect(await screen.findByText(/Put the device in pairing mode/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
   });
 
