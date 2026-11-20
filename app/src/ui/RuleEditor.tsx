@@ -37,6 +37,8 @@ export interface RuleEditorProps {
   busy: boolean;
   onSubmit(args: Record<string, unknown>): Promise<boolean>;
   onCancel(): void;
+  /** A rule that is already written — a suggestion the person picked. */
+  initialDraft?: RuleDraft;
 }
 
 // ---- one chip that opens a sheet of choices ----------------------------------------------
@@ -199,11 +201,11 @@ function ConditionBlock({
 
 // ---- the editor ------------------------------------------------------------------------------
 
-export function RuleEditor({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: RuleEditorProps) {
+export function RuleEditor({ entities, scenes, hasLocation, busy, onSubmit, onCancel, initialDraft }: RuleEditorProps) {
   const t = useTheme();
   const all = attrOptions(entities);
   const writable = attrOptions(entities, { writable: true });
-  const [draft, setDraft] = useState<RuleDraft>(emptyDraft);
+  const [draft, setDraft] = useState<RuleDraft>(initialDraft ?? emptyDraft);
   const [error, setError] = useState<string | null>(null);
   const [more, setMore] = useState(false);
 

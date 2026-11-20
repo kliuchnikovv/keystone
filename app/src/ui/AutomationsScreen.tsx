@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from './kit';
 import { Platform } from 'react-native';
-import { describeRule, describeScene, describeSchedule, describeTimer } from '../model/automation';
+import { describeRule, describeScene, describeSchedule, describeTimer, type RuleDraft } from '../model/automation';
+import { suggestionsFor } from '../model/suggestions';
 import type { Commands } from '../hooks/useCommands';
 import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
@@ -9,6 +10,7 @@ import { SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationFor
 import { RuleEditor } from './RuleEditor';
 import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
 import { ScreenHeader } from './ScreenHeader';
+import { Suggestions } from './Suggestions';
 import { useTheme } from './theme';
 
 type Section = 'scenes' | 'schedules' | 'timers' | 'rules';
@@ -25,6 +27,8 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
   const [section, setSection] = useState<Section>('scenes');
   const [adding, setAdding] = useState<OpenForm | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // the name of the scene being edited
+  // A rule that came from a suggestion: the editor opens with it filled in.
+  const [suggestion, setSuggestion] = useState<RuleDraft | null>(null);
   const lastId = useRef(0);
   const left = useCountdown(home.timers);
 
@@ -73,6 +77,15 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
   return (
     <ScrollView contentContainerStyle={styles.page}>
       <ScreenHeader title="Automations" />
+      <Suggestions
+        items={suggestionsFor(home)}
+        onPick={(s) => {
+          setSuggestion(s.draft);
+          setSection('rules');
+          setAdding(null);
+        }}
+      />
+
       <ChipRow>
         <Chip label={`Scenes (${home.scenes.length})`} a11y="Scenes" selected={section === 'scenes'} onPress={() => switchTo('scenes')} />
         <Chip label={`Schedules (${home.schedules.length})`} a11y="Schedules" selected={section === 'schedules'} onPress={() => switchTo('schedules')} />
