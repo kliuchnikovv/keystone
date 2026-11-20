@@ -1,7 +1,7 @@
-// The palette is a setting of the phone: it is remembered, and a broken or
+// The theme mode is a setting of the phone: it is remembered, and a broken or
 // unknown value falls back to the default rather than to an empty screen.
 import { describe, expect, it } from 'vitest';
-import { createPaletteStore, isPaletteId } from '../src/palette';
+import { createThemeStore, isThemeMode } from '../src/palette';
 import type { KeyValueStore } from '../src/settings';
 
 function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { data: Map<string, string> } {
@@ -20,34 +20,32 @@ function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { da
   };
 }
 
-describe('palette', () => {
+describe('theme mode', () => {
   it('knows its names', () => {
-    expect(isPaletteId('sandstone')).toBe(true);
-    expect(isPaletteId('ember')).toBe(true);
-    expect(isPaletteId('paper')).toBe(true);
-    expect(isPaletteId('midnight')).toBe(false);
+    expect(isThemeMode('system')).toBe(true);
+    expect(isThemeMode('light')).toBe(true);
+    expect(isThemeMode('dark')).toBe(true);
+    expect(isThemeMode('ember')).toBe(false);
   });
 
-  it('remembers the choice', async () => {
+  it('remembers the choice under keystone.theme', async () => {
     const kv = memoryStore();
-    const store = createPaletteStore(kv);
-    expect(await store.load()).toBe('sandstone'); // nothing saved yet
-    await store.save('ember');
-    expect(await store.load()).toBe('ember');
-    expect(kv.data.get('keystone.palette')).toBe('ember');
-    await store.save('paper');
-    expect(await store.load()).toBe('paper');
+    const s = createThemeStore(kv);
+    expect(await s.load()).toBe('system'); // nothing saved yet
+    await s.save('dark');
+    expect(await s.load()).toBe('dark');
+    expect(kv.data.get('keystone.theme')).toBe('dark');
   });
 
-  it('an unknown or unreadable value falls back to the default', async () => {
-    expect(await createPaletteStore(memoryStore({ 'keystone.palette': 'midnight' })).load()).toBe('sandstone');
+  it('an old palette value or a throwing store falls back to system', async () => {
+    expect(await createThemeStore(memoryStore({ 'keystone.theme': 'sandstone' })).load()).toBe('system');
     const broken: KeyValueStore = {
       async get() {
-        throw new Error('no keychain');
+        throw new Error('x');
       },
       async set() {},
       async delete() {},
     };
-    expect(await createPaletteStore(broken).load()).toBe('sandstone');
+    expect(await createThemeStore(broken).load()).toBe('system');
   });
 });
