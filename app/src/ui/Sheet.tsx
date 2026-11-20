@@ -63,12 +63,14 @@ export function Sheet({ visible, title, onCancel, children }: SheetProps) {
 }
 
 /** A row of a sheet: plain text, a hairline between the rows, the last one without. */
-export function SheetRow({ label, tone = 'normal', onPress, a11y, last }: {
+export function SheetRow({ label, tone = 'normal', onPress, a11y, last, glyph }: {
   label: string;
   tone?: 'normal' | 'danger';
   onPress(): void;
   a11y?: string;
   last?: boolean;
+  /** An icon in front of the name. */
+  glyph?: ReactNode;
 }) {
   const t = useTheme();
   return (
@@ -78,6 +80,7 @@ export function SheetRow({ label, tone = 'normal', onPress, a11y, last }: {
       onPress={onPress}
       style={[styles.sheetRow, { borderBottomColor: t.border, borderBottomWidth: last ? 0 : StyleSheet.hairlineWidth }]}
     >
+      {glyph ? <View style={styles.sheetRowIcon}>{glyph}</View> : null}
       <Text style={{ color: tone === 'danger' ? t.bad : t.text, fontSize: 15 }}>{label}</Text>
     </Pressable>
   );
@@ -146,6 +149,7 @@ const styles = StyleSheet.create({
   body: { flexShrink: 1 },
   bodyInner: { paddingBottom: 8 },
   title: { fontSize: 17, fontWeight: '700' },
+  sheetRowIcon: { marginRight: 12 },
   sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13 },
   dialogWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   dialog: { width: '100%', maxWidth: 380, borderRadius: 20, borderWidth: 1, padding: 20 },

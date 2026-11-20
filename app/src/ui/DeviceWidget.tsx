@@ -14,6 +14,8 @@ import { formatTemperature } from '../model/temperature';
 import { stripRoomPrefix } from '../model/rooms';
 import type { Entity } from '../protocol/messages';
 import { Dimmer } from './Dimmer';
+import { ReadingsGrid, gridReadings } from './ReadingsGrid';
+import { ThermostatRing } from './ThermostatRing';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
 import { Extras, batteryOf, colorOf, headlineOf, subtitleOf } from './widgets';
@@ -156,7 +158,11 @@ export function DeviceWidget({
           <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
             {displayName}
           </Text>
-          <Extras entity={entity} />
+          {gridReadings(entity).length > 1 ? (
+            <ReadingsGrid entity={entity} />
+          ) : (
+            <Extras entity={entity} />
+          )}
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
@@ -180,6 +186,42 @@ export function DeviceWidget({
         onToggle={onToggle}
         onOpen={onOpen}
       />
+    );
+  }
+
+  // A thermostat: the ring shows the target, and the steps move it.
+  if (entity.device === 'climate') {
+    const setpoint = attrOf(entity, 'setpoint');
+    const temp = attrOf(entity, 'temperature');
+    const current = temp !== undefined && typeof temp.value === 'number' ? Number(temp.value) / 10 : 0;
+    const target = setpoint !== undefined && typeof setpoint.value === 'number' ? Number(setpoint.value) / 10 : current;
+    return (
+      <View style={card}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Device ${title}`}
+          accessibilityHint="Long press for details"
+          accessibilityState={{ selected: on, disabled: !reachable }}
+          onPress={toggle}
+          onLongPress={onOpen}
+          onPressIn={press.onPressIn}
+          onPressOut={press.onPressOut}
+          style={[styles.inner, down && styles.pressed, held && styles.pressedHeld]}
+        >
+          <View style={styles.thermoHead}>
+            {tile}
+            <View style={styles.text}>
+              <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text style={[styles.sub, { color: t.muted }]} numberOfLines={1}>
+                now {current.toFixed(1)}° · target {target.toFixed(1)}°
+              </Text>
+            </View>
+          </View>
+          <ThermostatRing current={current} target={target} />
+        </Pressable>
+      </View>
     );
   }
 
@@ -241,6 +283,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   sensor: { alignItems: 'flex-start', gap: 6 },
   sensorTop: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch' },
+  thermoHead: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   tile: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, minWidth: 0, gap: 2 },
   name: { fontSize: 14.5, fontWeight: '600' },
