@@ -23,8 +23,9 @@ the WebSocket+JSON protocol in [../docs/app-protocol.md](../docs/app-protocol.md
 - `src/hooks/`, `src/ui/`, `App.tsx` — the screens: connect, Devices (device buttons, a sheet
   on a long press, brightness, live values, rename, scenes bar), the **Find devices**
   screen (add/identify/remove a Zigbee device, and what is near the phone), Automations
-  (scenes, schedules, timers, rules — each of the last three can apply a
-  scene), History (what the hub did and saw, newest first; tap a row for one device), Hub (chip health).
+  (one list of automations — rules, schedules and timers together, each saying when it
+  happens and what it does — plus Scenes in their own section; creating one goes through
+  the examples and the one builder in `ui/AutomationBuilder.tsx`), History (what the hub did and saw, newest first; tap a row for one device), Hub (chip health).
 - `tools/mock-hub/` — a software hub speaking the protocol (3 clients max, hello
   timeout, lockout, validation, re-broadcast), for development without hardware.
 - `tools/probe.ts`, `tools/hub-check.ts` — talk to a real hub from a terminal.

@@ -91,7 +91,7 @@ export function NewAutomation({ entities, scenes, hasLocation, busy, onSubmit, o
       <Text style={{ color: t.muted, fontSize: 12.5, marginTop: 4, marginBottom: 12 }}>
         Pick an example and change what it says, or start from nothing.
       </Text>
-      {PRESET_AUTOMATIONS.map((p) => (
+      {PRESET_AUTOMATIONS.filter((p) => !p.needsScenes || scenes.length > 0).map((p) => (
         <ExampleRow key={p.id} icon={p.icon} label={p.label} onPress={() => setDraft(p.make())} />
       ))}
       <ExampleRow icon="✎" label="From scratch" onPress={() => setAskingKind(true)} />

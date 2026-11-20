@@ -745,3 +745,22 @@ describe('the example automations', () => {
     expect(r.ok ? '' : r.error).toMatch(/scene/i);
   });
 });
+
+describe('the unified automation draft, the other way round', () => {
+  it('a time switched to a device leaves no time behind', () => {
+    const d: AutomationDraft = {
+      ...emptyAutomationDraft('device'),
+      trigger: { option: opt('Motion sensor 0x0102 · Presence'), op: '==', value: 'on' },
+      action: { option: opt('lamp · Power'), value: 'on', scene: null },
+      // left over from the kind the person came from
+      time: '22:00',
+      days: 'daily',
+      date: '2099-12-31',
+      minutes: '10',
+    };
+    const r = automationRequest(d);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(Object.keys(r.value.args).sort()).toEqual(['then', 'when']);
+  });
+});

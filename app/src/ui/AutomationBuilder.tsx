@@ -9,7 +9,7 @@
 // device kind alone: the hub keeps them in a rule and nowhere else, so for a time or a
 // delay they are not shown at all.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import {
   COMPARISONS,
@@ -196,17 +196,26 @@ export function AutomationBuilder({ entities, scenes, hasLocation, initial, busy
   const [error, setError] = useState<string | null>(null);
   const [more, setMore] = useState(false);
 
+  // An error belongs to what the person had then; as soon as they change something, it
+  // is stale and must not stay on the screen.
+  useEffect(() => { setError(null); }, [draft]);
+
   const all = attrOptions(entities);
   const writable = attrOptions(entities, { writable: true });
   // A schedule or a timer can only switch a device on or off; a rule can set anything.
-  const actionOptions = draft.kind === 'device' ? writable : writable.filter((o) => o.vt === 'bool');
+  // It is the hub's own on/off attribute, not just any yes/no.
+  const actionOptions = draft.kind === 'device' ? writable : writable.filter((o) => o.name === 'on_off');
+
+  // With no scenes in the hub, a scene cannot be what happens: the draft's scene is
+  // dropped, so the block offers a device instead of nothing.
+  const sceneMode = scenes.length > 0 && draft.action?.scene !== undefined && draft.action?.scene !== null;
 
   const setKind = (kind: TriggerKind) =>
     setDraft((d) => {
       const next = { ...d, kind };
       // What the old kind allowed, the new kind may not: a brightness cannot be switched on.
-      if (kind !== 'device' && next.action?.option && next.action.option.vt !== 'bool') {
-        next.action = { ...next.action, option: null };
+      if (kind !== 'device' && next.action?.option && next.action.option.name !== 'on_off') {
+        next.action = { ...next.action, option: null, value: '' };
       }
       return next;
     });
@@ -215,17 +224,23 @@ export function AutomationBuilder({ entities, scenes, hasLocation, initial, busy
   const setCondition = (i: number, c: ConditionDraft) =>
     setDraft((d) => ({ ...d, conditions: d.conditions.map((x, k) => (k === i ? c : x)) }));
 
-  const sceneMode = draft.action?.scene !== undefined && draft.action?.scene !== null;
   const custom = Array.isArray(draft.days);
   const toggleDay = (day: Weekday) => {
     const cur = Array.isArray(draft.days) ? draft.days : [];
     setDraft((d) => ({ ...d, days: cur.includes(day) ? cur.filter((x) => x !== day) : [...cur, day] }));
   };
 
+  /** The draft as it will be sent: with no scenes, a scene cannot be the action. */
+  const effective = (): AutomationDraft => {
+    const a = draft.action;
+    if (scenes.length > 0 || !a || a.scene === undefined || a.scene === null) return draft;
+    return { ...draft, action: { ...a, scene: null } };
+  };
+
   const save = async () => {
     // The model turns the draft into the hub's request, so the same checks run here and
     // in the tests — and the kind decides which of the three calls it is.
-    const built = automationRequest(draft);
+    const built = automationRequest(effective());
     if (!built.ok) return setError(built.error);
     setError(null);
     await onSubmit(built.value.op, built.value.args);
@@ -351,7 +366,15 @@ export function AutomationBuilder({ entities, scenes, hasLocation, initial, busy
                 placeholder="Choose what to change"
                 options={actionOptions}
                 selected={draft.action?.option ?? null}
-                onSelect={(o) => setAction({ option: o, value: o.vt === 'bool' ? (draft.action?.value || 'off') : '', scene: null })}
+                onSelect={(o) => {
+                  // The value belongs to the attribute it was typed for: it follows only
+                  // into an attribute that takes the same kind of value.
+                  const prev = draft.action?.option ?? null;
+                  const typed = draft.action?.value ?? '';
+                  const keep = prev ? prev.vt === o.vt : o.vt === 'bool' && (typed === 'on' || typed === 'off');
+                  const value = keep ? typed : o.vt === 'bool' ? 'off' : '';
+                  setAction({ option: o, value, scene: null });
+                }}
                 keyOf={(o) => `${o.entity}:${o.attr}`}
                 textOf={(o) => o.label}
               />

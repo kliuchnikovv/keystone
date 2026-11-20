@@ -456,7 +456,8 @@ function automationTarget(action: ActionDraft | null): Parsed<{ entity: number |
     return { ok: true, value: { entity: null, action: 'toggle', scene: action.scene } };
   }
   if (!action.option) return { ok: false, error: 'Pick a device' };
-  if (action.option.vt !== 'bool') {
+  // The hub switches the device's on/off attribute — not just any yes/no.
+  if (action.option.name !== 'on_off' || action.option.vt !== 'bool') {
     return { ok: false, error: 'A schedule or a timer can only switch a device on or off' };
   }
   const v = parseInput(action.option.name, action.option.vt, action.value);
@@ -564,6 +565,8 @@ export interface PresetAutomation {
   id: string;
   icon: string;
   label: string;
+  /** The example needs the hub to have a scene; without one there is nothing to apply. */
+  needsScenes?: boolean;
   /** The draft the example opens, with only the device-independent parts filled in. */
   make(): AutomationDraft;
 }
@@ -610,6 +613,7 @@ export const PRESET_AUTOMATIONS: PresetAutomation[] = [
     id: 'scene-on-time',
     icon: '🎬',
     label: 'Apply a scene at a time',
+    needsScenes: true,
     make: () => ({
       ...emptyAutomationDraft('timeOfDay'),
       days: 'daily',

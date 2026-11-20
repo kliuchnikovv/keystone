@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
+import type { Entity } from '../src/protocol/messages';
 import { locatePhone } from '../src/native/position';
 import { Home } from '../src/ui/Home';
 import { AutomationBuilder, type AutomationBuilderProps } from '../src/ui/AutomationBuilder';
@@ -42,6 +43,8 @@ const gotoAutomations = async () => {
 };
 /** The way in: the examples, then "from scratch", then what starts it. */
 const createAutomation = async (kind: string) => {
+  // The hub answers before the form closes, so wait for the button to be back.
+  await screen.findByLabelText('Create automation');
   click('Create automation');
   click('From scratch');
   click('When: what starts it');
@@ -847,7 +850,8 @@ describe('The examples screen', () => {
   };
 
   it('lists every example, plus a way to start from scratch', () => {
-    renderExamples();
+    // with a scene in the hub, the scene example belongs to the list
+    renderExamples({ scenes: [{ name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] }] });
     for (const p of PRESET_AUTOMATIONS) expect(screen.getByLabelText(p.label)).toBeTruthy();
     expect(screen.getByLabelText('From scratch')).toBeTruthy();
   });
@@ -933,10 +937,66 @@ describe('One list for every automation', () => {
   });
 
   it('"create automation" opens the examples', async () => {
+    hub.scenes.push({ name: 'night', actions: [{ entity: 0x0101, attr: 1, value: true }] });
     await openApp();
     await gotoAutomations();
     click('Create automation');
     expect(await screen.findByText('What should happen?')).toBeTruthy();
     for (const p of PRESET_AUTOMATIONS) expect(screen.getByLabelText(p.label)).toBeTruthy();
+  });
+});
+
+// ---- the corners the review found -----------------------------------------------------------
+
+describe('The corners', () => {
+  const scenePreset = () => PRESET_AUTOMATIONS.find((p) => p.id === 'scene-on-time')!.make();
+
+  it('the scene example is not offered when the hub has no scenes', () => {
+    render(<NewAutomation entities={defaultEntities()} scenes={[]} hasLocation={false} busy={false}
+      onSubmit={async () => true} onCancel={() => {}} />);
+    expect(screen.queryByLabelText('Apply a scene at a time')).toBeNull();
+  });
+
+  it('a scene example in a home without scenes is not a dead end', async () => {
+    const onSubmit = vi.fn(async () => true);
+    render(<AutomationBuilder entities={defaultEntities()} scenes={[]} hasLocation={false} initial={scenePreset()}
+      busy={false} onSubmit={onSubmit} onCancel={() => {}} />);
+    // the person can still say what happens
+    expect(screen.getByLabelText('Then: what to set')).toBeTruthy();
+    type('Time', '22:00');
+    click('Then: what to set');
+    click('Choose lamp · Power');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '22:00', days: 'daily', entity: 257, action: 'off' }));
+  });
+
+  it('a value typed for one attribute does not follow another', async () => {
+    const onSubmit = vi.fn(async () => true);
+    render(<AutomationBuilder entities={defaultEntities()} scenes={[]} hasLocation={false} initial={emptyAutomationDraft('device')}
+      busy={false} onSubmit={onSubmit} onCancel={() => {}} />);
+    click('Then: what to set');
+    click('Choose lamp · Brightness');
+    type('Then value', '50');
+    // a schedule can only switch a device on or off: the old number does not fit
+    click('When: what starts it');
+    click('Choose A time of day');
+    type('Time', '22:00');
+    click('Then: what to set');
+    click('Choose plug1 · Power');
+    click('Save automation');
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('schedule.add', { time: '22:00', days: 'daily', entity: 256, action: 'off' }));
+  });
+
+  it('a schedule offers only the on/off switch, not another kind of yes/no', () => {
+    const entities: Entity[] = [
+      ...defaultEntities(),
+      { id: 0x200, name: 'box', room: null, chip: 1, device: 'switch',
+        attrs: [{ id: 0x02, name: 'door_open', vt: 'bool', flags: ['r', 'w'], value: false }] },
+    ];
+    render(<AutomationBuilder entities={entities} scenes={[]} hasLocation={false} initial={emptyAutomationDraft('timeOfDay')}
+      busy={false} onSubmit={async () => true} onCancel={() => {}} />);
+    click('Then: what to set');
+    expect(screen.getByLabelText('Choose plug1 · Power')).toBeTruthy();
+    expect(screen.queryByLabelText('Choose box · Door open')).toBeNull();
   });
 });
