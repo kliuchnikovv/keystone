@@ -86,9 +86,10 @@ export function Button({ label, onPress, kind = 'primary', size = 'default', dis
 }) {
   const t = useTheme();
   const g = BUTTON_GEOM[kind][size];
-  // A quiet button is a filled surface in the dark palettes and an outline on paper.
-  const bg = kind === 'primary' ? t.accent : kind === 'secondary' ? t.secondaryBg : 'transparent';
-  const fg = kind === 'primary' ? t.onAccent : kind === 'danger' ? t.bad : kind === 'secondary' ? t.text : t.accent;
+  // The main action is ink, not the gold: the gold is decoration.
+  // A quiet button is a filled surface in the dark theme and an outline on paper.
+  const bg = kind === 'primary' ? t.primary : kind === 'secondary' ? t.secondaryBg : 'transparent';
+  const fg = kind === 'primary' ? t.onPrimary : kind === 'danger' ? t.bad : kind === 'secondary' ? t.text : t.accent;
   const border = kind === 'danger' ? t.bad : kind === 'secondary' ? t.secondaryBorder : bg;
   return (
     <Pressable
