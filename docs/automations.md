@@ -21,9 +21,12 @@
 | Таймеры | `timer_table.hpp` | задержка в секундах |
 | Сцены | `scene_table.hpp` | именованный набор до 8 настроек |
 
-**В приложении** (`app/src/ui/AutomationForms.tsx`, `app/src/model/automation.ts`):
-формы When / Then / More options (Between / Only while / Cooldown), расписания,
-таймеры, сцены. Всё читается словами (`describeRule`).
+**В приложении** (`app/src/ui/AutomationBuilder.tsx`, `app/src/model/automation.ts`):
+один конструктор «когда → сделать» — вид триггера (устройство / время дня / дата /
+задержка), примеры на входе, живая фраза; «Ещё опции» (Only while / Between /
+Cooldown) — только у вида «устройство», потому что хаб держит их лишь в правиле.
+Список автоматизаций слитный (правила, расписания, таймеры рядом), сцены — отдельным
+разделом. Всё читается словами (`describeRule`, `automationToSentence`).
 
 **Чего нет:** нескольких действий в одном правиле, нескольких условий, «иначе»,
 последовательности действий, правил на присутствие телефона.
@@ -269,9 +272,11 @@ Geofence сам по себе даёт ложные срабатывания:
 **Шаг 1 — редактор (фронт, ядро не трогаем).**
 
 - `app/src/model/automation.ts`: `RuleDraft`, `ConditionDraft`, `ActionDraft`,
-  `draftToSentence()`, `draftRequest()`.
-- `app/src/ui/AutomationForms.tsx`: блочный `RuleFormView` с чипами и живым
-  предпросмотром.
+  `draftToSentence()`, `draftRequest()` — и над ними единый черновик
+  `AutomationDraft` (`emptyAutomationDraft`, `automationRequest`,
+  `automationToSentence`), который выбирает один из трёх вызовов хаба.
+- `app/src/ui/AutomationBuilder.tsx`: блочный конструктор с чипами и живым
+  предпросмотром; `app/src/ui/NewAutomation.tsx` — вход через примеры.
 - Формулировки присутствия («Кто-то есть» / «Никого нет»).
 - Тесты: `app/test/automation.test.ts`, `app/test/ui-automation.test.tsx`.
 
