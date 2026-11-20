@@ -61,6 +61,19 @@ TEST_CASE("plugin manifest: parse, abi check, bad capability") {
                 m) == ManifestError::BadJson);
   }
 
+  SUBCASE("a duplicate hidden behind a JSON escape is rejected") {
+    // "caps" decodes to "caps": a raw-byte compare would miss it, a
+    // lenient parser would not. Keys are compared decoded, so this is caught.
+    CHECK(parse(R"({"id":"x","version":1,"abi":1,)"
+                R"("caps":["net_local"],"caps":["log"]})",
+                m) == ManifestError::BadJson);
+  }
+
+  SUBCASE("a duplicate of any key, not only known ones, is rejected") {
+    CHECK(parse(R"({"id":"x","version":1,"abi":1,"foo":1,"foo":2})", m) ==
+          ManifestError::BadJson);
+  }
+
   SUBCASE("an over-long id is rejected") {
     CHECK(parse(R"({"id":"abcdefghijklmnopqrstuvwxyz0123456789","version":1,)"
                 R"("abi":1,"caps":[]})",

@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "core/json.hpp"
 #include "core/plugin_host_api.hpp"
@@ -68,23 +69,26 @@ inline ManifestError parse_manifest(const char* json, std::size_t len,
   const int root = r.root();
   if (!r.is(root, JsonReader::Type::Object)) return ManifestError::BadJson;
 
-  // Reject a duplicate of any key we act on (parser-differential hardening).
-  // Our reader resolves find() to the first match; a signer or store that
-  // parses the same manifest (Project 2) might take the last. Since the keys
-  // below drive capabilities — the security boundary — refuse the ambiguity.
-  // (An escaped key never matches our raw-byte compare, so it is treated as
-  // absent and fails safe; full key canonicalisation is deferred to the
-  // signing work in Project 2.)
+  // Reject any duplicate root key (parser-differential hardening). Our reader
+  // resolves find() to the first match; a signer or store that re-parses the
+  // manifest (Project 2) might take the last — a path to declaring one set of
+  // capabilities to the signer and a different one to the hub. Keys are
+  // compared DECODED, so an alias hidden behind an escape ("caps") is
+  // caught too; a key that does not decode or does not fit is itself refused.
   {
-    static constexpr const char* kKnownKeys[] = {"id", "version", "abi",
-                                                 "caps", "allow"};
     const int members = r.count(root);
-    for (const char* key : kKnownKeys) {
-      int seen = 0;
-      for (int i = 0; i < members; ++i) {
-        if (r.string_equals(r.member_key(root, i), key)) ++seen;
+    for (int i = 0; i < members; ++i) {
+      char ki[32];
+      if (!r.get_string(r.member_key(root, i), ki, sizeof(ki))) {
+        return ManifestError::BadJson;
       }
-      if (seen > 1) return ManifestError::BadJson;
+      for (int j = i + 1; j < members; ++j) {
+        char kj[32];
+        if (!r.get_string(r.member_key(root, j), kj, sizeof(kj))) {
+          return ManifestError::BadJson;
+        }
+        if (std::strcmp(ki, kj) == 0) return ManifestError::BadJson;
+      }
     }
   }
 
