@@ -4,9 +4,11 @@ import {
   WEEK, actionText, localDate, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption,
 } from '../model/automation';
+import { formatCountdown } from '../model/automation';
 import { deviceTitle } from '../model/devices';
 import type { Action, Days, Entity, Scene, Weekday } from '../protocol/messages';
 import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
+import { DurationWheel } from './DurationWheel';
 import { useTheme } from './theme';
 
 type Submit = (args: Record<string, unknown>) => Promise<boolean>;
@@ -177,15 +179,21 @@ export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, on
 // ---- timer ------------------------------------------------------------------------------
 
 export function TimerForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+  const t = useTheme();
   const [entity, setEntity] = useState<number | null>(null);
   const [action, setAction] = useState<Action>('off');
-  const [minutes, setMinutes] = useState('');
+  // The duration: hours and minutes, the way a phone asks for it.
+  const [hours, setHours] = useState(0);
+  const [minutes, setMinutes] = useState(30);
   const [target, setTarget] = useState<Target>('device');
   const [scene, setScene] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // The wheel speaks in hours and minutes; the hub speaks in seconds.
+  const totalMinutes = hours * 60 + minutes;
+
   const save = async () => {
-    const r = timerRequest({ entity, action, minutes, scene: target === 'scene' ? scene ?? '' : null });
+    const r = timerRequest({ entity, action, minutes: String(totalMinutes), scene: target === 'scene' ? scene ?? '' : null });
     if (!r.ok) return setError(r.error);
     setError(null);
     await onSubmit(r.value);
@@ -208,14 +216,14 @@ export function TimerForm({ entities, scenes, busy, onSubmit, onCancel }: { enti
           </Field>
         </>
       )}
-      <Field label="After (minutes)">
-        <ChipRow>
-          {['5', '15', '30', '60'].map((m) => (
-            <Chip key={m} label={`${m} min`} a11y={`Preset ${m} minutes`} selected={minutes === m} onPress={() => setMinutes(m)} />
-          ))}
-        </ChipRow>
-        <View style={{ marginTop: 8 }}>
-          <Input label="Minutes" value={minutes} onChangeText={setMinutes} placeholder="or type minutes" keyboardType="decimal-pad" />
+      <Field label="After">
+        <DurationWheel hours={hours} minutes={minutes} onChange={(h, m) => { setHours(h); setMinutes(m); }} />
+        <View style={[styles.timerNote, { backgroundColor: t.card, borderColor: t.border }]}>
+          <Text style={{ color: t.muted, fontSize: 12, lineHeight: 17 }}>
+            Fires once, in{' '}
+            <Text style={{ color: t.accentInk, fontWeight: '700' }}>{formatCountdown(totalMinutes * 60)}</Text>
+            , then forgets itself.
+          </Text>
         </View>
       </Field>
     </FormShell>
@@ -336,6 +344,7 @@ export function SceneForm({ entities, busy, onSubmit, onCancel }: { entities: En
 }
 
 const styles = StyleSheet.create({
+  timerNote: { borderWidth: 1, borderRadius: 14, padding: 12, marginTop: 12 },
   form: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 14 },
   title: { fontSize: 17, fontWeight: '700' },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 16 },

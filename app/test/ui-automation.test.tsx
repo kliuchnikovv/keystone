@@ -33,6 +33,12 @@ async function openApp() {
 }
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
+/** Scroll a column of the duration wheel to a position. */
+const scrollWheel = (column: 'hours' | 'minutes', y: number) => {
+  const el = screen.getByTestId(`wheel-${column}`);
+  el.scrollTop = y;
+  fireEvent.scroll(el);
+};
 /** The automations tab folds: a section that is closed must be opened first. */
 const openSection = (title: string) => {
   const expand = screen.queryByLabelText(`Expand ${title}`);
@@ -202,7 +208,8 @@ describe('Timers', () => {
     click('Device');
     click('Choose lamp');
     click('Action On');
-    click('Preset 15 minutes');
+    // The wheel: scroll the minutes to 15.
+    scrollWheel('minutes', 102); // 15 min
     click('Start timer');
     const item = await screen.findByLabelText('timer On lamp');
     expect(within(item).getByText('in 15 min')).toBeTruthy();
@@ -211,14 +218,15 @@ describe('Timers', () => {
     await screen.findByText('No timers running.');
   });
 
-  it('a typed number of minutes is checked', async () => {
+  it('a timer with no time is refused', async () => {
     await openApp();
     await gotoAutomations();
     openSection('Timers');
     click('Add timer');
     click('Device');
     click('Choose lamp');
-    type('Minutes', 'soon');
+    // The wheel says zero minutes: there is nothing to wait for.
+    scrollWheel('minutes', 0);
     click('Start timer');
     expect(await screen.findByText('Enter how many minutes')).toBeTruthy();
     expect(hub.timersCount()).toBe(0);
@@ -613,7 +621,7 @@ describe('Automations that apply a scene', () => {
     click('Add timer');
     click('Target a scene');
     click('Scene night');
-    click('Preset 5 minutes');
+    scrollWheel('minutes', 34); // 5 min
     click('Start timer');
     await screen.findByLabelText('timer Scene night');
     expect(hub.timersCount()).toBe(1);
