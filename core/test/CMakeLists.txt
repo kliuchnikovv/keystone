@@ -38,7 +38,8 @@ add_executable(core_tests
   test_plugin_host_api.cpp
   test_plugin_capabilities.cpp
   test_plugin_manifest.cpp
-  test_plugin_config.cpp)
+  test_plugin_config.cpp
+  test_plugin_manager.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 
