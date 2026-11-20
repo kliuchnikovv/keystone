@@ -15,6 +15,14 @@ export default defineConfig({
       'expo-file-system': fileURLToPath(new URL('./test/stubs/expo-file-system.ts', import.meta.url)),
       // The camera needs a real device; the stub reads the code the test queued.
       'expo-camera': fileURLToPath(new URL('./test/stubs/expo-camera.tsx', import.meta.url)),
+      // The Geist packages require their .ttf files, which Node cannot parse.
+      '@expo-google-fonts/geist-mono/500Medium': fileURLToPath(new URL('./test/stubs/geist-mono.ts', import.meta.url)),
+      '@expo-google-fonts/geist/700Bold': fileURLToPath(new URL('./test/stubs/geist.ts', import.meta.url)),
+      '@expo-google-fonts/geist/600SemiBold': fileURLToPath(new URL('./test/stubs/geist.ts', import.meta.url)),
+      '@expo-google-fonts/geist/500Medium': fileURLToPath(new URL('./test/stubs/geist.ts', import.meta.url)),
+      '@expo-google-fonts/geist/400Regular': fileURLToPath(new URL('./test/stubs/geist.ts', import.meta.url)),
+      '@expo-google-fonts/geist-mono': fileURLToPath(new URL('./test/stubs/geist-mono.ts', import.meta.url)),
+      '@expo-google-fonts/geist': fileURLToPath(new URL('./test/stubs/geist.ts', import.meta.url)),
     },
   },
   test: { include: ['test/**/*.test.{ts,tsx}'], environment: 'node' },
