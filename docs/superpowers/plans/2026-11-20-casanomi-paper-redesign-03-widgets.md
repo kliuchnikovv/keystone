@@ -9,6 +9,11 @@
 **Tech Stack:** Expo 57 / RN 0.86 + react‑native‑web, TypeScript, vitest + @testing-library/react in jsdom.
 
 **Spec:** `docs/superpowers/specs/2026-11-20-casanomi-paper-redesign-design.md`
+**Status:** **сделано 20.11** — коммиты `900ad10`, `adbde22`.
+Из плана изменено: 1) сетка плиток (`model/grid.ts`) ушла — карточки идут
+списком, как в мокапе; 2) кольцо термостата нарисовано сегментами, а не SVG
+(иначе нужна была бы зависимость); 3) чтение яркости свайпом вынесено в
+`src/ui/Dimmer.tsx`, чистая функция `levelAfterDrag` покрыта тестом.
 **Mockups:** `casanomi-widgets-board.html` (lamp variants + device types), `casanomi-screens-board.html` (screen 1)
 
 ## Global Constraints
@@ -45,11 +50,11 @@
   - `RoomChips({ rooms, active, onPick })` — the mockup's row of room pills above the rooms; *All* plus each room.
   - `DeviceWidget` keeps its props; the **shape** prop goes away (cards are all one size now) — check every call site.
 
-- [ ] **Step 1: Write the failing test** — in `test/ui-devices.test.tsx`: a lit device's card carries the gold border; an unlit one carries the plain border; the room chips exist and *All* is there.
+- [x] **Step 1: Write the failing test** — in `test/ui-devices.test.tsx`: a lit device's card carries the gold border; an unlit one carries the plain border; the room chips exist and *All* is there.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement**:
+- [x] **Step 3: Implement**:
   - theme tokens (light): `glowBorder: 'rgba(207,159,51,0.55)'`, `glowShadow: '#cf9f33'`, `glowFill: '#fff8e8'`.
     (dark): `glowBorder: 'rgba(224,178,63,0.5)'`, `glowShadow: '#e0b23f'`, `glowFill: '#2f2617'`.
   - `DeviceWidget`: the card is `backgroundColor: on ? t.glowFill : t.card`, `borderColor: on ? t.glowBorder : t.border`, radius `t.cardRadius`, and — on native only — a gold shadow. RN's `boxShadow` is not universal; use `shadowColor`/`shadowOpacity`/`shadowRadius`/`elevation` guarded by `Platform.OS !== 'web'`, and on web a `borderColor` + a slightly stronger border (the mockup's glow is mostly a border + a warm tint).
@@ -57,9 +62,9 @@
   - `DevicesScreen`: a `RoomChips` row at the top (*All* + the rooms); the sections below are filtered by the active room; each room heading shows the room name and the summary line («2 on · 38 W») — `roomSummary`/`summaryText` already do this.
   - the device list becomes a **vertical stack of cards** (one per row), not the CSS grid — remove the `gridLayout` call and the `shape` prop.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/theme.tsx app/src/ui/DevicesScreen.tsx app/src/ui/DeviceWidget.tsx app/test
@@ -81,16 +86,16 @@ git commit -m "feat(ui): device cards with a gold glow; rooms as chips"
   - `widgetFor(entity): 'plug' | 'lamp' | 'colorLamp' | 'climate' | 'motion' | 'contact' | 'thermostat' | 'button' | 'presence' | 'generic'` — the chooser, exported and unit‑tested.
   - `batteryOf(entity): number | null`, `powerOf(entity): number | null` — the readings the widgets show.
 
-- [ ] **Step 1: Write the failing test** — `widgetFor` maps the device types right, and each widget renders its main thing:
+- [x] **Step 1: Write the failing test** — `widgetFor` maps the device types right, and each widget renders its main thing:
   - a plug shows its watts («38 W now»);
   - a motion sensor shows «Motion detected» / «No motion»;
   - a contact shows «Open» / «Closed»;
   - a thermostat shows the current temperature and the target;
   - a button shows when it was last pressed.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** the widgets per the mockup (`casanomi-widgets-board.html` → *Типы устройств и их плитки*):
+- [x] **Step 3: Implement** the widgets per the mockup (`casanomi-widgets-board.html` → *Типы устройств и их плитки*):
   - **plug** — icon tile + an `ON`/`OFF` badge + «38 W now» under the name;
   - **lamp** — icon tile + the brightness percentage on the right (the dimmer card comes in Task 3);
   - **colour lamp** — icon tile + a colour dot (the current `color_xy` as a circle);
@@ -103,9 +108,9 @@ git commit -m "feat(ui): device cards with a gold glow; rooms as chips"
 
   Keep the existing `model/devices.ts` helpers (`attrOf`, `formatValue`, `primarySwitch`, `widgetValue`) as the source of truth — do not re‑read attributes in the widgets.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/widgets.tsx app/src/ui/DeviceWidget.tsx app/test/ui-widgets.test.tsx
@@ -127,15 +132,15 @@ git commit -m "feat(ui): a widget per device type"
   - `Dimmer({ value, on, onChange, onToggle, onOpen })` — `value` 0–100.
   - the gesture split: a **tap** toggles; a **horizontal swipe** over 12 px sets the brightness; a **long press** opens the sheet. A movement of more than 12 px cancels the tap (so a swipe never toggles).
 
-- [ ] **Step 1: Write the failing test**:
+- [x] **Step 1: Write the failing test**:
   - the card's fill is `value` % wide;
   - a tap below the threshold calls `onToggle`;
   - a swipe of 30 px calls `onChange` with a new value and **not** `onToggle`;
   - a long press calls `onOpen`.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** `Dimmer`:
+- [x] **Step 3: Implement** `Dimmer`:
   - the fill: an absolutely positioned `View` with `width: `${value}%``, `backgroundColor: 'rgba(207,159,51,0.28)'` → a gradient from `0.28` to `0.12` (RN has no gradient without a library — use two stacked translucent views or a flat wash; **do not add a dependency**).
   - the edge: a 3 px gold line at the fill's right edge.
   - the grip: the percentage in gold ink on the right.
@@ -143,9 +148,9 @@ git commit -m "feat(ui): a widget per device type"
   - the long press: RN's `onLongPress` on the inner `Pressable`, with the drag cancelling it (the existing `usePressPhase` helper in `DeviceWidget.tsx` shows the pattern).
   - the colour dot (for colour lamps): a small circle in the corner; tapping it opens the colour sheet.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/Dimmer.tsx app/src/ui/widgets.tsx app/src/ui/DeviceWidget.tsx app/test/ui-dimmer.test.tsx
@@ -167,18 +172,18 @@ git commit -m "feat(ui): the lamp card is its own dimmer"
   - `ThermostatRing({ current, target, onTarget })` — a ring drawn with `react-native-svg` (already a dependency): the arc from the min to the current in gold, the rest in the track colour, the current in the middle and «target 24°» under it. Tapping the ring does not change anything; the `−`/`+` steps next to it do.
   - `ReadingsGrid({ readings })` — a 2×2 grid of small cells (label + value + unit), each cell coloured by its threshold: green under the threshold, amber over it. The thresholds live in `model/format.ts` or a new `model/thresholds.ts`.
 
-- [ ] **Step 1: Write the failing test** — the ring renders the current and the target; the readings grid renders four cells; a cell over its threshold carries the amber token.
+- [x] **Step 1: Write the failing test** — the ring renders the current and the target; the readings grid renders four cells; a cell over its threshold carries the amber token.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** — per the *непростые виджеты* board:
+- [x] **Step 3: Implement** — per the *непростые виджеты* board:
   - the ring: `react-native-svg`'s `Circle` with `strokeDasharray` for the gold arc; the inner circle is the card colour.
   - the grid: `flexDirection: 'row'`, `flexWrap: 'wrap'`, each cell `flexBasis: '48%'`.
   - the thresholds: temperature (normal 18–26 °C), humidity (30–70 %), CO₂ (0–1200 ppm), PM2.5 (0–35 µg/m³) — a new `model/thresholds.ts` with `toneFor(name, value): 'good' | 'warn' | 'bad'`.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/ThermostatRing.tsx app/src/ui/ReadingsGrid.tsx app/src/ui/widgets.tsx app/src/model/thresholds.ts app/test
@@ -201,15 +206,15 @@ git commit -m "feat(ui): thermostat ring and a readings grid"
   - a row of colour presets (the mockup's six circles);
   - a **menu** (rows with an icon): *Rename*, *Move to another room*, *Blink (find it)*, *Remove device* (the last one in red).
 
-- [ ] **Step 1: Write the failing test** — the sheet shows the brightness slider for a lamp, the rename/move/blink/remove rows, and *Remove device* asks first.
+- [x] **Step 1: Write the failing test** — the sheet shows the brightness slider for a lamp, the rename/move/blink/remove rows, and *Remove device* asks first.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** — reuse the existing handlers (rename, move, blink, remove are already in `DeviceSheet.tsx`); restyle them into the menu rows. Do not change the protocol calls.
+- [x] **Step 3: Implement** — reuse the existing handlers (rename, move, blink, remove are already in `DeviceSheet.tsx`); restyle them into the menu rows. Do not change the protocol calls.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/DeviceSheet.tsx app/test/ui-devices.test.tsx
