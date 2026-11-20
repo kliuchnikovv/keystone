@@ -8,6 +8,7 @@ import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
 import { defaultStore } from '../storage';
 import { Banner, type BannerAction } from './Banner';
+import { AddMenu } from './AddMenu';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
 import { DisplayScreen } from './DisplayScreen';
@@ -93,6 +94,8 @@ export function HomeBody({
   const [sub, setSub] = useState<SubScreen>('none');
   // "Find devices" is a screen of its own: it covers the tabs while it is open.
   const [finding, setFinding] = useState(false);
+  // The «+» menu: what can be added.
+  const [adding, setAdding] = useState(false);
   // The app's own preferences: the units it speaks and what Home shows.
   const prefsStore = useMemo(() => createPrefsStore(defaultStore), []);
   const [prefs, setPrefs] = useState<Prefs>({ temperature: 'C', showScenes: true, groupByRoom: true });
@@ -192,8 +195,15 @@ export function HomeBody({
         </Pressable>
       )}
       {!finding && sub === 'none' && (
-        <Dock tab={tab} onTab={setTab} onAdd={() => setFinding(true)} />
+        <Dock tab={tab} onTab={setTab} onAdd={() => setAdding(true)} />
       )}
+      <AddMenu
+        visible={adding}
+        onClose={() => setAdding(false)}
+        onDevice={() => setFinding(true)}
+        onScene={() => setTab('automations')}
+        onAutomation={() => setTab('automations')}
+      />
     </SafeAreaView>
   );
 }
