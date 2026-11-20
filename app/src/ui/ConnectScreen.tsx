@@ -1,7 +1,7 @@
 // The way in: find the hub, prove it is yours, remember it.
 // Same language as the room mock — panes of glass, warm accents, quiet labels.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import {
+import { useEffect, useRef, useState, type ElementRef, type ReactNode } from 'react';
+import { 
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -11,7 +11,7 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
+ } from './kit';
 import type { Discovery } from '../hooks/useDiscovery';
 import { hubUrl } from '../native/discovery';
 import { normalizeFingerprint } from '../protocol/fingerprint';
@@ -85,7 +85,7 @@ export function ConnectScreen({
   const [touched, setTouched] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [mode, setMode] = useState<Mode>(() => initialMode(initial?.url ?? ''));
-  const tokenRef = useRef<TextInput>(null);
+  const tokenRef = useRef<ElementRef<typeof TextInput>>(null);
 
   // Cloud mode fields
   const [cloudServer, setCloudServer] = useState('');
@@ -396,10 +396,10 @@ export function ConnectScreen({
           accessibilityState={{ disabled: !ready || connecting }}
           disabled={!ready || connecting}
           onPress={submit}
-          style={[styles.button, { backgroundColor: t.accent, opacity: ready && !connecting ? 1 : 0.5 }]}
+          style={[styles.button, { backgroundColor: t.primary, opacity: ready && !connecting ? 1 : 0.5 }]}
         >
-          {connecting ? <ActivityIndicator size="small" color={t.onAccent} /> : null}
-          <Text style={[styles.buttonText, { color: t.onAccent }]}>{connecting ? 'Connecting…' : 'Connect'}</Text>
+          {connecting ? <ActivityIndicator size="small" color={t.onPrimary} /> : null}
+          <Text style={[styles.buttonText, { color: t.onPrimary }]}>{connecting ? 'Connecting…' : 'Connect'}</Text>
         </Pressable>
 
         {onSetup && (

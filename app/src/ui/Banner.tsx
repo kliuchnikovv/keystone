@@ -1,4 +1,4 @@
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from './kit';
 import { agoText } from '../model/devices';
 import type { HomeState } from '../protocol/store';
 import { isRelayUrl } from '../settings';

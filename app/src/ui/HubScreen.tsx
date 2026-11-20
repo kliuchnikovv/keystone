@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { useGeofence, presenceRequest } from '../hooks/useGeofence';
 import type { HubConnection } from '../hooks/useHub';
@@ -12,7 +12,7 @@ import { ScreenHeader } from './ScreenHeader';
 import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
 import { PresenceCard } from './PresenceCard';
 import { WifiCard } from './WifiCard';
-import { PALETTES, THEMES, radius, useTheme, type PaletteId } from './theme';
+import { MODES, THEMES, radius, useTheme, type ThemeMode } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
 function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -135,33 +135,35 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   );
 }
 
-/** The app's own look: the palette is a setting of the phone, not of the hub. */
-function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?(id: PaletteId): void }) {
+/** The app's own look: the theme mode is a setting of the phone, not of the hub. */
+function AppearanceCard({ mode, onMode }: { mode: ThemeMode; onMode?(mode: ThemeMode): void }) {
   const t = useTheme();
   return (
     <View accessibilityLabel="Appearance" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
       <Text style={[styles.h2, { color: t.text }]}>Appearance</Text>
-      <Text style={{ color: t.muted, fontSize: 13 }}>The palette the app wears. Ember is the dark glass look, Paper the always-light one.</Text>
-      <View style={styles.paletteRow}>
-        {PALETTES.map((p) => {
-          const on = p.id === palette;
-          const preview = THEMES[p.id];
+      <Text style={{ color: t.muted, fontSize: 13 }}>The theme the app wears. System follows the phone.</Text>
+      <View style={styles.modeRow}>
+        {MODES.map((m) => {
+          const on = m.id === mode;
+          // System shows both moods; Light and Dark show their own.
+          const previews = m.id === 'system' ? [THEMES.light, THEMES.dark] : [m.id === 'light' ? THEMES.light : THEMES.dark];
           return (
             <Pressable
-              key={p.id}
+              key={m.id}
               accessibilityRole="button"
-              accessibilityLabel={`Palette ${p.name}`}
+              accessibilityLabel={`Theme ${m.name}`}
               accessibilityState={{ selected: on }}
-              onPress={() => onPalette?.(p.id)}
-              style={[styles.palette, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
+              onPress={() => onMode?.(m.id)}
+              style={[styles.mode, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
             >
               <View style={styles.swatches}>
-                <View style={[styles.swatch, { backgroundColor: preview.bg, borderColor: preview.border }]} />
-                <View style={[styles.swatch, { backgroundColor: preview.card, borderColor: preview.border }]} />
-                <View style={[styles.swatch, { backgroundColor: preview.accent, borderColor: preview.accent }]} />
+                {previews.map((preview) => (
+                  <View key={preview.bg} style={[styles.swatch, { backgroundColor: preview.bg, borderColor: preview.border }]} />
+                ))}
+                <View style={[styles.swatch, { backgroundColor: t.accent, borderColor: t.accent }]} />
               </View>
-              <Text style={{ color: on ? t.accent : t.text, fontSize: 14, fontWeight: '700' }}>{p.name}</Text>
-              <Text style={{ color: t.muted, fontSize: 11 }}>{p.hint}</Text>
+              <Text style={{ color: on ? t.accentInk : t.text, fontSize: 14, fontWeight: '700' }}>{m.name}</Text>
+              <Text style={{ color: t.muted, fontSize: 11 }}>{m.hint}</Text>
             </Pressable>
           );
         })}
@@ -170,7 +172,7 @@ function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?
   );
 }
 
-export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, palette, onPalette }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; palette?: PaletteId; onPalette?(id: PaletteId): void }) {
+export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, mode, onMode }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; mode?: ThemeMode; onMode?(mode: ThemeMode): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
@@ -243,7 +245,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
       <FirmwareCard home={home} client={client} commands={commands} />
       <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} {...(onUseRelay ? { onUseRelay } : {})} />
       <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
-      <AppearanceCard palette={palette ?? 'sandstone'} onPalette={onPalette} />
+      <AppearanceCard mode={mode ?? 'system'} onMode={onMode} />
 
       <Pressable accessibilityRole="button" accessibilityLabel="Change hub" onPress={onChangeHub} style={[styles.change, { borderColor: t.border }]}>
         <Text style={{ color: t.accent, fontWeight: '600' }}>Change hub or token</Text>
@@ -268,8 +270,8 @@ const styles = StyleSheet.create({
   codeBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
              borderWidth: 1, borderRadius: radius.field, paddingHorizontal: 14, paddingVertical: 10, marginTop: 4 },
   code: { fontSize: 22, fontWeight: '700', letterSpacing: 2, fontVariant: ['tabular-nums'] },
-  paletteRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  palette: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
+  modeRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  mode: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
   swatches: { flexDirection: 'row', gap: 4, marginBottom: 6 },
   swatch: { width: 14, height: 14, borderRadius: 7, borderWidth: 1 },
 });

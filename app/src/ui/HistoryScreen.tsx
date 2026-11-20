@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { useHistory } from '../hooks/useHistory';
 import { dayOf, describeEvent, entityName, formatEventTime, type Recorded } from '../model/history';
 import type { HubConnection } from '../hooks/useHub';

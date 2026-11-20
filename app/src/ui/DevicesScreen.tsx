@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { Platform } from 'react-native';
 import { canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
 import { deviceShape, gridLayout } from '../model/grid';

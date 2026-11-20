@@ -2,7 +2,7 @@
 // to it. These act on the hub itself (reboot, reset, forget the network), so they are
 // kept apart from the devices.
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Share, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import type { HubConnection } from '../hooks/useHub';
 import type { HomeState } from '../protocol/store';

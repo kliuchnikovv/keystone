@@ -1,6 +1,6 @@
-// The palette is a setting of the phone, not of the hub: it lives in the same
-// key-value store as the hub address (secure store on a phone, localStorage in
-// a browser), under its own key.
+// The theme mode is a setting of the phone, not of the hub: it lives in the
+// same key-value store as the hub address (secure store on a phone,
+// localStorage in a browser), under its own key.
 import type { KeyValueStore } from './settings';
 import type { ThemeMode } from './ui/theme';
 

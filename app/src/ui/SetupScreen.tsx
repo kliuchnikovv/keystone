@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { useDiscovery } from '../hooks/useDiscovery';
 import { describeSetupFailure, generateToken, normalizeSetupCode, setupCodeProblem } from '../model/setup';
 import { signalText, wifiRequest } from '../model/automation';

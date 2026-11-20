@@ -5,7 +5,7 @@
 // device without Bluetooth never shows up here. The hub's own network says what can
 // join the home.
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { useBleScan } from '../hooks/useBleScan';
 import { useJoinWindow } from '../hooks/useJoinWindow';

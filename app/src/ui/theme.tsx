@@ -52,8 +52,9 @@ export interface Theme {
   secondaryBg: string;
   /** The line around the quiet button. */
   secondaryBorder: string;
-  /** A cool accent — the one place the theme is allowed a second hue. */
+  /** The cool accent — the one place the theme is allowed a second hue. */
   cool: string;
+  /** The ink on a gold surface: a chip, a tile, an icon. Dark, so it reads. */
   onAccent: string;
   /** The main action: near-black ink, not the gold accent. */
   primary: string;
@@ -94,7 +95,7 @@ const paperLight: Theme = {
   secondaryBg: 'transparent',
   secondaryBorder: '#e8e1d0',
   cool: '#2f6fb8',
-  onAccent: '#fffdf8',
+  onAccent: '#1a1813',
   primary: '#1a1813',
   onPrimary: '#fdf7ea',
   good: '#2f7d4f',
@@ -126,7 +127,7 @@ const paperDark: Theme = {
   secondaryBg: 'rgba(242,236,224,0.08)',
   secondaryBorder: 'rgba(242,236,224,0.12)',
   cool: '#7fb2e8',
-  onAccent: '#1c1813',
+  onAccent: '#241b03',
   primary: '#f7f1e4',
   onPrimary: '#1a1813',
   good: '#5fbf85',

@@ -1,7 +1,7 @@
 // Bottom sheets and modal dialogs: the app's way of asking for something that does not
 // fit on the screen — a colour, a confirmation, a form.
 import { type ReactNode } from 'react';
-import {
+import { 
   Modal,
   Platform,
   Pressable,
@@ -10,7 +10,7 @@ import {
   Text,
   View,
   useWindowDimensions,
-} from 'react-native';
+ } from './kit';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useTheme } from './theme';
 
@@ -109,9 +109,9 @@ export function ConfirmDialog({ visible, title, body, confirmLabel, danger, onCo
               accessibilityRole="button"
               accessibilityLabel={confirmLabel}
               onPress={onConfirm}
-              style={[styles.dialogButton, danger ? { borderColor: t.bad } : { backgroundColor: t.accent, borderColor: t.accent }]}
+              style={[styles.dialogButton, danger ? { borderColor: t.bad } : { backgroundColor: t.primary, borderColor: t.primary }]}
             >
-              <Text style={{ color: danger ? t.bad : t.onAccent, fontWeight: '600', fontSize: 15 }}>{confirmLabel}</Text>
+              <Text style={{ color: danger ? t.bad : t.onPrimary, fontWeight: '600', fontSize: 15 }}>{confirmLabel}</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"

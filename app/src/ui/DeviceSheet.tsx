@@ -2,7 +2,7 @@
 // what it measures, and the three things you do to a device you rarely do —
 // rename it, make it blink, take it off the network.
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from './kit';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { MAX_NAME_CHARS, nameProblem } from '../model/names';
 import { allRooms, roomOf, stripRoomPrefix } from '../model/rooms';

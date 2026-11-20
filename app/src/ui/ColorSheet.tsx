@@ -2,7 +2,7 @@
 // The protocol speaks CIE x/y, so the picker works in HSV and converts on the way out.
 // Brightness is not here: it is the lamp's own slider (a chromaticity carries none).
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import { hsvToCss, hsvToXy, xyToHsv, type Hsv } from '../model/color';
 import { useTheme } from './theme';
 import { Sheet } from './Sheet';
@@ -69,8 +69,8 @@ export function ColorSheet({ visible, title, value, onCancel, onApply }: ColorSh
         <Pressable accessibilityRole="button" accessibilityLabel="Cancel the colour" onPress={close} style={[styles.button, { borderColor: t.border }]}>
           <Text style={{ color: t.text, fontWeight: '600', fontSize: 15 }}>Cancel</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Apply the colour" onPress={apply} style={[styles.button, { backgroundColor: t.accent, borderColor: t.accent }]}>
-          <Text style={{ color: t.onAccent, fontWeight: '600', fontSize: 15 }}>Apply</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Apply the colour" onPress={apply} style={[styles.button, { backgroundColor: t.primary, borderColor: t.primary }]}>
+          <Text style={{ color: t.onPrimary, fontWeight: '600', fontSize: 15 }}>Apply</Text>
         </Pressable>
       </View>
     </Sheet>

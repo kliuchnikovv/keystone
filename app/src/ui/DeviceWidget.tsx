@@ -6,7 +6,7 @@
 // While the finger is down the button says so: it dims at once, and if the finger
 // stays, it lights up — that is the app counting the long press.
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import { formatValue } from '../model/format';
 import { attrOf, deviceIcon, deviceTitle, primarySwitch, readingAttrs, widgetValue, type DeviceStatus } from '../model/devices';
 import { stripRoomPrefix } from '../model/rooms';

@@ -1,6 +1,6 @@
 // Small building blocks shared by the forms.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from './kit';
 import { radius, space, useTheme } from './theme';
 
 /** Button looks from the design spec: .btn-primary, .btn-secondary, .btn-quiet, .btn-danger. */

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from './kit';
 import { Platform } from 'react-native';
 import { describeRule, describeScene, describeSchedule, describeTimer } from '../model/automation';
 import type { Commands } from '../hooks/useCommands';

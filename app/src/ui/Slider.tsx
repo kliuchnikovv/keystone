@@ -1,7 +1,7 @@
 // A slider that works everywhere: no native module, no dependency. The track measures
 // itself, a drag maps the touch to a value, and screen readers get the value.
 import { useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from './kit';
 import { useTheme } from './theme';
 
 /** Where a touch at `x` pixels on a track of `width` pixels lands, snapped to `step`. */

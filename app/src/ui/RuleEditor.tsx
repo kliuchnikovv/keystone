@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import {
   COMPARISONS,
   MAX_EXTRA_CONDITIONS,

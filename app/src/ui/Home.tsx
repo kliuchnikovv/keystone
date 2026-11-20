@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from './kit';
 import { useCommands } from '../hooks/useCommands';
 import { useHome, useHubClient, type HubConnection } from '../hooks/useHub';
 import { useStateCache } from '../hooks/useStateCache';
@@ -12,7 +12,7 @@ import { FindDevicesScreen } from './FindDevicesScreen';
 import { Glyph, type GlyphName } from './Glyph';
 import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
-import { useTheme, type PaletteId } from './theme';
+import { useTheme, type ThemeMode } from './theme';
 
 type Tab = 'devices' | 'automations' | 'history' | 'hub';
 
@@ -30,9 +30,9 @@ export interface HomeProps {
   onTokenChange?(token: string): Promise<void>;
   /** The hub has a relay: connect through it (the address changes). */
   onUseRelay?(url: string): void;
-  /** The palette the app wears. */
-  palette?: PaletteId;
-  onPalette?(id: PaletteId): void;
+  /** The theme mode the app wears. */
+  mode?: ThemeMode;
+  onMode?(mode: ThemeMode): void;
   /** For tests: socket factory, timeouts. */
   clientOptions?: Partial<HubClientOptions>;
   /** A connection made elsewhere (the Connect screen hands its client over). */
@@ -40,7 +40,7 @@ export interface HomeProps {
 }
 
 /** The signed-in app: connection, tabs, and the toast. */
-export function Home({ settings, onChangeHub, onTokenChange, onUseRelay, palette, onPalette, clientOptions, client: given }: HomeProps) {
+export function Home({ settings, onChangeHub, onTokenChange, onUseRelay, mode, onMode, clientOptions, client: given }: HomeProps) {
   const owned = useHubClient(settings, clientOptions, given === undefined);
   const client = given ?? owned;
   return (
@@ -48,8 +48,8 @@ export function Home({ settings, onChangeHub, onTokenChange, onUseRelay, palette
       settings={settings}
       client={client}
       onChangeHub={onChangeHub}
-      palette={palette}
-      onPalette={onPalette}
+      mode={mode}
+      onMode={onMode}
       {...(onTokenChange ? { onTokenChange } : {})}
       {...(onUseRelay ? { onUseRelay } : {})}
     />
@@ -63,16 +63,16 @@ export function HomeBody({
   onChangeHub,
   onTokenChange,
   onUseRelay,
-  palette,
-  onPalette,
+  mode,
+  onMode,
 }: {
   settings: Settings;
   client: HubConnection;
   onChangeHub(): void;
   onTokenChange?(token: string): Promise<void>;
   onUseRelay?(url: string): void;
-  palette?: PaletteId;
-  onPalette?(id: PaletteId): void;
+  mode?: ThemeMode;
+  onMode?(mode: ThemeMode): void;
 }) {
   const t = useTheme();
   const ios = Platform.OS === 'ios';
@@ -122,8 +122,8 @@ export function HomeBody({
             onChangeHub={onChangeHub}
             commands={commands}
             client={client}
-            palette={palette}
-            onPalette={onPalette}
+            mode={mode}
+            onMode={onMode}
             {...(onTokenChange ? { onTokenChange } : {})}
             {...(onUseRelay ? { onUseRelay } : {})}
           />

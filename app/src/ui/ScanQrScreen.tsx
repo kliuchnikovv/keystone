@@ -10,7 +10,7 @@
 // comes from the device over Bluetooth. The hub's side of that is not written yet.
 import { useCallback, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import { matterFromQr, type MatterIdentity } from '../model/matter';
 import { Button, Note } from './controls';
 import { Glyph } from './Glyph';

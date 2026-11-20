@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
 import { Home } from '../src/ui/Home';
+import type { ThemeMode } from '../src/ui/theme';
 import { MockHub } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
@@ -21,7 +22,7 @@ afterEach(async () => {
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
-async function openHub(props: { onUseRelay?(url: string): void } = {}) {
+async function openHub(props: { onUseRelay?(url: string): void; mode?: ThemeMode; onMode?(m: ThemeMode): void } = {}) {
   render(
     <Home
       settings={{ url: hub.url, token: hub.token }}
@@ -141,6 +142,22 @@ describe('the hub tab', () => {
     expect(await screen.findByText('Forget the Wi-Fi network?')).toBeTruthy();
     click('Forget Wi-Fi');
     await waitFor(() => expect(hub.wifiForgetCalls).toBe(1));
+  });
+});
+
+describe('appearance', () => {
+  it('offers System, Light and Dark, and says which one was picked', async () => {
+    const chosen: ThemeMode[] = [];
+    await openHub({ mode: 'system', onMode: (m) => chosen.push(m) });
+    expect(screen.getByLabelText('Theme System')).toBeTruthy();
+    expect(screen.getByLabelText('Theme Light')).toBeTruthy();
+    expect(screen.getByLabelText('Theme Dark')).toBeTruthy();
+    // The current choice is the marked one: it wears the gold wash.
+    const marked = screen.getByLabelText('Theme System').getAttribute('style') ?? '';
+    expect(marked).toContain('rgba(207, 159, 51, 0.16)');
+    expect(screen.getByLabelText('Theme Dark').getAttribute('style') ?? '').not.toContain('rgba(207, 159, 51, 0.16)');
+    click('Theme Dark');
+    expect(chosen).toEqual(['dark']);
   });
 });
 

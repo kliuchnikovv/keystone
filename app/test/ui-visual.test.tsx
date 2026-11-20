@@ -59,7 +59,7 @@ describe('Device button', () => {
     // The button says that it is holding the press: the icon chip fills with the accent.
     const during = chip.getAttribute('style') ?? '';
     expect(during).not.toBe(before);
-    expect(during).toContain('rgb(196, 81, 42)');
+    expect(during).toContain('rgb(207, 159, 51)'); // the honey gold
     fireEvent.mouseUp(el);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
