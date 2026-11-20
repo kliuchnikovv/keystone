@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { Platform } from 'react-native';
 import { canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
-import { deviceShape, gridLayout } from '../model/grid';
 import { groupByRoom, roomChoices, roomCount } from '../model/rooms';
 import { useEntityActivity } from '../hooks/useEntityActivity';
 import { useNow } from '../hooks/useNow';
@@ -17,9 +16,25 @@ import { ScenesBar } from './ScenesBar';
 import { ConfirmDialog } from './Sheet';
 import { radius, useTheme } from './theme';
 
-export function DevicesScreen({ home, commands, onFindDevices, showScenes = true }: { home: HomeState; commands: Commands; onFindDevices(): void; showScenes?: boolean }) {
+export function DevicesScreen({
+  home,
+  commands,
+  onFindDevices,
+  showScenes = true,
+  temperatureUnit = 'C',
+}: {
+  home: HomeState;
+  commands: Commands;
+  onFindDevices(): void;
+  showScenes?: boolean;
+  temperatureUnit?: 'C' | 'F';
+}) {
   const t = useTheme();
-  const rooms = groupByRoom(sortedDevices(home.entities));
+  const allRooms = groupByRoom(sortedDevices(home.entities));
+  // The rooms at the top as chips; null means all of them.
+  const [activeRoom, setActiveRoom] = useState<string | null>(null);
+  const rooms = activeRoom === null ? allRooms : allRooms.filter((r) => r.room === activeRoom);
+  const roomNames = allRooms.map((r) => r.room).filter((r): r is string => r !== null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [removingId, setRemovingId] = useState<number | null>(null);
   const now = useNow(1000);
@@ -35,6 +50,10 @@ export function DevicesScreen({ home, commands, onFindDevices, showScenes = true
         <Greeting home={home} />
         {home.status === 'ready' && showScenes ? <ScenesBar home={home} commands={commands} /> : null}
 
+        {roomNames.length > 0 && (
+          <RoomChips rooms={roomNames} active={activeRoom} onPick={setActiveRoom} />
+        )}
+
         {rooms.map((room) => {
           const summary = roomSummary(room.devices);
           // (climate tiles removed: sensor widgets now carry the readings)
@@ -42,7 +61,7 @@ export function DevicesScreen({ home, commands, onFindDevices, showScenes = true
             <View key={room.room ?? ''} style={styles.room}>
               <View style={styles.sectionHead}>
                 <Glyph name="home" size={14} color={t.muted} />
-                <Text style={[styles.sectionTitle, { color: t.muted }]} numberOfLines={1}>
+                <Text accessibilityLabel={`Room ${room.room ?? 'Unassigned'}`} style={[styles.sectionTitle, { color: t.muted }]} numberOfLines={1}>
                   {room.room ?? 'Unassigned'}
                 </Text>
                 <Text style={[styles.sectionCount, { color: t.muted }]}>{room.devices.length}</Text>
@@ -56,7 +75,7 @@ export function DevicesScreen({ home, commands, onFindDevices, showScenes = true
 
               {/* sensor widgets now carry the readings; climate tiles removed as duplicate */}
 
-              <DeviceGrid
+              <DeviceList
                 devices={room.devices}
                 statusOf={(e) => deviceStatus(home, e)}
                 reachableOf={(e) => isReachable(home, e)}
@@ -67,6 +86,7 @@ export function DevicesScreen({ home, commands, onFindDevices, showScenes = true
                 onOpen={(e) => setOpenId(e.id)}
                 onUnreachable={() => commands.notify('Device unreachable')}
                 updatedOf={(e) => agoText(activity.updatedAt.get(e.id), now)}
+                temperatureUnit={temperatureUnit}
               />
             </View>
           );
@@ -165,10 +185,56 @@ export function DevicesScreen({ home, commands, onFindDevices, showScenes = true
   );
 }
 
-/** The room's devices on a two-column grid: wide buttons, squares and tall ones.
- * The grid is measured first, then the buttons are placed in it — that is how a
- * button can be wider than its neighbour. */
-function DeviceGrid({ devices, statusOf, reachableOf, onToggle, onOpen, onUnreachable, updatedOf }: {
+/** The rooms at the top, as chips: *All* and every room that has a device. */
+export function RoomChips({
+  rooms,
+  active,
+  onPick,
+}: {
+  rooms: string[];
+  active: string | null;
+  onPick(room: string | null): void;
+}) {
+  const t = useTheme();
+  const chip = (label: string, room: string | null, key: string) => {
+    const on = active === room;
+    return (
+      <Pressable
+        key={key}
+        accessibilityRole="button"
+        accessibilityLabel={room === null ? 'All rooms' : room}
+        accessibilityState={{ selected: on }}
+        onPress={() => onPick(room)}
+        style={[
+          styles.roomChip,
+          { backgroundColor: on ? t.primary : t.card, borderColor: on ? t.primary : t.border },
+        ]}
+      >
+        <Text style={{ color: on ? t.onPrimary : t.muted, fontSize: 12.5, fontWeight: '600' }}>{label}</Text>
+      </Pressable>
+    );
+  };
+  return (
+    <View style={styles.roomChips} accessibilityLabel="Rooms">
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.roomChipsInner}>
+        {chip('All', null, '__all')}
+        {rooms.map((r) => chip(r, r, r))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** The room's devices, one card each. */
+function DeviceList({
+  devices,
+  statusOf,
+  reachableOf,
+  onToggle,
+  onOpen,
+  onUnreachable,
+  updatedOf,
+  temperatureUnit,
+}: {
   devices: Entity[];
   statusOf(e: Entity): DeviceStatus;
   reachableOf(e: Entity): boolean;
@@ -176,31 +242,23 @@ function DeviceGrid({ devices, statusOf, reachableOf, onToggle, onOpen, onUnreac
   onOpen(e: Entity): void;
   onUnreachable(): void;
   updatedOf(e: Entity): string | null;
+  temperatureUnit: 'C' | 'F';
 }) {
-  const [width, setWidth] = useState(0);
-  const items = devices.map((e) => ({ id: e.id, shape: deviceShape(e) }));
-  const { boxes, height } = gridLayout(items, width);
-  const byId = new Map(devices.map((e) => [e.id, e]));
   return (
-    <View style={[styles.grid, { height }]} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-      {boxes.map((b) => {
-        const entity = byId.get(b.id);
-        if (!entity) return null;
-        return (
-          <View key={b.id} style={[styles.cell, { left: b.x, top: b.y, width: b.width, height: b.height }]}>
-            <DeviceWidget
-              entity={entity}
-              shape={b.shape}
-              status={statusOf(entity)}
-              reachable={reachableOf(entity)}
-              onToggle={() => onToggle(entity)}
-              onOpen={() => onOpen(entity)}
-              onUnreachable={onUnreachable}
-              updatedText={updatedOf(entity)}
-            />
-          </View>
-        );
-      })}
+    <View style={styles.cards}>
+      {devices.map((entity) => (
+        <DeviceWidget
+          key={entity.id}
+          entity={entity}
+          status={statusOf(entity)}
+          reachable={reachableOf(entity)}
+          onToggle={() => onToggle(entity)}
+          onOpen={() => onOpen(entity)}
+          onUnreachable={onUnreachable}
+          updatedText={updatedOf(entity)}
+          temperatureUnit={temperatureUnit}
+        />
+      ))}
     </View>
   );
 }
@@ -249,6 +307,10 @@ function greeting(home: HomeState): string {
 }
 
 const styles = StyleSheet.create({
+  cards: { gap: 8, marginTop: 10 },
+  roomChips: { marginBottom: 4 },
+  roomChipsInner: { gap: 8, paddingRight: 8 },
+  roomChip: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 999, borderWidth: 1 },
   list: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 110 : 98, flexGrow: 1 },
   greeting: { marginBottom: 18 },
   greetLabel: { fontSize: 13, fontWeight: '500' },
@@ -267,8 +329,6 @@ const styles = StyleSheet.create({
   tile: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 11 },
   tileValue: { fontSize: 20, fontWeight: '700', letterSpacing: -0.5 },
   tileLabel: { fontSize: 10, fontWeight: '500', marginTop: 4 },
-  grid: { marginTop: 10, position: 'relative' },
-  cell: { position: 'absolute' },
   // Without the hub the values on screen are the last known ones: dim them a little,
   // but keep them readable — they are what the user came to see.
   offline: { opacity: 0.75 },

@@ -52,19 +52,24 @@ describe('Device button', () => {
     const el = card('plug1');
     const chip = screen.getByLabelText('plug1 is on');
     const before = chip.getAttribute('style') ?? '';
+    // The button itself says that it is holding the press: it shrinks a touch.
+    const button = () => screen.getByLabelText('Device plug1').getAttribute('class') ?? '';
+    const buttonBefore = button();
     fireEvent.mouseDown(el);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 320));
     });
-    // The button says that it is holding the press: the icon chip fills with the accent.
-    const during = chip.getAttribute('style') ?? '';
-    expect(during).not.toBe(before);
-    expect(during).toContain('rgb(207, 159, 51)'); // the honey gold
+    const during = button();
+    expect(during).not.toBe(buttonBefore);
+    // The held button is scaled down a touch.
+    expect(during).not.toBe(buttonBefore);
     fireEvent.mouseUp(el);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(chip.getAttribute('style') ?? '').toBe(before);
+    expect(button()).toBe(buttonBefore);
+    // The icon tile keeps its gold fill while the device is on.
+    expect(before).toContain('rgb(207, 159, 51)');
   });
 
   it('has a sheet with Rename, Blink and Remove device', async () => {

@@ -92,8 +92,8 @@ describe('Rooms', () => {
     await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0101)!.room).toBe('Kitchen'));
     // The device is renamed nowhere: a room is not a name.
     expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBe('lamp');
-    await waitFor(() => expect(screen.getByText('Kitchen')).toBeTruthy());
-    expect(screen.getByText('Unassigned')).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText('Room Kitchen')).toBeTruthy());
+    expect(screen.getByLabelText('Room Unassigned')).toBeTruthy();
   });
 
   it('takes a device out of its room', async () => {

@@ -47,10 +47,10 @@ describe('Devices', () => {
     renderHome();
     await screen.findByText('plug1');
     expect(state('plug1')).toBe('on');
-    expect(within(card('plug1')).getByText('3 W')).toBeTruthy();
+    expect(within(card('plug1')).getByText('3 W now')).toBeTruthy();
     expect(state('lamp')).toBe('off');
     expect(screen.getByLabelText('Device Motion sensor 0x0102')).toBeTruthy();
-    expect(within(card('Motion sensor 0x0102')).getByText('Clear')).toBeTruthy();
+    expect(within(card('Motion sensor 0x0102')).getByText('Nobody')).toBeTruthy();
     // The rest of the device lives in its sheet.
     await longPress(card('plug1'));
     expect(await screen.findByText('1.28 kWh')).toBeTruthy();
@@ -69,9 +69,9 @@ describe('Devices', () => {
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.setValue(0x0100, 0x13, 42));
-    await within(card('plug1')).findByText('42 W');
+    await within(card('plug1')).findByText('42 W now');
     act(() => hub.setValue(0x0102, 0x50, true));
-    await within(card('Motion sensor 0x0102')).findByText('Occupied');
+    await within(card('Motion sensor 0x0102')).findByText('Someone');
   });
 
   it('brightness is a slider in percent, dark while the lamp is off', async () => {

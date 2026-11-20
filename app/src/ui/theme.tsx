@@ -73,6 +73,12 @@ export interface Theme {
   cardRadius: number;
   /** The bottom bar that holds the tabs. */
   tabBar: string;
+  /** The gold hairline of a lit card. */
+  glowBorder: string;
+  /** The warm gold wash over a lit card. */
+  glowFill: string;
+  /** The gold the glow casts (a shadow on native, a tint on the web). */
+  glowShadow: string;
 }
 
 // Paper: a warm cream page, cards a touch warmer than white, honey gold for
@@ -106,6 +112,9 @@ const paperLight: Theme = {
   bad: '#b53b3b',
   cardRadius: 22,
   tabBar: 'rgba(255,253,248,0.97)',
+  glowBorder: 'rgba(207,159,51,0.55)',
+  glowFill: '#fff8e8',
+  glowShadow: '#cf9f33',
 };
 
 // Night: the same language, warm instead of cool — a dark brown ground, cards
@@ -138,6 +147,9 @@ const paperDark: Theme = {
   bad: '#e97a6a',
   cardRadius: 22,
   tabBar: 'rgba(28,24,19,0.97)',
+  glowBorder: 'rgba(224,178,63,0.5)',
+  glowFill: '#2f2617',
+  glowShadow: '#e0b23f',
 };
 
 const ThemeContext = createContext<Theme>(paperLight);
