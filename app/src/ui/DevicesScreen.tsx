@@ -87,6 +87,12 @@ export function DevicesScreen({
                 onUnreachable={() => commands.notify('Device unreachable')}
                 updatedOf={(e) => agoText(activity.updatedAt.get(e.id), now)}
                 temperatureUnit={temperatureUnit}
+                onBrightness={(e, percent) => {
+                  const bright = e.attrs.find((a) => a.name === 'brightness');
+                  if (!bright) return;
+                  // 0 % would switch the lamp off in Zigbee; the lowest level is 1.
+                  commands.send(e.id, bright.id, Math.max(1, Math.round((percent / 100) * 254)));
+                }}
               />
             </View>
           );
@@ -234,6 +240,7 @@ function DeviceList({
   onUnreachable,
   updatedOf,
   temperatureUnit,
+  onBrightness,
 }: {
   devices: Entity[];
   statusOf(e: Entity): DeviceStatus;
@@ -243,6 +250,7 @@ function DeviceList({
   onUnreachable(): void;
   updatedOf(e: Entity): string | null;
   temperatureUnit: 'C' | 'F';
+  onBrightness?(e: Entity, percent: number): void;
 }) {
   return (
     <View style={styles.cards}>
@@ -257,6 +265,7 @@ function DeviceList({
           onUnreachable={onUnreachable}
           updatedText={updatedOf(entity)}
           temperatureUnit={temperatureUnit}
+          {...(onBrightness ? { onBrightness: (v: number) => onBrightness(entity, v) } : {})}
         />
       ))}
     </View>

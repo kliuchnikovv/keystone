@@ -13,6 +13,7 @@ import { formatValue } from '../model/format';
 import { formatTemperature } from '../model/temperature';
 import { stripRoomPrefix } from '../model/rooms';
 import type { Entity } from '../protocol/messages';
+import { Dimmer } from './Dimmer';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
 import { Extras, batteryOf, colorOf, headlineOf, subtitleOf } from './widgets';
@@ -29,6 +30,8 @@ export interface DeviceWidgetProps {
   onUnreachable?(): void;
   /** "updated 2 min ago" — when the value last changed. */
   updatedText?: string | null;
+  /** The lamp's level changed — the caller sends it to the hub. */
+  onBrightness?(percent: number): void;
   /** The temperature unit the app speaks. */
   temperatureUnit?: 'C' | 'F';
 }
@@ -71,6 +74,7 @@ export function DeviceWidget({
   onOpen,
   onUnreachable,
   updatedText,
+  onBrightness,
   temperatureUnit = 'C',
 }: DeviceWidgetProps) {
   const t = useTheme();
@@ -156,6 +160,26 @@ export function DeviceWidget({
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
+    );
+  }
+
+  // A lamp with a dimmer: the card is its own dimmer — the fill is the level,
+  // a tap toggles, a swipe changes the level, a long press opens the sheet.
+  const brightnessAttr = attrOf(entity, 'brightness');
+  if (brightnessAttr !== undefined && onToggle) {
+    const level = Math.round((Number(brightnessAttr.value) / 254) * 100);
+    return (
+      <Dimmer
+        value={level}
+        on={on}
+        title={displayName}
+        color={colorOf(entity)}
+        spoken={`${title} is ${spoken}`}
+        note={note}
+        onChange={(v) => onBrightness?.(v)}
+        onToggle={onToggle}
+        onOpen={onOpen}
+      />
     );
   }
 
