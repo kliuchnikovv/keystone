@@ -67,7 +67,15 @@ peaks and reboot the S3. Prefer:
 - external 5V PSU into S3's 5V pin (then don't plug S3 into USB at the same time).
 
 Recommended local decoupling on each C6's 5V input: 100 µF electrolytic +
-100 nF ceramic.
+100 nF ceramic (a spare 5V pin on the DevKitC is fine — all 5V pins are one
+net). Mind polarity: **+** to 5V, **−** (stripe side, shorter lead) to GND. A
+25 V part is well within margin on the 5 V bus.
+
+In addition, put one bulk cap of **470–1000 µF** where 5V enters the board from
+S3. The local 100 µF caps hold up each C6 under its own TX bursts; this bank
+holds up the whole bus when C6 #2 (Thread + WiFi) switches on in a rush, which
+is the worst single step. Caps smooth sag but do not add current — if the
+source is a 500 mA USB-A host, fix the source first.
 
 ## Flashing after soldering
 

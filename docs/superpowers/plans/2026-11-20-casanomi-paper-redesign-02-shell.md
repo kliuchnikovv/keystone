@@ -9,6 +9,12 @@
 **Tech Stack:** Expo 57 / RN 0.86 + react‑native‑web, TypeScript, vitest + @testing-library/react in jsdom.
 
 **Spec:** `docs/superpowers/specs/2026-11-20-casanomi-paper-redesign-design.md`
+**Status:** **сделано 20.11** — коммиты `485b5cf`, `99506be`.
+Из плана изменено: 1) `Segmented` и `Switch` живут в `DisplayScreen.tsx`, а не в
+`controls.tsx` (ими пользуется только он); 2) добавлены глифы `settings`,
+`chevronRight`, `trash`, `wifi`, `timer`, `schedule`, `rule`, `scene`, `room`, `qr`;
+3) «+» открывает меню, а не сразу поиск устройств; 4) градусы °F —
+`model/temperature.ts`, единица меняет только надпись, провод всегда 0.1 °C.
 **Mockups:** `casanomi-screens-board.html` (screens 2, 3, 4), `casanomi-tweaks.html` (Settings, Display)
 
 ## Global Constraints
@@ -56,7 +62,7 @@
     - `qr` — the *Scan a QR code* button.
     - `bluetooth` / `matter` are **deliberately not added** — the transport is never shown to the user.
 
-- [ ] **Step 1: Write the failing test** in `app/test/ui-shell.test.tsx`:
+- [x] **Step 1: Write the failing test** in `app/test/ui-shell.test.tsx`:
 
 ```tsx
 // @vitest-environment jsdom
@@ -81,9 +87,9 @@ describe('the dock', () => {
 });
 ```
 
-- [ ] **Step 2: Run, verify fail** — `cd app && npx vitest run test/ui-shell.test.tsx` → FAIL (`Dock` not exported).
+- [x] **Step 2: Run, verify fail** — `cd app && npx vitest run test/ui-shell.test.tsx` → FAIL (`Dock` not exported).
 
-- [ ] **Step 3: Implement** — extract the tab bar out of `Home.tsx` into an exported `Dock` component:
+- [x] **Step 3: Implement** — extract the tab bar out of `Home.tsx` into an exported `Dock` component:
   - pill container: `backgroundColor: t.card` (light) / `t.card` (dark), `borderColor: t.border`, `borderRadius: 999`, height 58, `marginHorizontal: 14`, `bottom: 16`, absolute.
   - three `TabButton`s: label 10 px, glyph 21, active colour `t.accent` (gold is decoration), inactive `t.muted`.
   - the FAB: a separate 54×54 circle, `backgroundColor: t.primary`, label colour `t.onPrimary`, `accessibilityLabel="Add"`, sitting to the right of the pill with a 9 px gap.
@@ -91,14 +97,14 @@ describe('the dock', () => {
   - `Tab` becomes `'home' | 'automations' | 'settings'`; `HomeBody` keeps `finding` as an overlay (the Find‑devices screen still covers the tabs).
   - `HubScreen` and `HistoryScreen` are no longer tabs — they are rendered by the Settings screen (Task 2). For Task 1 the Settings tab renders a placeholder that Task 2 replaces; **do not delete the imports yet**, keep them referenced from `SettingsScreen` stub to avoid unused‑import lint noise.
 
-- [ ] **Step 4: Run, verify pass** — `npx vitest run test/ui-shell.test.tsx`.
+- [x] **Step 4: Run, verify pass** — `npx vitest run test/ui-shell.test.tsx`.
 
-- [ ] **Step 5: Update the existing tests** that clicked the old tabs:
+- [x] **Step 5: Update the existing tests** that clicked the old tabs:
   - `test/ui-hub.test.tsx` — `click('Hub')` no longer exists. Until Task 2 lands, route the test through Settings → Hub & health.
   - `test/ui-automation.test.tsx`, `test/ui-visual.test.tsx`, `test/ui-devices.test.tsx`, `test/ui-history.test.tsx` — check for `click('Hub')` / `click('History')` and re‑route.
   - Run the whole suite and make it green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/src/ui/Home.tsx app/src/ui/Glyph.tsx app/test/ui-shell.test.tsx app/test
@@ -120,7 +126,7 @@ git commit -m "feat(ui): three-tab dock with a separate add button"
   - `SettingsScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, mode, onMode, onOpenDisplay, onOpenPlugins })`
   - A `SettingsRow({ glyph, label, value, onPress, tone })` shared row: icon + name + optional right‑hand value + chevron.
 
-- [ ] **Step 1: Write the failing test** `app/test/ui-settings.test.tsx`:
+- [x] **Step 1: Write the failing test** `app/test/ui-settings.test.tsx`:
 
 ```tsx
 // @vitest-environment jsdom
@@ -144,9 +150,9 @@ describe('settings', () => {
 });
 ```
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** `SettingsScreen`:
+- [x] **Step 3: Implement** `SettingsScreen`:
   - top: a hub summary card (icon tile + hub name + `Connected · firmware <fw>` with a green dot) — reuse `home.hub`.
   - an `App` section: a **Display** row (value = current theme name, e.g. `Light · °C`).
   - a `Hub` section: rows **Hub & health** (value `2 chips ok`), **History**, **Wi‑Fi** (value = the SSID if `home.hub` has one, else none), **Remote access**.
@@ -154,11 +160,11 @@ describe('settings', () => {
   - the rows open sub‑screens: Task 2 wires **Hub & health → `HubScreen`** and **History → `HistoryScreen`**; the rest show a "not here yet" note until later plans.
   - `HomeBody` keeps a sub‑screen stack: `const [sub, setSub] = useState<'none'|'hub'|'history'|'display'|'plugins'>('none')`. When `sub !== 'none'` the sub‑screen replaces the tab content and the dock is hidden.
 
-- [ ] **Step 4: Give `HubScreen` and `HistoryScreen` a back header** — `ScreenHeader` with `left={<HeaderButton label="Settings" .../>}`; `HomeBody` passes an `onBack` callback.
+- [x] **Step 4: Give `HubScreen` and `HistoryScreen` a back header** — `ScreenHeader` with `left={<HeaderButton label="Settings" .../>}`; `HomeBody` passes an `onBack` callback.
 
-- [ ] **Step 5: Run, verify pass** + the whole suite.
+- [x] **Step 5: Run, verify pass** + the whole suite.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/src/ui/SettingsScreen.tsx app/src/ui/Home.tsx app/src/ui/HubScreen.tsx app/src/ui/HistoryScreen.tsx app/test/ui-settings.test.tsx
@@ -187,14 +193,14 @@ git commit -m "feat(ui): Settings index; Hub and History move inside it"
   - `DisplayScreen({ prefs, onPrefs, mode, onMode, onBack })`.
   - A shared `Segmented({ options, value, onChange })` control (the mockup's `.seg`).
 
-- [ ] **Step 1: Write the failing tests**:
+- [x] **Step 1: Write the failing tests**:
   - `test/palette.test.ts`: the prefs store round‑trips, and an old/unknown value falls back to the defaults.
   - `test/temperature.test.ts` (new): `cToF`/`fToC` round‑trip; `formatTemperature` renders both units; `formatValue` with the `F` unit renders the temperature in °F and leaves the other attributes alone.
   - `test/ui-display.test.tsx`: renders the three theme options, the °C/°F segment, and the two switches; tapping `°F` calls `onPrefs({ temperature: 'F' })`; tapping the `Dark` theme calls `onMode('dark')`.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement**:
+- [x] **Step 3: Implement**:
   - `app/src/palette.ts`: `createPrefsStore` exactly as above.
   - `app/src/model/temperature.ts`: the conversions. The wire is always 0.1 °C (`i16`) — **the unit only changes how it is written**, never what goes on the wire.
   - `app/src/model/format.ts`: `formatValue` takes the optional unit; `temperature` and `setpoint` use it. The other attributes (humidity %, brightness %, kelvin) are untouched.
@@ -207,9 +213,9 @@ git commit -m "feat(ui): Settings index; Hub and History move inside it"
     - a `Switch` control (a 46×28 track with a 22 px knob) — add it to `controls.tsx`.
   - `Home.tsx` owns the prefs state (load on mount, save on change) and passes it down. **The unit must reach the screens that show a temperature** — `DeviceWidget`/`widgets.tsx` (Plan 3) read it from the same store.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/palette.ts app/src/ui/controls.tsx app/src/ui/DisplayScreen.tsx app/src/ui/SettingsScreen.tsx app/src/ui/Home.tsx app/test
@@ -231,15 +237,15 @@ git commit -m "feat(ui): Display screen — theme, temperature unit, home-screen
   - **Scene** — «Save what the devices are doing now»
   - **Automation** — «A schedule, a timer, or a rule»
 
-- [ ] **Step 1: Write the failing test** — the menu shows the three rows; tapping *Device* calls `onDevice`; tapping *Scene* calls `onScene`; tapping *Automation* calls `onAutomation`.
+- [x] **Step 1: Write the failing test** — the menu shows the three rows; tapping *Device* calls `onDevice`; tapping *Scene* calls `onScene`; tapping *Automation* calls `onAutomation`.
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** — reuse `Sheet.tsx`'s sheet (`Sheet` already exists: check its props and use it rather than a new one). `onDevice` opens the existing Find‑devices screen; `onScene` and `onAutomation` show a «coming in the next plan» note (Plan 4 fills them) — but they must be *reachable*, not dead ends.
+- [x] **Step 3: Implement** — reuse `Sheet.tsx`'s sheet (`Sheet` already exists: check its props and use it rather than a new one). `onDevice` opens the existing Find‑devices screen; `onScene` and `onAutomation` show a «coming in the next plan» note (Plan 4 fills them) — but they must be *reachable*, not dead ends.
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/AddMenu.tsx app/src/ui/Home.tsx app/test/ui-add-menu.test.tsx
@@ -258,15 +264,15 @@ git commit -m "feat(ui): the add menu — device, scene, automation"
 **Interfaces:**
 - Produces: `PluginsScreen({ onBack })` — two tabs **Browse** / **Installed**, a search field, a one‑line scrolling tag row (All / Devices / Energy / Voice / Dashboards / Automations / Security), and a card grid of plugins with an *Install* button. The data is a **static local list** — the hub has no plugin mechanism yet, and the spec says this screen is a shell.
 
-- [ ] **Step 1: Write the failing test** — the two tabs are present; *Browse* shows plugin cards with an *Install* button; tapping *Installed* shows an empty state («No plugins yet»).
+- [x] **Step 1: Write the failing test** — the two tabs are present; *Browse* shows plugin cards with an *Install* button; tapping *Installed* shows an empty state («No plugins yet»).
 
-- [ ] **Step 2: Run, verify fail.**
+- [x] **Step 2: Run, verify fail.**
 
-- [ ] **Step 3: Implement** — a local `PLUGINS` array (8–10 entries: name, author, description, rating, installs, tags, price badge). The *Install* button is local state only (it moves the card to *Installed* in the session, nothing is sent to the hub).
+- [x] **Step 3: Implement** — a local `PLUGINS` array (8–10 entries: name, author, description, rating, installs, tags, price badge). The *Install* button is local state only (it moves the card to *Installed* in the session, nothing is sent to the hub).
 
-- [ ] **Step 4: Run, verify pass** + the whole suite.
+- [x] **Step 4: Run, verify pass** + the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/ui/PluginsScreen.tsx app/src/ui/SettingsScreen.tsx app/test/ui-plugins.test.tsx
