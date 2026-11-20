@@ -227,6 +227,16 @@ class BasicJsonReader {
     return idx;
   }
 
+  // Key token of member `i` of object `obj`, or -1. Pairs with string_equals
+  // / get_string so a caller can walk an object's keys (e.g. to reject
+  // duplicates). Mirrors `at` for arrays.
+  int member_key(int obj, int i) const noexcept {
+    if (!is(obj, Type::Object) || i < 0 || i >= tok_[obj].count) return -1;
+    int k = obj + 1;
+    for (int p = 0; p < i; ++p) k = tok_[k + 1].next;
+    return k;
+  }
+
   bool string_equals(int t, const char* s) const noexcept { return is(t, Type::String) && str_eq(t, s); }
 
   // Decode a string token (escapes, \uXXXX) into `out` as UTF-8, NUL-terminated.

@@ -68,6 +68,26 @@ inline ManifestError parse_manifest(const char* json, std::size_t len,
   const int root = r.root();
   if (!r.is(root, JsonReader::Type::Object)) return ManifestError::BadJson;
 
+  // Reject a duplicate of any key we act on (parser-differential hardening).
+  // Our reader resolves find() to the first match; a signer or store that
+  // parses the same manifest (Project 2) might take the last. Since the keys
+  // below drive capabilities — the security boundary — refuse the ambiguity.
+  // (An escaped key never matches our raw-byte compare, so it is treated as
+  // absent and fails safe; full key canonicalisation is deferred to the
+  // signing work in Project 2.)
+  {
+    static constexpr const char* kKnownKeys[] = {"id", "version", "abi",
+                                                 "caps", "allow"};
+    const int members = r.count(root);
+    for (const char* key : kKnownKeys) {
+      int seen = 0;
+      for (int i = 0; i < members; ++i) {
+        if (r.string_equals(r.member_key(root, i), key)) ++seen;
+      }
+      if (seen > 1) return ManifestError::BadJson;
+    }
+  }
+
   // id — required string, must fit the fixed buffer.
   const int id_tok = r.find(root, "id");
   if (id_tok < 0 || !r.is(id_tok, JsonReader::Type::String)) {

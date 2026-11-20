@@ -52,6 +52,15 @@ TEST_CASE("plugin manifest: parse, abi check, bad capability") {
     CHECK(parse("{bad", m) == ManifestError::BadJson);
   }
 
+  SUBCASE("a manifest with a duplicate known key is rejected") {
+    // Parser differential: our reader takes the first "caps", another parser
+    // might take the last. Capabilities are a security boundary, so the
+    // ambiguity is refused rather than resolved silently.
+    CHECK(parse(R"({"id":"x","version":1,"abi":1,)"
+                R"("caps":["net_local"],"caps":["log"]})",
+                m) == ManifestError::BadJson);
+  }
+
   SUBCASE("an over-long id is rejected") {
     CHECK(parse(R"({"id":"abcdefghijklmnopqrstuvwxyz0123456789","version":1,)"
                 R"("abi":1,"caps":[]})",
