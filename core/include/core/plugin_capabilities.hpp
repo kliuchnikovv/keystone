@@ -23,9 +23,43 @@ struct Subnet {
   uint32_t mask = 0;
 };
 
-// True when target_ip is on the same subnet as the hub.
+// A contiguous netmask is 1s then 0s. ~mask is then 0s then 1s, i.e. one
+// less than a power of two, so (inv & (inv+1)) == 0.
+inline bool is_contiguous_mask(uint32_t mask) {
+  const uint32_t inv = ~mask;
+  return (inv & (inv + 1u)) == 0u;
+}
+
+inline int prefix_len(uint32_t mask) {
+  int n = 0;
+  while ((mask & 0x80000000u) != 0u) {
+    ++n;
+    mask <<= 1;
+  }
+  return n;
+}
+
+// True when target_ip is a routable peer on the hub's own subnet. Fails
+// CLOSED: an unset subnet (ip or mask 0), a non-contiguous mask, or a mask
+// broader than /8 denies everything. Even inside the subnet it denies the
+// hub itself, the network and broadcast addresses, and the special ranges
+// (loopback, this-network, multicast, limited broadcast) — so a sandboxed
+// plugin cannot turn "local network" into a path to host services (SSRF).
 inline bool net_allows(const Subnet& local, uint32_t target_ip) {
-  return (local.ip & local.mask) == (target_ip & local.mask);
+  if (local.ip == 0u || local.mask == 0u) return false;
+  if (!is_contiguous_mask(local.mask)) return false;
+  if (prefix_len(local.mask) < 8) return false;
+
+  if ((target_ip & local.mask) != (local.ip & local.mask)) return false;
+
+  if (target_ip == local.ip) return false;                      // the hub itself
+  if (target_ip == (local.ip & local.mask)) return false;       // network address
+  if (target_ip == (local.ip | ~local.mask)) return false;      // broadcast
+  if ((target_ip & 0xFF000000u) == 0x7F000000u) return false;   // 127.0.0.0/8 loopback
+  if ((target_ip & 0xFF000000u) == 0x00000000u) return false;   // 0.0.0.0/8
+  if ((target_ip & 0xF0000000u) == 0xE0000000u) return false;   // 224.0.0.0/4 multicast
+  if (target_ip == 0xFFFFFFFFu) return false;                   // limited broadcast
+  return true;
 }
 
 // Gate an outgoing socket: Denied without the NetLocal capability, Denied
