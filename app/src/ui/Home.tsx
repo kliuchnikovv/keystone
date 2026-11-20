@@ -9,6 +9,7 @@ import type { Settings } from '../settings';
 import { defaultStore } from '../storage';
 import { Banner, type BannerAction } from './Banner';
 import { AddMenu } from './AddMenu';
+import { AutomationEditor } from './AutomationEditor';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
 import { DisplayScreen } from './DisplayScreen';
@@ -96,6 +97,8 @@ export function HomeBody({
   const [finding, setFinding] = useState(false);
   // The «+» menu: what can be added.
   const [adding, setAdding] = useState(false);
+  // What the «+» menu opened: a device search, a new automation, a new scene.
+  const [branch, setBranch] = useState<'none' | 'device' | 'automation'>('none');
   // The app's own preferences: the units it speaks and what Home shows.
   const prefsStore = useMemo(() => createPrefsStore(defaultStore), []);
   const [prefs, setPrefs] = useState<Prefs>({ temperature: 'C', showScenes: true, groupByRoom: true });
@@ -145,7 +148,9 @@ export function HomeBody({
   );
 
   const content =
-    finding ? (
+    branch === 'automation' ? (
+      <AutomationEditor home={home} commands={commands} onClose={() => setBranch('none')} />
+    ) : finding ? (
       <FindDevicesScreen home={home} commands={commands} onClose={() => setFinding(false)} />
     ) : sub === 'hub' ? (
       hubScreen
@@ -200,9 +205,9 @@ export function HomeBody({
       <AddMenu
         visible={adding}
         onClose={() => setAdding(false)}
-        onDevice={() => setFinding(true)}
+        onDevice={() => setBranch('device')}
         onScene={() => setTab('automations')}
-        onAutomation={() => setTab('automations')}
+        onAutomation={() => setBranch('automation')}
       />
     </SafeAreaView>
   );
