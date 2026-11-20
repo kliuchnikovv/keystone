@@ -178,7 +178,8 @@ describe('Hub tab', () => {
   it('lists the chips with their health', async () => {
     renderHome();
     await screen.findByText('plug1');
-    fireEvent.click(screen.getByLabelText('Hub'));
+    fireEvent.click(screen.getByLabelText('Settings'));
+    fireEvent.click(screen.getByLabelText('Hub & health'));
     await screen.findByText('mock-home');
     const zigbee = screen.getByLabelText('Chip Zigbee');
     expect(within(zigbee).getByText(/Online/)).toBeTruthy();
@@ -195,7 +196,8 @@ describe('Hub tab', () => {
     const onChangeHub = vi.fn();
     renderHome({ onChangeHub });
     await screen.findByText('plug1');
-    fireEvent.click(screen.getByLabelText('Hub'));
+    fireEvent.click(screen.getByLabelText('Settings'));
+    fireEvent.click(screen.getByLabelText('Hub & health'));
     fireEvent.click(await screen.findByLabelText('Change hub'));
     expect(onChangeHub).toHaveBeenCalled();
   });

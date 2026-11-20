@@ -17,7 +17,7 @@ import { ScenesBar } from './ScenesBar';
 import { ConfirmDialog } from './Sheet';
 import { radius, useTheme } from './theme';
 
-export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeState; commands: Commands; onFindDevices(): void }) {
+export function DevicesScreen({ home, commands, onFindDevices, showScenes = true }: { home: HomeState; commands: Commands; onFindDevices(): void; showScenes?: boolean }) {
   const t = useTheme();
   const rooms = groupByRoom(sortedDevices(home.entities));
   const [openId, setOpenId] = useState<number | null>(null);
@@ -33,7 +33,7 @@ export function DevicesScreen({ home, commands, onFindDevices }: { home: HomeSta
     <>
       <ScrollView contentContainerStyle={styles.list} style={offline ? styles.offline : undefined}>
         <Greeting home={home} />
-        {home.status === 'ready' ? <ScenesBar home={home} commands={commands} /> : null}
+        {home.status === 'ready' && showScenes ? <ScenesBar home={home} commands={commands} /> : null}
 
         {rooms.map((room) => {
           const summary = roomSummary(room.devices);

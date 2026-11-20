@@ -12,7 +12,7 @@ import { useTheme } from './theme';
  * What the hub has done and seen, newest first: device changes, the commands it sent, rules, schedules, timers
  * and scenes that ran, chips going quiet, restarts. Tap a row about a device to see only that device.
  */
-export function HistoryScreen({ home, client, pollMs }: { home: HomeState; client: HubConnection; pollMs?: number }) {
+export function HistoryScreen({ home, client, pollMs, onBack }: { home: HomeState; client: HubConnection; pollMs?: number; onBack?(): void }) {
   const t = useTheme();
   const [entity, setEntity] = useState<number | null>(null);
   const h = useHistory(client, home.status, entity, pollMs);
@@ -59,7 +59,18 @@ export function HistoryScreen({ home, client, pollMs }: { home: HomeState; clien
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <ScreenHeader title="History" />
+      <ScreenHeader
+        title="History"
+        {...(onBack
+          ? {
+              left: (
+                <Pressable accessibilityRole="button" accessibilityLabel="Back to Settings" onPress={onBack} style={styles.back}>
+                  <Glyph name="back" size={20} color={t.muted} />
+                </Pressable>
+              ),
+            }
+          : {})}
+      />
       {entity !== null && (
         <View style={[styles.filter, { backgroundColor: t.accentSoft }]}>
           <Text style={styles.filterText}>Only {entityName(entity, home.entities)}</Text>
@@ -108,6 +119,7 @@ function FadeIn({ animate, children }: { animate: boolean; children: React.React
 }
 
 const styles = StyleSheet.create({
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   page: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 110 : 98, gap: 8 },
   h: { fontSize: 22, fontWeight: '700' },
   filter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 12 },

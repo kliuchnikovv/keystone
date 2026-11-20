@@ -32,7 +32,8 @@ async function openHub(props: { onUseRelay?(url: string): void; mode?: ThemeMode
     />,
   );
   await screen.findByText('plug1');
-  click('Hub');
+  click('Settings');
+  click('Hub & health');
   await screen.findByLabelText('Firmware');
 }
 
@@ -146,18 +147,16 @@ describe('the hub tab', () => {
 });
 
 describe('appearance', () => {
-  it('offers System, Light and Dark, and says which one was picked', async () => {
-    const chosen: ThemeMode[] = [];
-    await openHub({ mode: 'system', onMode: (m) => chosen.push(m) });
-    expect(screen.getByLabelText('Theme System')).toBeTruthy();
-    expect(screen.getByLabelText('Theme Light')).toBeTruthy();
-    expect(screen.getByLabelText('Theme Dark')).toBeTruthy();
-    // The current choice is the marked one: it wears the gold wash.
-    const marked = screen.getByLabelText('Theme System').getAttribute('style') ?? '';
-    expect(marked).toContain('rgba(207, 159, 51, 0.16)');
-    expect(screen.getByLabelText('Theme Dark').getAttribute('style') ?? '').not.toContain('rgba(207, 159, 51, 0.16)');
-    click('Theme Dark');
-    expect(chosen).toEqual(['dark']);
+  it('the theme is chosen in Settings, not on the Hub tab', async () => {
+    await openHub({ mode: 'system' });
+    // The Hub screen no longer carries the theme picker.
+    expect(screen.queryByLabelText('Theme System')).toBeNull();
+    // It lives under Display.
+    click('Back to Settings');
+    click('Display');
+    expect(screen.getByLabelText('System')).toBeTruthy();
+    expect(screen.getByLabelText('Light')).toBeTruthy();
+    expect(screen.getByLabelText('Dark')).toBeTruthy();
   });
 });
 

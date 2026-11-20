@@ -1,6 +1,7 @@
 // Turning protocol values into text for people. Pure functions: no React, easy to test.
 import type { AckStatus, Attr } from '../protocol/messages';
 import { HubError } from '../protocol/client';
+import { formatTemperature, type TemperatureUnit } from './temperature';
 
 const LABELS: Record<string, string> = {
   on_off: 'Power',
@@ -65,7 +66,7 @@ export function brightnessPercent(v: number): number {
   return Math.round((v / 254) * 100);
 }
 
-export function formatValue(a: Pick<Attr, 'name' | 'value'>): string {
+export function formatValue(a: Pick<Attr, 'name' | 'value'>, unit: TemperatureUnit = 'C'): string {
   const v = a.value;
   if (v === null) return '—';
   if (Array.isArray(v)) return `(${v[0]}, ${v[1]})`;
@@ -84,7 +85,7 @@ export function formatValue(a: Pick<Attr, 'name' | 'value'>): string {
       return v ? 'At home' : 'Away';
     case 'temperature':
     case 'setpoint':
-      return `${(Number(v) / 10).toFixed(1)} °C`; // SPEC §6.2: int16 in 0.1 °C
+      return formatTemperature(Number(v) / 10, unit); // SPEC §6.2: int16 in 0.1 °C
     case 'humidity':
       return `${(Number(v) / 10).toFixed(0)} %`; // u16 in 0.1 %
     case 'illuminance':

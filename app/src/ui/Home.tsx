@@ -1,27 +1,35 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BackHandler, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from './kit';
 import { useCommands } from '../hooks/useCommands';
 import { useHome, useHubClient, type HubConnection } from '../hooks/useHub';
 import { useStateCache } from '../hooks/useStateCache';
+import { createPrefsStore, type Prefs } from '../palette';
 import type { HubClientOptions } from '../protocol/client';
 import type { Settings } from '../settings';
+import { defaultStore } from '../storage';
 import { Banner, type BannerAction } from './Banner';
 import { AutomationsScreen } from './AutomationsScreen';
 import { DevicesScreen } from './DevicesScreen';
+import { DisplayScreen } from './DisplayScreen';
 import { FindDevicesScreen } from './FindDevicesScreen';
 import { Glyph, type GlyphName } from './Glyph';
 import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
+import { PluginsScreen } from './PluginsScreen';
+import { SettingsScreen } from './SettingsScreen';
 import { useTheme, type ThemeMode } from './theme';
 
-type Tab = 'devices' | 'automations' | 'history' | 'hub';
+/** The three tabs of the dock. Hub and History live inside Settings. */
+export type Tab = 'home' | 'automations' | 'settings';
 
 const TABS: { id: Tab; label: string; glyph: GlyphName }[] = [
-  { id: 'devices', label: 'Devices', glyph: 'home' },
+  { id: 'home', label: 'Home', glyph: 'home' },
   { id: 'automations', label: 'Automations', glyph: 'automation' },
-  { id: 'hub', label: 'Hub', glyph: 'hub' },
-  { id: 'history', label: 'History', glyph: 'history' },
+  { id: 'settings', label: 'Settings', glyph: 'settings' },
 ];
+
+/** The screen under the dock: the tab, or one of the sub-screens Settings opens. */
+export type SubScreen = 'none' | 'hub' | 'history' | 'display' | 'plugins';
 
 export interface HomeProps {
   settings: Settings;
@@ -80,19 +88,36 @@ export function HomeBody({
   const commands = useCommands(client);
   // What the hub said last time, kept on the phone: shown while it is away.
   useStateCache(client, settings.url);
-  const [tab, setTab] = useState<Tab>('devices');
+  const [tab, setTab] = useState<Tab>('home');
+  // A sub-screen inside Settings (Hub & health, History, Display): it covers the tab.
+  const [sub, setSub] = useState<SubScreen>('none');
   // "Find devices" is a screen of its own: it covers the tabs while it is open.
   const [finding, setFinding] = useState(false);
+  // The app's own preferences: the units it speaks and what Home shows.
+  const prefsStore = useMemo(() => createPrefsStore(defaultStore), []);
+  const [prefs, setPrefs] = useState<Prefs>({ temperature: 'C', showScenes: true, groupByRoom: true });
+  useEffect(() => {
+    void prefsStore.load().then(setPrefs);
+  }, [prefsStore]);
+  const setPrefsAndSave = (next: Partial<Prefs>) => {
+    setPrefs((cur) => {
+      const merged = { ...cur, ...next };
+      void prefsStore.save(merged);
+      return merged;
+    });
+  };
 
   // Android has no back button in the app: the hardware one must close the screen.
   useEffect(() => {
-    if (!finding || Platform.OS !== 'android') return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setFinding(false);
+    if (!finding && sub === 'none') return;
+    if (Platform.OS !== 'android') return;
+    const sub2 = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (finding) setFinding(false);
+      else setSub('none');
       return true;
     });
-    return () => sub.remove();
-  }, [finding]);
+    return () => sub2.remove();
+  }, [finding, sub]);
 
   // What the banner offers: a retry when the socket is gone, a way back to Connect when
   // the token or the certificate is the problem.
@@ -103,32 +128,59 @@ export function HomeBody({
         ? { label: 'Go to Connect', onPress: onChangeHub }
         : null;
 
+  const hubScreen = (
+    <HubScreen
+      home={home}
+      url={settings.url}
+      onChangeHub={onChangeHub}
+      commands={commands}
+      client={client}
+      onBack={() => setSub('none')}
+      {...(onTokenChange ? { onTokenChange } : {})}
+      {...(onUseRelay ? { onUseRelay } : {})}
+    />
+  );
+
+  const content =
+    finding ? (
+      <FindDevicesScreen home={home} commands={commands} onClose={() => setFinding(false)} />
+    ) : sub === 'hub' ? (
+      hubScreen
+    ) : sub === 'history' ? (
+      <HistoryScreen home={home} client={client} onBack={() => setSub('none')} />
+    ) : sub === 'display' ? (
+      <DisplayScreen
+        mode={mode ?? 'system'}
+        onMode={(m) => onMode?.(m)}
+        temperature={prefs.temperature}
+        onTemperature={(u) => setPrefsAndSave({ temperature: u })}
+        showScenes={prefs.showScenes}
+        onShowScenes={(v) => setPrefsAndSave({ showScenes: v })}
+        groupByRoom={prefs.groupByRoom}
+        onGroupByRoom={(v) => setPrefsAndSave({ groupByRoom: v })}
+        onBack={() => setSub('none')}
+      />
+    ) : sub === 'plugins' ? (
+      <PluginsScreen onBack={() => setSub('none')} />
+    ) : tab === 'home' ? (
+      <DevicesScreen home={home} commands={commands} onFindDevices={() => setFinding(true)} showScenes={prefs.showScenes} />
+    ) : tab === 'automations' ? (
+      <AutomationsScreen home={home} commands={commands} />
+    ) : (
+      <SettingsScreen
+        home={home}
+        mode={mode}
+        onOpenHub={() => setSub('hub')}
+        onOpenHistory={() => setSub('history')}
+        onOpenDisplay={() => setSub('display')}
+        onOpenPlugins={() => setSub('plugins')}
+      />
+    );
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: t.bg }]}>
       <Banner state={home} url={settings.url} action={action} />
-      <View style={styles.body}>
-        {finding ? (
-          <FindDevicesScreen home={home} commands={commands} onClose={() => setFinding(false)} />
-        ) : tab === 'devices' ? (
-          <DevicesScreen home={home} commands={commands} onFindDevices={() => setFinding(true)} />
-        ) : tab === 'automations' ? (
-          <AutomationsScreen home={home} commands={commands} />
-        ) : tab === 'history' ? (
-          <HistoryScreen home={home} client={client} />
-        ) : (
-          <HubScreen
-            home={home}
-            url={settings.url}
-            onChangeHub={onChangeHub}
-            commands={commands}
-            client={client}
-            mode={mode}
-            onMode={onMode}
-            {...(onTokenChange ? { onTokenChange } : {})}
-            {...(onUseRelay ? { onUseRelay } : {})}
-          />
-        )}
-      </View>
+      <View style={styles.body}>{content}</View>
       {commands.message && (
         <Pressable
           accessibilityRole="alert"
@@ -139,24 +191,39 @@ export function HomeBody({
           <Text style={{ color: t.bg, fontWeight: '600' }}>{commands.message}</Text>
         </Pressable>
       )}
-      {!finding && (
-        <View
-          style={[
-            styles.tabs,
-            ios ? styles.tabsPill : styles.tabsPanel,
-            { backgroundColor: ios ? t.card : t.tabBar, borderColor: ios ? t.glassBorder : t.border },
-          ]}
-        >
-          {TABS.map((x) => (
-            <TabButton key={x.id} label={x.label} glyph={x.glyph} ios={ios} active={tab === x.id} onPress={() => setTab(x.id)} />
-          ))}
-        </View>
+      {!finding && sub === 'none' && (
+        <Dock tab={tab} onTab={setTab} onAdd={() => setFinding(true)} />
       )}
     </SafeAreaView>
   );
 }
 
-function TabButton({ label, glyph, ios, active, onPress }: { label: string; glyph: GlyphName; ios: boolean; active: boolean; onPress(): void }) {
+/** The dock: three tabs in a floating pill, and the round ink button beside it. */
+export function Dock({ tab, onTab, onAdd }: { tab: Tab; onTab(t: Tab): void; onAdd(): void }) {
+  const t = useTheme();
+  return (
+    <View style={styles.dock} pointerEvents="box-none">
+      <View
+        accessibilityRole="tablist"
+        style={[styles.pill, { backgroundColor: t.card, borderColor: t.border }]}
+      >
+        {TABS.map((x) => (
+          <TabButton key={x.id} label={x.label} glyph={x.glyph} active={tab === x.id} onPress={() => onTab(x.id)} />
+        ))}
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Add"
+        onPress={onAdd}
+        style={[styles.fab, { backgroundColor: t.primary }]}
+      >
+        <Glyph name="plus" size={24} color={t.onPrimary} />
+      </Pressable>
+    </View>
+  );
+}
+
+function TabButton({ label, glyph, active, onPress }: { label: string; glyph: GlyphName; active: boolean; onPress(): void }) {
   const t = useTheme();
   return (
     <Pressable
@@ -166,8 +233,10 @@ function TabButton({ label, glyph, ios, active, onPress }: { label: string; glyp
       onPress={onPress}
       style={styles.tab}
     >
-      <Glyph name={glyph} size={ios ? 21 : 22} color={active ? t.accent : t.muted} filled={active} />
-      <Text style={{ color: active ? t.accent : t.muted, fontWeight: active ? '600' : '500', fontSize: 10 }}>{label}</Text>
+      <Glyph name={glyph} size={21} color={active ? t.accent : t.muted} filled={active} />
+      <Text testID={`tab-${label}`} style={{ color: active ? t.accent : t.muted, fontWeight: active ? '600' : '500', fontSize: 10 }}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -176,32 +245,31 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   body: { flex: 1 },
   toast: { position: 'absolute', left: 16, right: 16, padding: 14, borderRadius: 14 },
-  tabs: {
+  // The dock: the pill takes the room, the ink button stands beside it.
+  dock: {
     position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 9,
   },
-  // iOS: a floating pill, the way the platform has done it since 26.
-  tabsPill: {
-    left: 16,
-    right: 16,
-    bottom: 16,
-    height: 60,
+  pill: {
+    flex: 1,
+    height: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
     paddingHorizontal: 8,
   },
-  // Android and the web: the room mock's full-width bar.
-  tabsPanel: {
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 82,
-    paddingTop: 10,
-    paddingBottom: 20,
-    paddingHorizontal: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  fab: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, minHeight: 44 },
 });

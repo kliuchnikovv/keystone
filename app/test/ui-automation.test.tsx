@@ -234,7 +234,7 @@ describe('Timers', () => {
     });
     await screen.findByLabelText('timer On lamp');
     await waitFor(() => expect(screen.queryByLabelText('timer On lamp')).toBeNull(), { timeout: 3000 });
-    click('Devices');
+    click('Home');
     await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
   });
 });
@@ -463,7 +463,8 @@ describe('Editing a scene', () => {
 describe('Wi-Fi', () => {
   it('scans, picks a network, asks for the password and sends it; the app reconnects by itself', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     await screen.findByText(/home · -58 dBm · 192.168.0.202/);
     click('Change network');
     click('Scan for networks');
@@ -481,7 +482,8 @@ describe('Wi-Fi', () => {
 
   it('an open network needs no password, and a too-short password is explained without bothering the hub', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     click('Change network');
     type('Network name', 'home');
     type('Wi-Fi password', 'short');
@@ -499,7 +501,8 @@ describe('Wi-Fi', () => {
 describe('The sun', () => {
   it('the Hub tab sets and clears the location; the sun times show up', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     // The hub's own facts arrive as a separate event: give it room on a loaded machine.
     await screen.findByText(/Not set/, undefined, { timeout: 5000 });
     click('Set location');
@@ -516,7 +519,8 @@ describe('The sun', () => {
   it('the phone can give the location in one tap', async () => {
     vi.mocked(locatePhone).mockResolvedValue({ ok: true, lat: 50.09, lon: 14.42 });
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     click('Use phone location');
     await screen.findByText(/50\.0900, 14\.4200/);
     expect(hub.location).toEqual({ lat: 50.09, lon: 14.42 });
@@ -525,7 +529,8 @@ describe('The sun', () => {
   it('a refused phone location says so and leaves the hub alone', async () => {
     vi.mocked(locatePhone).mockResolvedValue({ ok: false, error: 'Location access was not allowed. Type the coordinates instead.' });
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     click('Use phone location');
     expect(await screen.findByText(/not allowed/)).toBeTruthy();
     expect(hub.location).toBeNull();
@@ -533,7 +538,8 @@ describe('The sun', () => {
 
   it('a bad location is explained without asking the hub', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     click('Set location');
     type('Latitude', '95');
     type('Longitude', '14');
@@ -558,12 +564,15 @@ describe('The sun', () => {
     expect(hub.schedules[0]).toMatchObject({ time: 'sunset+30', entity: 0x0100 });
     expect(screen.getByText(/waiting for the hub's location/)).toBeTruthy();
 
-    click('Hub');
+    click('Settings');
+    click('Hub & health');
     click('Set location');
     type('Latitude', '50');
     type('Longitude', '14');
     click('Save location');
     await screen.findByText(/sunrise 06:00/);
+    // Back out of the Hub screen into the dock.
+    click('Back to Settings');
     click('Automations');
     click('Schedules');
     await screen.findByLabelText('schedule 30 min after sunset · Off plug1');

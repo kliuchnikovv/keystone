@@ -8,11 +8,12 @@ import { chipRows, chipSummary } from '../model/health';
 import { locatePhone } from '../native/position';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
+import { Glyph } from './Glyph';
 import { ScreenHeader } from './ScreenHeader';
 import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
 import { PresenceCard } from './PresenceCard';
 import { WifiCard } from './WifiCard';
-import { MODES, THEMES, radius, useTheme, type ThemeMode } from './theme';
+import { radius, useTheme } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
 function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
@@ -135,44 +136,7 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   );
 }
 
-/** The app's own look: the theme mode is a setting of the phone, not of the hub. */
-function AppearanceCard({ mode, onMode }: { mode: ThemeMode; onMode?(mode: ThemeMode): void }) {
-  const t = useTheme();
-  return (
-    <View accessibilityLabel="Appearance" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
-      <Text style={[styles.h2, { color: t.text }]}>Appearance</Text>
-      <Text style={{ color: t.muted, fontSize: 13 }}>The theme the app wears. System follows the phone.</Text>
-      <View style={styles.modeRow}>
-        {MODES.map((m) => {
-          const on = m.id === mode;
-          // System shows both moods; Light and Dark show their own.
-          const previews = m.id === 'system' ? [THEMES.light, THEMES.dark] : [m.id === 'light' ? THEMES.light : THEMES.dark];
-          return (
-            <Pressable
-              key={m.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Theme ${m.name}`}
-              accessibilityState={{ selected: on }}
-              onPress={() => onMode?.(m.id)}
-              style={[styles.mode, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
-            >
-              <View style={styles.swatches}>
-                {previews.map((preview) => (
-                  <View key={preview.bg} style={[styles.swatch, { backgroundColor: preview.bg, borderColor: preview.border }]} />
-                ))}
-                <View style={[styles.swatch, { backgroundColor: t.accent, borderColor: t.accent }]} />
-              </View>
-              <Text style={{ color: on ? t.accentInk : t.text, fontSize: 14, fontWeight: '700' }}>{m.name}</Text>
-              <Text style={{ color: t.muted, fontSize: 11 }}>{m.hint}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
-export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, mode, onMode }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; mode?: ThemeMode; onMode?(mode: ThemeMode): void }) {
+export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, onBack }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; onBack?(): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
@@ -191,7 +155,18 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
   );
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <ScreenHeader title="Hub" />
+      <ScreenHeader
+        title="Hub"
+        {...(onBack
+          ? {
+              left: (
+                <Pressable accessibilityRole="button" accessibilityLabel="Back to Settings" onPress={onBack} style={styles.back}>
+                  <Glyph name="back" size={20} color={t.muted} />
+                </Pressable>
+              ),
+            }
+          : {})}
+      />
       <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
         <View style={styles.hubHead}>
           <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
@@ -245,7 +220,6 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
       <FirmwareCard home={home} client={client} commands={commands} />
       <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} {...(onUseRelay ? { onUseRelay } : {})} />
       <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
-      <AppearanceCard mode={mode ?? 'system'} onMode={onMode} />
 
       <Pressable accessibilityRole="button" accessibilityLabel="Change hub" onPress={onChangeHub} style={[styles.change, { borderColor: t.border }]}>
         <Text style={{ color: t.accent, fontWeight: '600' }}>Change hub or token</Text>
@@ -256,6 +230,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
 
 const styles = StyleSheet.create({
   page: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 110 : 98, gap: 10 },
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   card: { borderWidth: 1, padding: 14, gap: 4 },
   h: { fontSize: 22, fontWeight: '700' },
   hubHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
