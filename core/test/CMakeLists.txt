@@ -36,7 +36,8 @@ add_executable(core_tests
   test_device_ota.cpp
   test_thread_dataset.cpp
   test_plugin_host_api.cpp
-  test_plugin_capabilities.cpp)
+  test_plugin_capabilities.cpp
+  test_plugin_manifest.cpp)
 
 target_link_libraries(core_tests PRIVATE core doctest::doctest keystone_warnings)
 
