@@ -8,7 +8,8 @@ import { useCountdown } from '../hooks/useCountdown';
 import type { HomeState } from '../protocol/store';
 import { SceneEditor, SceneForm, ScheduleForm, TimerForm } from './AutomationForms';
 import { RuleEditor } from './RuleEditor';
-import { Button, Chip, ChipRow, ConfirmDelete } from './controls';
+import { Button, ConfirmDelete } from './controls';
+import { CollapsibleSection } from './CollapsibleSection';
 import { ScreenHeader } from './ScreenHeader';
 import { Suggestions } from './Suggestions';
 import { useTheme } from './theme';
@@ -86,16 +87,9 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
         }}
       />
 
-      <ChipRow>
-        <Chip label={`Scenes (${home.scenes.length})`} a11y="Scenes" selected={section === 'scenes'} onPress={() => switchTo('scenes')} />
-        <Chip label={`Schedules (${home.schedules.length})`} a11y="Schedules" selected={section === 'schedules'} onPress={() => switchTo('schedules')} />
-        <Chip label={`Timers (${home.timers.length})`} a11y="Timers" selected={section === 'timers'} onPress={() => switchTo('timers')} />
-        <Chip label={`Rules (${home.rules.length})`} a11y="Rules" selected={section === 'rules'} onPress={() => switchTo('rules')} />
-      </ChipRow>
-
-      <View style={{ marginTop: 14 }}>
-        {section === 'scenes' && (
-          <>
+      <View>
+        <CollapsibleSection title="Scenes" count={home.scenes.length}>
+          <View>
             {adding?.section === 'scenes' ? (
               <SceneForm entities={home.entities} busy={commands.busy} onSubmit={add('scene.put', 'Scene saved')} onCancel={() => setAdding(null)} />
             ) : (
@@ -141,11 +135,11 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
                 );
               })}
             </View>
-          </>
-        )}
+          </View>
+        </CollapsibleSection>
 
-        {section === 'schedules' && (
-          <>
+        <CollapsibleSection title="Schedules" count={home.schedules.length}>
+          <View>
             {adding?.section === 'schedules' ? (
               <ScheduleForm entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('schedule.add', 'Schedule saved')} onCancel={() => setAdding(null)} />
             ) : (
@@ -158,11 +152,11 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
                 return card(`s${s.index}`, d.title, d.detail, del('schedule.del', s.index), `schedule ${d.title}`);
               })}
             </View>
-          </>
-        )}
+          </View>
+        </CollapsibleSection>
 
-        {section === 'timers' && (
-          <>
+        <CollapsibleSection title="Timers" count={home.timers.length} initiallyOpen={false}>
+          <View>
             {adding?.section === 'timers' ? (
               <TimerForm entities={home.entities} scenes={home.scenes} busy={commands.busy} onSubmit={add('timer.add', 'Timer saved')} onCancel={() => setAdding(null)} />
             ) : (
@@ -175,11 +169,11 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
                 return card(`t${tm.index}`, d.title, d.detail, del('timer.cancel', tm.index), `timer ${d.title}`);
               })}
             </View>
-          </>
-        )}
+          </View>
+        </CollapsibleSection>
 
-        {section === 'rules' && (
-          <>
+        <CollapsibleSection title="Rules" count={home.rules.length} initiallyOpen={false}>
+          <View>
             {adding?.section === 'rules' ? (
               <RuleEditor entities={home.entities} scenes={home.scenes} hasLocation={!!home.hub?.location} busy={commands.busy} onSubmit={add('rule.add', 'Rule saved')} onCancel={() => setAdding(null)} />
             ) : (
@@ -198,8 +192,8 @@ export function AutomationsScreen({ home, commands }: { home: HomeState; command
                 );
               })}
             </View>
-          </>
-        )}
+          </View>
+        </CollapsibleSection>
       </View>
     </ScrollView>
   );
