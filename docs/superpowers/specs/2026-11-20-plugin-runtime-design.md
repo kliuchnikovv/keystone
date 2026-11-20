@@ -205,3 +205,18 @@ plugins/tuya-local/          (отдельное дерево сборки, WASM
 ## 10. Критерий «готово» для Проекта 1
 
 На живом S3 N16R8: реальный Tuya-девайс установлен как сайдлоад-плагин, виден в приложении как сущность, включается/выключается из приложения и из правила, STATE возвращается; принудительно упавший плагин (`-DKS_PLUGIN_CRASH`) переводится в faulted, а хаб (Zigbee/Matter/Wi-Fi) продолжает работать без деградации; host-тесты менеджера/манифеста/конфига зелёные; `core/` остаётся радио-свободным.
+
+---
+
+## 11. ABI заморожен для Плана 1b (итог Плана 1a)
+
+Ядро рантайма плагинов собрано и host-тестировано (`core/include/core/plugin_*.hpp`, портабельно, без радио/ESP-IDF). Прошивочный план 1b реализует `PluginEngine` под эти фиксированные типы:
+
+- **ABI-версия:** `core::plugin::kAbiVersion == 1` (`plugin_host_api.hpp`). Манифест обязан её объявить, иначе `AbiIncompatible`.
+- **Ошибки:** `enum class KsErr { Ok=0, Denied, BadArg, NoMem, NotFound, Again, Closed }`.
+- **Капабилити:** `enum class Cap : uint16_t { NetLocal, BusRead, BusCommand, EntityDeclare, Kv, Aes, Json, Timer, Log }` + `CapSet`.
+- **Движок (`plugin_engine.hpp`):** `PluginEngine { set_host_callbacks; load; start; stop; deliver_command(…, uint16_t seq); deliver_state; unload }` и `PluginHostCallbacks { ctx; declare_entity; publish_state; send_command(…, uint16_t seq); on_fault }`. `seq` — `uint16_t` (совпадает с `hubproto::Header.seq`).
+- **Менеджер (`plugin_manager.hpp`):** плагинные сущности — виртуальные, за псевдо-чипом `kChipBase=0xC0 + slot`; id выдаются монотонно от `kEntityBase=0xE000` (освобождённые при падении не переиспользуются); `kQuarantineThreshold=3`.
+- **Границы безопасности, уже закрытые в 1a:** сетевой egress — только локальная подсеть, с запретом самого хаба/сети/броадкаста/loopback (SSRF); манифест отклоняет дубликаты ключей (декодированное сравнение); плагин не может командовать чужой плагинной сущностью; `stop` не снимает карантин.
+
+Что 1b приносит поверх этого: WAMR-реализацию `PluginEngine`, host-импорты (сокеты только-локально, таймер, KV→NVS, log, aes, json), кооперативный executor с watchdog на колбэк, раздел LittleFS `plugins`, dev-загрузку, и сам Tuya-local `.wasm` (его схема конфига — в плагине, ядро хранит непрозрачный blob).
