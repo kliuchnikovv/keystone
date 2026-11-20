@@ -69,6 +69,7 @@ class FakePluginEngine : public core::plugin::PluginEngine {
   }
   KsErr start(core::plugin::PluginInstance*) override {
     ++started;
+    if (fault_on_start) return KsErr::NoMem;  // plugin trapped in on_start
     if (declare_desc != nullptr) {
       declared_eid =
           cb_.declare_entity(cb_.ctx, declare_desc, declare_len);
@@ -85,6 +86,10 @@ class FakePluginEngine : public core::plugin::PluginEngine {
       cb_.publish_state(cb_.ctx, pub_entity, pub_attr, pub_val.data(),
                         pub_val.size());
     }
+    if (send_on_command) {
+      last_send_result = cb_.send_command(cb_.ctx, send_entity, send_attr,
+                                          send_val.data(), send_val.size(), 1);
+    }
     return KsErr::Ok;
   }
   KsErr deliver_state(core::plugin::PluginInstance*, std::uint16_t,
@@ -95,12 +100,17 @@ class FakePluginEngine : public core::plugin::PluginEngine {
   void unload(core::plugin::PluginInstance*) override { ++unloaded; }
 
   // scripted behaviour
+  bool fault_on_start = false;
   const std::uint8_t* declare_desc = nullptr;
   std::size_t declare_len = 0;
   std::uint16_t declared_eid = 0;
   bool publish_on_command = false;
   std::uint16_t pub_entity = 0, pub_attr = 0;
   std::vector<std::uint8_t> pub_val;
+  bool send_on_command = false;
+  std::uint16_t send_entity = 0, send_attr = 0;
+  std::vector<std::uint8_t> send_val;
+  KsErr last_send_result = KsErr::Ok;
 
   struct Cmd {
     std::uint16_t entity;
@@ -216,4 +226,145 @@ TEST_CASE("plugin manager: declare colliding id is renumbered, registry intact")
   const auto* original = reg.find(Manager::kEntityBase);
   REQUIRE(original != nullptr);
   CHECK(original->chip_id == 1);
+}
+
+TEST_CASE("plugin manager: fault on first on_start leaves hub intact") {
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  // An unrelated entity owned by a real chip is already on the hub.
+  hp::AttrDecl a{0x01, hp::ValueType::Bool, hp::kFlagWritable};
+  REQUIRE(reg.declare_virtual(/*chip_id=*/1, 0x0100, hp::DeviceType::Switch, &a,
+                              1));
+
+  engine.fault_on_start = true;  // traps before declaring anything
+
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  CHECK(mgr.start("tuya") != KsErr::Ok);
+  CHECK(mgr.state("tuya") == PluginState::Faulted);
+
+  // No plugin entity was half-registered; the hub's own entity is intact.
+  CHECK(reg.size() == 1);
+  CHECK(reg.find(0x0100) != nullptr);
+}
+
+TEST_CASE("plugin manager: repeated faults quarantine") {
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  engine.fault_on_start = true;
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+
+  for (int i = 0; i < Manager::kQuarantineThreshold; ++i) {
+    CHECK(mgr.start("tuya") != KsErr::Ok);
+  }
+
+  // Quarantined: refused without even invoking the engine again.
+  const int before = engine.started;
+  CHECK(mgr.start("tuya") == KsErr::Denied);
+  CHECK(engine.started == before);
+  CHECK(mgr.state("tuya") == PluginState::Faulted);
+}
+
+TEST_CASE("plugin manager: stop does not lift a quarantine") {
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  engine.fault_on_start = true;
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  for (int i = 0; i < Manager::kQuarantineThreshold; ++i) mgr.start("tuya");
+
+  mgr.stop("tuya");  // must not clear the Faulted state / un-quarantine
+  CHECK(mgr.state("tuya") == PluginState::Faulted);
+  CHECK(mgr.start("tuya") == KsErr::Denied);
+}
+
+TEST_CASE("plugin manager: a freed entity id is not reused after a fault") {
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  std::uint8_t desc[32];
+  const std::size_t dn = make_switch_declare(0x0001, desc, sizeof(desc));
+  engine.declare_desc = desc;
+  engine.declare_len = dn;
+
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const std::uint16_t first = engine.declared_eid;
+  REQUIRE(first != 0);
+
+  // The plugin faults: its entity is withdrawn from the registry.
+  mgr.on_plugin_fault("tuya", "boom");
+  CHECK(reg.find(first) == nullptr);
+
+  // A second plugin declares — it must NOT get the just-freed id back (a stale
+  // rule/app reference to `first` must never resolve to a different device).
+  core::plugin::Manifest m2{};
+  std::strcpy(m2.id, "tuya2");
+  m2.abi = core::plugin::kAbiVersion;
+  m2.caps.add(Cap::EntityDeclare);
+  REQUIRE(mgr.install(m2, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya2") == KsErr::Ok);
+  const std::uint16_t second = engine.declared_eid;
+  CHECK(second != 0);
+  CHECK(second != first);  // monotonic: the freed id is not handed out again
+}
+
+TEST_CASE("plugin manager: a plugin cannot command another plugin's entity") {
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  std::uint8_t desc[32];
+  const std::size_t dn = make_switch_declare(0x0001, desc, sizeof(desc));
+  engine.declare_desc = desc;
+  engine.declare_len = dn;
+
+  core::plugin::Manifest m{};
+  std::strcpy(m.id, "tuya");
+  m.abi = core::plugin::kAbiVersion;
+  m.caps.add(Cap::EntityDeclare);
+  m.caps.add(Cap::BusCommand);
+  // allow-list names an id in the plugin range (another plugin's / a freed id).
+  m.allow[0] = Manager::kEntityBase + 50;
+  m.allow_n = 1;
+
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const std::uint16_t eid = engine.declared_eid;
+
+  // On the next command, the plugin tries to command a plugin-range entity it
+  // does not own — it must be denied even though it is on the allow-list.
+  engine.send_on_command = true;
+  engine.send_entity = Manager::kEntityBase + 50;
+  engine.send_attr = 0x01;
+  engine.send_val = {1};
+
+  hp::Command cmd{eid, 0x01, hp::Value::make_bool(true)};
+  std::uint8_t cbuf[16];
+  auto cr = hp::encode_command(cmd, cbuf, sizeof(cbuf));
+  hp::Header ch{};
+  ch.type = hp::MsgType::Command;
+  ch.entity_id = eid;
+  bus.deliver(ch, cbuf, cr.len);
+
+  CHECK(engine.last_send_result == KsErr::Denied);
 }

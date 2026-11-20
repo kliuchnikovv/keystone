@@ -39,6 +39,9 @@ class PluginManager {
   static constexpr std::uint8_t kChipBase = 0xC0;
   static constexpr std::uint16_t kEntityBase = 0xE000;
   static constexpr std::size_t kMaxAttrs = 8;
+  // Consecutive faults before a plugin is quarantined (no auto/ manual restart),
+  // mirroring ChipMonitor's flapping detection. A clean start resets the count.
+  static constexpr int kQuarantineThreshold = 3;
 
   PluginManager(PluginEngine& engine, Bus& bus, Registry& reg) noexcept
       : engine_(engine), bus_(bus), reg_(reg) {
@@ -80,11 +83,16 @@ class PluginManager {
   KsErr start(const char* id) noexcept {
     Slot* s = find(id);
     if (s == nullptr) return KsErr::NotFound;
-    if (s->state == PluginState::Faulted) return KsErr::Denied;  // quarantine
+    if (s->fault_count >= kQuarantineThreshold) return KsErr::Denied;  // quarantined
     active_ = s;
     const KsErr r = engine_.start(s->inst);
     active_ = nullptr;
-    if (r == KsErr::Ok) s->state = PluginState::Started;
+    if (r == KsErr::Ok) {
+      s->state = PluginState::Started;
+      s->fault_count = 0;  // a clean start clears the consecutive-fault count
+    } else {
+      fault(s);  // a failed start is a fault: Faulted, entities withdrawn
+    }
     return r;
   }
 
@@ -92,12 +100,22 @@ class PluginManager {
     Slot* s = find(id);
     if (s == nullptr) return;
     engine_.stop(s->inst);
-    s->state = PluginState::Stopped;
+    // A quarantine is not lifted by stopping — that stays Faulted until the
+    // plugin is reinstalled. Only a running/installed plugin becomes Stopped.
+    if (s->state != PluginState::Faulted) s->state = PluginState::Stopped;
   }
 
   PluginState state(const char* id) const noexcept {
     const Slot* s = find(id);
     return s != nullptr ? s->state : PluginState::Installed;
+  }
+
+  // Fault a plugin by id from outside an engine call (e.g. a firmware watchdog
+  // that caught a callback over its time budget).
+  void on_plugin_fault(const char* id, const char* reason) noexcept {
+    (void)reason;
+    Slot* s = find(id);
+    if (s != nullptr) fault(s);
   }
 
  private:
@@ -179,8 +197,15 @@ class PluginManager {
                      std::uint16_t seq) noexcept {
     if (active_ == nullptr) return KsErr::Denied;
     if (!active_->caps.has(Cap::BusCommand)) return KsErr::Denied;
-    if (!entity_allowed(active_->access, entity, owns(active_, entity))) {
-      return KsErr::Denied;
+    const bool own = owns(active_, entity);
+    if (!own) {
+      // A plugin may command its own entities, or allow-listed entities OUTSIDE
+      // the plugin range (real devices). It may never reach into the plugin
+      // range — that would be another plugin's entity, or a freed/tombstoned id.
+      if (entity >= kEntityBase) return KsErr::Denied;
+      if (!entity_allowed(active_->access, entity, /*is_owned=*/false)) {
+        return KsErr::Denied;
+      }
     }
     if (n > 4) return KsErr::BadArg;
     std::uint8_t buf[3 + 4];
@@ -259,8 +284,12 @@ class PluginManager {
       if (s.in_use && owns(&s, entity)) return &s;
     return nullptr;
   }
+  // Hand out a fresh plugin entity id. MONOTONIC: ids freed by a fault are
+  // never reused (tombstoned), so a stale rule/app reference to a removed
+  // plugin entity can never resolve to a different device later.
   std::uint16_t alloc_entity_id() noexcept {
-    for (std::uint16_t id = kEntityBase; id < 0xFFFE; ++id) {
+    while (next_entity_id_ < 0xFFFE) {
+      const std::uint16_t id = next_entity_id_++;
       if (reg_.find(id) == nullptr) return id;
     }
     return 0;
@@ -271,6 +300,7 @@ class PluginManager {
   Registry& reg_;
   Slot slots_[MaxPlugins];
   Slot* active_ = nullptr;
+  std::uint16_t next_entity_id_ = kEntityBase;  // monotonic, never rewinds
 };
 
 }  // namespace core::plugin
