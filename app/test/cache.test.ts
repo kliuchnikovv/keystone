@@ -38,7 +38,7 @@ describe('the cache format', () => {
     expect(s.stale).toBe(true);
     expect(s.savedAt).toBe(1700000000000);
     expect(s.status).toBe('idle');
-    expect(s.entities).toHaveLength(3);
+    expect(s.entities).toHaveLength(defaultEntities().length);
   });
 
   it('a stale state keeps its own moment: writing it again does not make it fresher', () => {
@@ -91,6 +91,6 @@ describe('the cache format', () => {
   it('a state that is not ready is still worth keeping', () => {
     const s = withStatus(liveState(), 'reconnecting');
     const back = decodeCache(encodeCache(s, URL, 1700000000000))!;
-    expect(back.entities).toHaveLength(3);
+    expect(back.entities).toHaveLength(defaultEntities().length);
   });
 });

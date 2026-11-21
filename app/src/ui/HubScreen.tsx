@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { useGeofence, presenceRequest } from '../hooks/useGeofence';
-import type { HubConnection } from '../hooks/useHub';
 import { describeLocation, locationRequest } from '../model/automation';
 import { chipRows, chipSummary } from '../model/health';
 import { locatePhone } from '../native/position';
@@ -10,9 +9,8 @@ import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
 import { Glyph } from './Glyph';
 import { ScreenHeader } from './ScreenHeader';
-import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
+import { HubActionsCard } from './HubCards';
 import { PresenceCard } from './PresenceCard';
-import { WifiCard } from './WifiCard';
 import { radius, useTheme } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
@@ -172,7 +170,7 @@ export function HubSummaryCard({ home, url }: { home: HomeState; url: string }) 
   );
 }
 
-export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, onBack }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; onBack?(): void }) {
+export function HubScreen({ home, url, onChangeHub, commands, onBack }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; onBack?(): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
@@ -205,8 +203,6 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
       />
       <HubSummaryCard home={home} url={url} />
 
-      <WifiCard home={home} commands={commands} />
-      <LocationCard home={home} commands={commands} />
       <PresenceCard home={home} commands={commands} />
       <MatterBridgeCard home={home} />
 
@@ -230,8 +226,6 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
         );
       })}
 
-      <FirmwareCard home={home} client={client} commands={commands} />
-      <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} {...(onUseRelay ? { onUseRelay } : {})} />
       <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
 
       <Pressable accessibilityRole="button" accessibilityLabel="Change hub" onPress={onChangeHub} style={[styles.change, { borderColor: t.border }]}>

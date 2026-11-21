@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { HubClient, PinUnsupportedError, type HubClientOptions } from '../src/protocol/client';
 import { normalizeFingerprint, sameFingerprint } from '../src/protocol/fingerprint';
 import { fetchFingerprint, pinnedSocketFactory } from '../tools/pinned-socket';
-import { MockHub } from '../tools/mock-hub/hub';
+import { MockHub, defaultEntities } from '../tools/mock-hub/hub';
 
 // A throw-away self-signed identity, made with the same recipe as scripts/gen-hub-cert.sh.
 let dir: string;
@@ -88,7 +88,7 @@ describe('certificate pinning over wss', () => {
     const c = client({ pinnedFingerprint: identity.fingerprint });
     c.connect();
     await until(() => c.getSnapshot().status === 'ready', 'ready over TLS');
-    expect(c.getSnapshot().entities).toHaveLength(3);
+    expect(c.getSnapshot().entities).toHaveLength(defaultEntities().length);
     expect(hub.helloCount).toBe(1);
   });
 

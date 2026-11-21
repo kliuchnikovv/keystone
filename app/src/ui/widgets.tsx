@@ -7,7 +7,7 @@ import { Text, View } from './kit';
 import { attrOf, deviceTitle, primarySwitch, readingAttrs } from '../model/devices';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { formatValue } from '../model/format';
-import { formatTemperature } from '../model/temperature';
+import { formatTemperature, type TemperatureUnit } from '../model/temperature';
 import type { Attr, Entity } from '../protocol/messages';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
@@ -109,6 +109,17 @@ export function headlineOf(entity: Entity): string | null {
   const readings = readingAttrs(entity);
   const head = readings.first ?? readings.rest[0];
   return head ? formatValue(head) : null;
+}
+
+/** The climate reading the mockup shows: «23.4° · 58 %» on one line.
+ *  Null when the device is not a temperature/humidity sensor. */
+export function climateReading(entity: Entity, unit: TemperatureUnit = 'C'): string | null {
+  const temp = attrOf(entity, 'temperature');
+  if (temp === undefined) return null;
+  const humid = attrOf(entity, 'humidity');
+  const t = formatTemperature(Number(temp.value) / 10, unit);
+  if (humid === undefined) return t;
+  return `${t} · ${Math.round(Number(humid.value) / 10)} %`;
 }
 
 /** The small glyph + value line under a sensor's reading. */

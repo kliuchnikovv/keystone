@@ -2,7 +2,7 @@
 // The device card: what is on glows gold, what is off is quiet.
 // The rooms sit at the top as chips.
 import './setup-dom';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Attr, Entity } from '../src/protocol/messages';
 import { DeviceWidget } from '../src/ui/DeviceWidget';
@@ -51,6 +51,32 @@ describe('the device card', () => {
     const card = el.parentElement?.getAttribute('style') ?? '';
     expect(card).not.toContain('rgba(207, 159, 51, 0.55)');
     expect(card).toContain('rgb(232, 225, 208)'); // the plain hairline
+  });
+});
+
+describe('the climate sensor card', () => {
+  it('shows the temperature and the humidity on one line', () => {
+    const sensor: Entity = {
+      id: 0x300,
+      name: 'Climate',
+      room: 'Bedroom',
+      chip: 1,
+      device: 'sensor',
+      attrs: [
+        attr(0x10, 'temperature', 'i16', 234),
+        attr(0x11, 'humidity', 'u16', 580),
+        attr(0x1f, 'battery', 'u8', 72),
+      ],
+    };
+    render(
+      <ThemeProvider mode="light">
+        <DeviceWidget entity={sensor} status="online" reachable onOpen={() => {}} />
+      </ThemeProvider>,
+    );
+    const card = screen.getByLabelText('Device Climate');
+    expect(within(card).getByText('23.4 °C · 58 %')).toBeTruthy();
+    // The battery is under it.
+    expect(within(card).getByText('72 %')).toBeTruthy();
   });
 });
 

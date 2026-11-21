@@ -18,7 +18,7 @@ import { ReadingsGrid, gridReadings } from './ReadingsGrid';
 import { ThermostatRing } from './ThermostatRing';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
-import { Extras, batteryOf, colorOf, headlineOf, subtitleOf } from './widgets';
+import { Extras, batteryOf, climateReading, colorOf, headlineOf, subtitleOf } from './widgets';
 
 export interface DeviceWidgetProps {
   entity: Entity;
@@ -129,11 +129,12 @@ export function DeviceWidget({
 
   // A sensor has no switch: it shows its reading big, and the rest small.
   if (sw === undefined) {
-    const headline = headlineOf(entity);
-    const temp = attrOf(entity, 'temperature');
-    const big =
-      temp !== undefined ? formatTemperature(Number(temp.value) / 10, temperatureUnit) : headline;
+    // A sensor only reads. The card shows what it reads, the way the mockup
+    // does: the icon on top, the name, then the reading in big figures.
+    const climate = climateReading(entity, temperatureUnit);
+    const headline = climate ?? headlineOf(entity);
     const humidity = attrOf(entity, 'humidity');
+    const battery = batteryOf(entity);
     return (
       <View style={card}>
         <Pressable
@@ -147,22 +148,31 @@ export function DeviceWidget({
           onPressOut={press.onPressOut}
           style={[styles.inner, styles.sensor, down && styles.pressed, held && styles.pressedHeld]}
         >
-          <View style={styles.sensorTop}>
-            {tile}
-            {big !== null && (
-              <Text style={[styles.bigReading, { color: t.text }]} numberOfLines={1}>
-                {big}
-              </Text>
-            )}
-          </View>
+          {tile}
           <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
             {displayName}
           </Text>
-          {gridReadings(entity).length > 1 ? (
-            <ReadingsGrid entity={entity} />
-          ) : (
-            <Extras entity={entity} />
+          {headline !== null && (
+            <Text style={[styles.bigReading, { color: t.text }]} numberOfLines={1}>
+              {headline}
+            </Text>
           )}
+          {battery !== null && (
+            <View style={styles.battery}>
+              <Glyph name="battery" size={12} color={t.muted} />
+              <Text style={[styles.batteryText, { color: t.muted }]}>{battery} %</Text>
+            </View>
+          )}
+          {climate === null && gridReadings(entity).length > 1 ? (
+            <ReadingsGrid entity={entity} />
+          ) : null}
+          {climate === null && battery === null ? <Extras entity={entity} /> : null}
+          {humidity !== undefined && climate === null ? (
+            <View style={styles.battery}>
+              <Glyph name="humidity" size={12} color={t.muted} />
+              <Text style={[styles.batteryText, { color: t.muted }]}>{formatValue(humidity)}</Text>
+            </View>
+          ) : null}
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
@@ -281,14 +291,13 @@ const styles = StyleSheet.create({
   pressed: { transform: [{ scale: 0.97 }] },
   pressedHeld: { transform: [{ scale: 0.95 }] },
   row: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  sensor: { alignItems: 'flex-start', gap: 6 },
-  sensorTop: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch' },
+  sensor: { alignItems: 'flex-start', gap: 6, justifyContent: 'flex-start' },
   thermoHead: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   tile: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, minWidth: 0, gap: 2 },
   name: { fontSize: 14.5, fontWeight: '600' },
   sub: { fontSize: 12.5, fontWeight: '500' },
-  bigReading: { fontSize: 20, fontWeight: '700', letterSpacing: -0.4 },
+  bigReading: { fontSize: 21, fontWeight: '700', letterSpacing: -0.5 },
   battery: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   batteryText: { fontSize: 11, fontWeight: '500' },
   grip: { fontSize: 15, fontWeight: '700' },

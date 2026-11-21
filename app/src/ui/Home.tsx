@@ -152,10 +152,7 @@ export function HomeBody({
       url={settings.url}
       onChangeHub={onChangeHub}
       commands={commands}
-      client={client}
       onBack={() => setSub('none')}
-      {...(onTokenChange ? { onTokenChange } : {})}
-      {...(onUseRelay ? { onUseRelay } : {})}
     />
   );
 
