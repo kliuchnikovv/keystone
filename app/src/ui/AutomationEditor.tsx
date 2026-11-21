@@ -1,17 +1,18 @@
 // Creating an automation: the chooser and the three forms.
 //
 // The Automations tab and the «+» menu both come here — the tab opens a form
-// straight away, the menu asks what kind first.
+// straight away, the menu asks what kind first. A scene is an automation too
+// (it remembers what the devices are doing), so it lives here as well.
 import { useState } from 'react';
 import type { Commands } from '../hooks/useCommands';
 import { suggestionsFor, type Suggestion } from '../model/suggestions';
 import type { RuleDraft } from '../model/automation';
 import type { HomeState } from '../protocol/store';
 import { AutomationChooser } from './AutomationChooser';
-import { ScheduleForm, TimerForm } from './AutomationForms';
+import { ScheduleForm, SceneForm, TimerForm } from './AutomationForms';
 import { RuleEditor } from './RuleEditor';
 
-export type AutomationKind = 'schedule' | 'timer' | 'rule';
+export type AutomationKind = 'schedule' | 'timer' | 'rule' | 'scene';
 
 export interface AutomationEditorProps {
   home: HomeState;
@@ -57,6 +58,16 @@ export function AutomationEditor({ home, commands, initial = null, initialDraft 
         scenes={home.scenes}
         busy={commands.busy}
         onSubmit={submit('timer.add', 'Timer saved')}
+        onCancel={onClose}
+      />
+    );
+  }
+  if (kind === 'scene') {
+    return (
+      <SceneForm
+        entities={home.entities}
+        busy={commands.busy}
+        onSubmit={submit('scene.put', 'Scene saved')}
         onCancel={onClose}
       />
     );

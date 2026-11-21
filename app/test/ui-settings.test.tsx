@@ -24,6 +24,10 @@ function renderSettings(over: Partial<Parameters<typeof SettingsScreen>[0]> = {}
     mode: 'light' as const,
     onOpenHub: vi.fn(),
     onOpenHistory: vi.fn(),
+    onOpenWifi: vi.fn(),
+    onOpenRemoteAccess: vi.fn(),
+    onOpenFirmware: vi.fn(),
+    onOpenLocation: vi.fn(),
     onOpenDisplay: vi.fn(),
     onOpenPlugins: vi.fn(),
     ...over,
@@ -65,6 +69,27 @@ describe('the settings screen', () => {
     expect(props.onOpenDisplay).toHaveBeenCalled();
     fireEvent.click(screen.getByLabelText('Plugins'));
     expect(props.onOpenPlugins).toHaveBeenCalled();
+  });
+
+  it('every hub row opens its own screen, not the same one', () => {
+    const props = renderSettings();
+    const doors: [string, keyof typeof props][] = [
+      ['Hub & health', 'onOpenHub'],
+      ['History', 'onOpenHistory'],
+      ['Wi-Fi', 'onOpenWifi'],
+      ['Remote access', 'onOpenRemoteAccess'],
+      ['Firmware updates', 'onOpenFirmware'],
+      ['Location', 'onOpenLocation'],
+    ];
+    for (const [label, door] of doors) {
+      fireEvent.click(screen.getByLabelText(label));
+      expect(props[door]).toHaveBeenCalled();
+      // Nothing else opened: each door is its own.
+      const others = doors.filter(([, d]) => d !== door);
+      for (const [, d] of others) expect(props[d]).not.toHaveBeenCalled();
+      // Reset for the next door.
+      for (const [, d] of doors) (props[d] as ReturnType<typeof vi.fn>).mockClear();
+    }
   });
 
   it('the theme picker is not here any more', () => {

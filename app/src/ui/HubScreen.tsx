@@ -16,7 +16,7 @@ import { WifiCard } from './WifiCard';
 import { radius, useTheme } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
-function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
+export function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
   const [editing, setEditing] = useState(false);
   const [lat, setLat] = useState('');
@@ -83,7 +83,7 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
 // In a production build this would come from the hub via the protocol.
 const MATTER_SETUP_CODE = '3497-0112-332';
 
-function MatterBridgeCard({ home }: { home: HomeState }) {
+export function MatterBridgeCard({ home }: { home: HomeState }) {
   const t = useTheme();
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
   // thread-c6 is chip 0x02
@@ -136,6 +136,42 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   );
 }
 
+/** The hub's own card: who it is, where it is, what it is running. */
+export function HubSummaryCard({ home, url }: { home: HomeState; url: string }) {
+  const t = useTheme();
+  const hub = home.hub;
+  const tone = { good: t.good, warn: t.warn, bad: t.bad };
+  // One dot for the whole hub: healthy, degraded (a chip is quiet) or offline.
+  const hubTone = home.status !== 'ready' ? 'bad' : home.chips.some((c) => c.status !== 'ready') ? 'warn' : 'good';
+  const hubStatus = hubTone === 'bad' ? 'offline' : hubTone === 'warn' ? 'degraded' : 'healthy';
+  return (
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
+      <View style={styles.hubHead}>
+        <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
+        <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
+        <Text style={{ color: tone[hubTone], fontWeight: '600', fontSize: 12 }}>{hubStatus}</Text>
+      </View>
+      <View style={styles.kv}>
+        <Text style={{ color: t.muted }}>{url}</Text>
+      </View>
+      {hub && (
+        <>
+          <View style={styles.kv}>
+            <Text style={{ color: t.muted }}>Firmware</Text>
+            <Text style={{ color: t.text, fontWeight: '600' }}>{hub.fw}</Text>
+          </View>
+          <View style={styles.kv}>
+            <Text style={{ color: t.muted }}>Clock</Text>
+            <Text style={{ color: t.text, fontWeight: '600' }} numberOfLines={1}>
+              {hub.synced ? `${new Date(hub.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${hub.tz}` : 'not synced'}
+            </Text>
+          </View>
+        </>
+      )}
+    </View>
+  );
+}
+
 export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, onBack }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; onBack?(): void }) {
   const t = useTheme();
   const hub = home.hub;
@@ -167,30 +203,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
             }
           : {})}
       />
-      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
-        <View style={styles.hubHead}>
-          <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
-          <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
-          <Text style={{ color: tone[hubTone], fontWeight: '600', fontSize: 12 }}>{hubStatus}</Text>
-        </View>
-        <View style={styles.kv}>
-          <Text style={{ color: t.muted }}>{url}</Text>
-        </View>
-        {hub && (
-          <>
-            <View style={styles.kv}>
-              <Text style={{ color: t.muted }}>Firmware</Text>
-              <Text style={{ color: t.text, fontWeight: '600' }}>{hub.fw}</Text>
-            </View>
-            <View style={styles.kv}>
-              <Text style={{ color: t.muted }}>Clock</Text>
-              <Text style={{ color: t.text, fontWeight: '600' }} numberOfLines={1}>
-                {hub.synced ? `${new Date(hub.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${hub.tz}` : 'not synced'}
-              </Text>
-            </View>
-          </>
-        )}
-      </View>
+      <HubSummaryCard home={home} url={url} />
 
       <WifiCard home={home} commands={commands} />
       <LocationCard home={home} commands={commands} />

@@ -17,6 +17,7 @@ import { FindDevicesScreen } from './FindDevicesScreen';
 import { Glyph, type GlyphName } from './Glyph';
 import { HistoryScreen } from './HistoryScreen';
 import { HubScreen } from './HubScreen';
+import { FirmwareScreen, LocationScreen, RemoteAccessScreen, WifiScreen } from './HubScreens';
 import { PluginsScreen } from './PluginsScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { useTheme, type ThemeMode } from './theme';
@@ -30,8 +31,18 @@ const TABS: { id: Tab; label: string; glyph: GlyphName }[] = [
   { id: 'settings', label: 'Settings', glyph: 'settings' },
 ];
 
-/** The screen under the dock: the tab, or one of the sub-screens Settings opens. */
-export type SubScreen = 'none' | 'hub' | 'history' | 'display' | 'plugins';
+/** The screen under the dock: the tab, or one of the sub-screens Settings opens.
+ *  Each one is a door of its own — the hub's affairs do not share a screen. */
+export type SubScreen =
+  | 'none'
+  | 'hub'
+  | 'history'
+  | 'wifi'
+  | 'remoteAccess'
+  | 'firmware'
+  | 'location'
+  | 'display'
+  | 'plugins';
 
 export interface HomeProps {
   settings: Settings;
@@ -97,8 +108,8 @@ export function HomeBody({
   const [finding, setFinding] = useState(false);
   // The «+» menu: what can be added.
   const [adding, setAdding] = useState(false);
-  // What the «+» menu opened: a device search, a new automation, a new scene.
-  const [branch, setBranch] = useState<'none' | 'device' | 'automation'>('none');
+  // What the «+» menu opened: a device search, a new scene, a new automation.
+  const [branch, setBranch] = useState<'none' | 'device' | 'scene' | 'automation'>('none');
   // The app's own preferences: the units it speaks and what Home shows.
   const prefsStore = useMemo(() => createPrefsStore(defaultStore), []);
   const [prefs, setPrefs] = useState<Prefs>({ temperature: 'C', showScenes: true, groupByRoom: true });
@@ -115,15 +126,16 @@ export function HomeBody({
 
   // Android has no back button in the app: the hardware one must close the screen.
   useEffect(() => {
-    if (!finding && sub === 'none') return;
+    if (!finding && sub === 'none' && branch === 'none') return;
     if (Platform.OS !== 'android') return;
     const sub2 = BackHandler.addEventListener('hardwareBackPress', () => {
       if (finding) setFinding(false);
+      else if (branch !== 'none') setBranch('none');
       else setSub('none');
       return true;
     });
     return () => sub2.remove();
-  }, [finding, sub]);
+  }, [finding, sub, branch]);
 
   // What the banner offers: a retry when the socket is gone, a way back to Connect when
   // the token or the certificate is the problem.
@@ -148,7 +160,11 @@ export function HomeBody({
   );
 
   const content =
-    branch === 'automation' ? (
+    branch === 'device' ? (
+      <FindDevicesScreen home={home} commands={commands} onClose={() => setBranch('none')} />
+    ) : branch === 'scene' ? (
+      <AutomationEditor home={home} commands={commands} initial="scene" onClose={() => setBranch('none')} />
+    ) : branch === 'automation' ? (
       <AutomationEditor home={home} commands={commands} onClose={() => setBranch('none')} />
     ) : finding ? (
       <FindDevicesScreen home={home} commands={commands} onClose={() => setFinding(false)} />
@@ -156,6 +172,20 @@ export function HomeBody({
       hubScreen
     ) : sub === 'history' ? (
       <HistoryScreen home={home} client={client} onBack={() => setSub('none')} />
+    ) : sub === 'wifi' ? (
+      <WifiScreen home={home} commands={commands} onBack={() => setSub('none')} />
+    ) : sub === 'remoteAccess' ? (
+      <RemoteAccessScreen
+        client={client}
+        commands={commands}
+        onBack={() => setSub('none')}
+        {...(onTokenChange ? { onTokenChange } : {})}
+        {...(onUseRelay ? { onUseRelay } : {})}
+      />
+    ) : sub === 'firmware' ? (
+      <FirmwareScreen home={home} client={client} commands={commands} onBack={() => setSub('none')} />
+    ) : sub === 'location' ? (
+      <LocationScreen home={home} commands={commands} onBack={() => setSub('none')} />
     ) : sub === 'display' ? (
       <DisplayScreen
         mode={mode ?? 'system'}
@@ -180,6 +210,10 @@ export function HomeBody({
         mode={mode}
         onOpenHub={() => setSub('hub')}
         onOpenHistory={() => setSub('history')}
+        onOpenWifi={() => setSub('wifi')}
+        onOpenRemoteAccess={() => setSub('remoteAccess')}
+        onOpenFirmware={() => setSub('firmware')}
+        onOpenLocation={() => setSub('location')}
         onOpenDisplay={() => setSub('display')}
         onOpenPlugins={() => setSub('plugins')}
       />
@@ -199,14 +233,14 @@ export function HomeBody({
           <Text style={{ color: t.bg, fontWeight: '600' }}>{commands.message}</Text>
         </Pressable>
       )}
-      {!finding && sub === 'none' && (
+      {!finding && sub === 'none' && branch === 'none' && (
         <Dock tab={tab} onTab={setTab} onAdd={() => setAdding(true)} />
       )}
       <AddMenu
         visible={adding}
         onClose={() => setAdding(false)}
         onDevice={() => setBranch('device')}
-        onScene={() => setTab('automations')}
+        onScene={() => setBranch('scene')}
         onAutomation={() => setBranch('automation')}
       />
     </SafeAreaView>

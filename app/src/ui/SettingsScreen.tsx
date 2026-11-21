@@ -12,9 +12,13 @@ export interface SettingsScreenProps {
   home: HomeState;
   /** The theme the app wears — the Display screen changes it. */
   mode?: ThemeMode;
-  /** The sub-screens Settings opens. */
+  /** The sub-screens Settings opens — one door per thing about the hub. */
   onOpenHub(): void;
   onOpenHistory(): void;
+  onOpenWifi(): void;
+  onOpenRemoteAccess(): void;
+  onOpenFirmware(): void;
+  onOpenLocation(): void;
   onOpenDisplay?(): void;
   onOpenPlugins?(): void;
 }
@@ -79,6 +83,10 @@ export function SettingsScreen({
   mode,
   onOpenHub,
   onOpenHistory,
+  onOpenWifi,
+  onOpenRemoteAccess,
+  onOpenFirmware,
+  onOpenLocation,
   onOpenDisplay,
   onOpenPlugins,
 }: SettingsScreenProps) {
@@ -128,12 +136,12 @@ export function SettingsScreen({
       <Text style={[styles.label, { color: t.muted }]}>HUB</Text>
       <SettingsRow glyph="hub" label="Hub & health" value={chipValue} onPress={onOpenHub} a11y="Hub & health" />
       <SettingsRow glyph="history" label="History" onPress={onOpenHistory} a11y="History" />
-      <SettingsRow glyph="wifi" label="Wi-Fi" value={wifi} onPress={onOpenHub} a11y="Wi-Fi" />
-      <SettingsRow glyph="signal" label="Remote access" onPress={onOpenHub} a11y="Remote access" />
+      <SettingsRow glyph="wifi" label="Wi-Fi" value={wifi} onPress={onOpenWifi} a11y="Wi-Fi" />
+      <SettingsRow glyph="signal" label="Remote access" onPress={onOpenRemoteAccess} a11y="Remote access" />
 
       <Text style={[styles.label, { color: t.muted }]}>DEVICE</Text>
-      <SettingsRow glyph="bolt" label="Firmware updates" onPress={onOpenHub} a11y="Firmware updates" />
-      <SettingsRow glyph="room" label="Location" onPress={onOpenHub} a11y="Location" />
+      <SettingsRow glyph="bolt" label="Firmware updates" onPress={onOpenFirmware} a11y="Firmware updates" />
+      <SettingsRow glyph="room" label="Location" onPress={onOpenLocation} a11y="Location" />
 
       {onOpenPlugins ? (
         <>
