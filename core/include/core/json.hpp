@@ -247,6 +247,7 @@ class BasicJsonReader {
     const char* p = text_ + tok_[t].start;
     const char* e = text_ + tok_[t].end;
     auto emit = [&](unsigned char c) {
+      if (c == 0) return false;  // a decoded NUL would truncate the C string
       if (o + 1 >= cap) return false;
       out[o++] = static_cast<char>(c);
       return true;

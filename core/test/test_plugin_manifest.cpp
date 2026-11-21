@@ -94,6 +94,13 @@ TEST_CASE("plugin manifest: parse, abi check, bad capability") {
           ManifestError::Ok);
   }
 
+  SUBCASE("an id hiding a NUL is rejected, not truncated to a short id") {
+    // "a\u0000b" decodes to a, NUL, b. strlen() would see only "a", so it could
+    // spoof the id "a". A decoded NUL must make the whole value invalid.
+    CHECK(parse("{\"id\":\"a\\u0000b\",\"version\":1,\"abi\":1,\"caps\":[]}",
+                m) != ManifestError::Ok);
+  }
+
   SUBCASE("an over-long id is rejected") {
     CHECK(parse(R"({"id":"abcdefghijklmnopqrstuvwxyz0123456789","version":1,)"
                 R"("abi":1,"caps":[]})",
