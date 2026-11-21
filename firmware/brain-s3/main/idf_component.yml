@@ -1,4 +1,5 @@
 ## IDF Component Manager manifest for the brain. mDNS is a managed component since IDF 6.
+## wasm-micro-runtime lives in firmware/components/wamr (vendored; see scripts/wamr-patches.py).
 dependencies:
   espressif/mdns:
     version: ">=1.9.0"

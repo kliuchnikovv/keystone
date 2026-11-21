@@ -90,6 +90,7 @@
 #include "ota_job.hpp"
 #include "relay_client.hpp"
 #include "status_led.hpp"
+#include "wasm_spike.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
 #if __has_include("wifi_secrets.h")
@@ -5404,6 +5405,10 @@ extern "C" void app_main(void) {
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
+
+  // WAMR spike (wasm-plugin-spike): one-shot bring-up of the interpreter on a
+  // trivial `add(i32,i32)` module. Prints heap deltas and the call result.
+  wasm_spike_run();
 #ifdef KEYSTONE_HAVE_MATTER
   // Every Matter node that joined our fabric earlier comes back here: the bridge re-reads
   // its descriptor and re-declares its entities, so a hub reboot does not lose the devices

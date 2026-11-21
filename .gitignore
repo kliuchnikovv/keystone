@@ -12,6 +12,11 @@ firmware/*/sdkconfig.bak
 firmware/*/sdkconfig.bod
 firmware/*/managed_components/
 firmware/*/managed_components_rootowned/
+firmware/*/managed_components.stale/
+# wasm-plugin-spike: WAMR is vendored into firmware/components/wamr for patching
+# (component manager re-downloads managed/ on every reconfigure, losing the
+# patches). Not committed — see scripts/wamr-patches.py to re-materialise it.
+firmware/components/wamr/
 firmware/*/dependencies.lock
 
 # A crash dump read off a co-processor (scripts/flash-thread-c6-matter.sh
