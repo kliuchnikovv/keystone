@@ -39,8 +39,11 @@ class PluginManager {
   static constexpr std::uint8_t kChipBase = 0xC0;
   static constexpr std::uint16_t kEntityBase = 0xE000;
   static constexpr std::size_t kMaxAttrs = 8;
-  // Consecutive faults before a plugin is quarantined (no auto/ manual restart),
-  // mirroring ChipMonitor's flapping detection. A clean start resets the count.
+  // Lifetime faults before a plugin is quarantined (no restart until it is
+  // reinstalled). Counted over the plugin's life and NOT reset by a lucky
+  // start, so a fault/recover/fault loop still reaches the gate. (A windowed
+  // count like ChipMonitor needs an injected clock; the core has none, so v1
+  // uses a lifetime count — see the design doc.)
   static constexpr int kQuarantineThreshold = 3;
 
   PluginManager(PluginEngine& engine, Bus& bus, Registry& reg) noexcept
@@ -72,11 +75,13 @@ class PluginManager {
     s->inst = inst;
     s->caps = m.caps;
     s->chip_id = static_cast<std::uint8_t>(kChipBase + index_of(s));
-    for (std::size_t i = 0; i < m.allow_n && i < Manifest::kMaxAllow; ++i) {
-      s->allow_store[i] = m.allow[i];
-    }
+    // allow_n is clamped even though parse_manifest bounds it — install is a
+    // public entry point and a hand-built Manifest must not read past the array.
+    const std::size_t an =
+        m.allow_n < Manifest::kMaxAllow ? m.allow_n : Manifest::kMaxAllow;
+    for (std::size_t i = 0; i < an; ++i) s->allow_store[i] = m.allow[i];
     s->access.allow = s->allow_store;
-    s->access.allow_n = m.allow_n;
+    s->access.allow_n = an;
     return true;
   }
 
@@ -84,14 +89,18 @@ class PluginManager {
     Slot* s = find(id);
     if (s == nullptr) return KsErr::NotFound;
     if (s->fault_count >= kQuarantineThreshold) return KsErr::Denied;  // quarantined
+    if (s->state == PluginState::Started) return KsErr::Denied;        // already running
     active_ = s;
+    call_faulted_ = false;
     const KsErr r = engine_.start(s->inst);
     active_ = nullptr;
+    if (call_faulted_) {
+      return KsErr::NoMem;  // faulted during on_start; already Faulted & counted
+    }
     if (r == KsErr::Ok) {
-      s->state = PluginState::Started;
-      s->fault_count = 0;  // a clean start clears the consecutive-fault count
+      s->state = PluginState::Started;  // clean start (recovers a prior Faulted)
     } else {
-      fault(s);  // a failed start is a fault: Faulted, entities withdrawn
+      fault(s);  // engine error that on_fault did not already report
     }
     return r;
   }
@@ -100,6 +109,9 @@ class PluginManager {
     Slot* s = find(id);
     if (s == nullptr) return;
     engine_.stop(s->inst);
+    // A stopped plugin leaves no ghost devices behind: withdraw its entities.
+    for (std::size_t i = 0; i < s->entity_n; ++i) reg_.undeclare(s->entities[i]);
+    s->entity_n = 0;
     // A quarantine is not lifted by stopping — that stays Faulted until the
     // plugin is reinstalled. Only a running/installed plugin becomes Stopped.
     if (s->state != PluginState::Faulted) s->state = PluginState::Stopped;
@@ -154,6 +166,7 @@ class PluginManager {
 
   std::uint16_t declare(const std::uint8_t* desc, std::size_t len) noexcept {
     if (active_ == nullptr) return 0;
+    if (active_->state == PluginState::Faulted) return 0;  // no acting after a fault
     if (!active_->caps.has(Cap::EntityDeclare)) return 0;
     if (active_->entity_n >= MaxEntitiesPerPlugin) return 0;
 
@@ -161,24 +174,30 @@ class PluginManager {
     if (!hubproto::decode_declare(desc, len, view)) return 0;
     if (view.attr_count > kMaxAttrs) return 0;
 
-    const std::uint16_t id = alloc_entity_id();
-    if (id == 0) return 0;
+    // Pick a free id WITHOUT committing, so a failed declare does not burn an id
+    // (which would let a plugin exhaust the shared plugin id space).
+    std::uint16_t cand = next_entity_id_;
+    while (cand < 0xFFFE && reg_.find(cand) != nullptr) ++cand;
+    if (cand >= 0xFFFE) return 0;
 
     hubproto::AttrDecl attrs[kMaxAttrs];
     for (std::uint8_t i = 0; i < view.attr_count; ++i) {
       attrs[i] = hubproto::declare_attr_at(view, i);
     }
-    if (!reg_.declare_virtual(active_->chip_id, id, view.device_type, attrs,
+    if (!reg_.declare_virtual(active_->chip_id, cand, view.device_type, attrs,
                               view.attr_count)) {
-      return 0;
+      return 0;  // id not committed; next_entity_id_ unchanged
     }
-    active_->entities[active_->entity_n++] = id;
-    return id;
+    next_entity_id_ = static_cast<std::uint16_t>(cand + 1);  // commit on success
+    active_->entities[active_->entity_n++] = cand;
+    return cand;
   }
 
   KsErr publish_state(std::uint16_t entity, std::uint16_t attr,
                       const std::uint8_t* v, std::size_t n) noexcept {
     if (active_ == nullptr) return KsErr::Denied;
+    if (active_->state == PluginState::Faulted) return KsErr::Denied;
+    if (attr > 0xFF) return KsErr::BadArg;  // attr id is a u8; 0x0170 must not alias 0x70
     if (!owns(active_, entity)) return KsErr::Denied;  // only its own entities
     hubproto::ValueType vt{};
     if (!reg_.value_type_of(entity, static_cast<std::uint8_t>(attr), vt)) {
@@ -195,30 +214,19 @@ class PluginManager {
   KsErr send_command(std::uint16_t entity, std::uint16_t attr,
                      const std::uint8_t* v, std::size_t n,
                      std::uint16_t seq) noexcept {
-    if (active_ == nullptr) return KsErr::Denied;
-    if (!active_->caps.has(Cap::BusCommand)) return KsErr::Denied;
-    const bool own = owns(active_, entity);
-    if (!own) {
-      // A plugin may command its own entities, or allow-listed entities OUTSIDE
-      // the plugin range (real devices). It may never reach into the plugin
-      // range — that would be another plugin's entity, or a freed/tombstoned id.
-      if (entity >= kEntityBase) return KsErr::Denied;
-      if (!entity_allowed(active_->access, entity, /*is_owned=*/false)) {
-        return KsErr::Denied;
-      }
-    }
-    if (n > 4) return KsErr::BadArg;
-    std::uint8_t buf[3 + 4];
-    buf[0] = static_cast<std::uint8_t>(entity & 0xFF);
-    buf[1] = static_cast<std::uint8_t>(entity >> 8);
-    buf[2] = static_cast<std::uint8_t>(attr);
-    for (std::size_t i = 0; i < n; ++i) buf[3 + i] = v[i];
-    hubproto::Header h{};
-    h.type = hubproto::MsgType::Command;
-    h.entity_id = entity;
-    h.seq = seq;
-    bus_.publish(h, buf, 3 + n);
-    return KsErr::Ok;
+    (void)entity;
+    (void)attr;
+    (void)v;
+    (void)n;
+    (void)seq;
+    // Inert in v1. A plugin commanding OTHER hub entities (acting as a
+    // controller) must go through CommandDispatcher — retries, CMD_ACK matching,
+    // the alive filter, desired-state recording and source tagging — not a raw
+    // bus.publish that forges a header and bypasses all of it, and never a path
+    // to a chip self-entity's pair/unpair meta. Routing it safely is deferred;
+    // until then a plugin acts only on its own device (through its sockets) and
+    // its own entities. See the design doc.
+    return KsErr::Denied;
   }
 
   void on_fault(const char* reason) noexcept {
@@ -227,6 +235,7 @@ class PluginManager {
   }
 
   void fault(Slot* s) noexcept {
+    if (s == active_) call_faulted_ = true;  // a fault happened in this engine call
     for (std::size_t i = 0; i < s->entity_n; ++i) reg_.undeclare(s->entities[i]);
     s->entity_n = 0;
     s->state = PluginState::Faulted;
@@ -249,9 +258,19 @@ class PluginManager {
     const std::uint8_t attr = p[2];
     const std::uint8_t* val = p + 3;
     const std::size_t vlen = n - 3;
+    // Save/restore the active slot so a synchronous, re-entrant delivery cannot
+    // clobber an outer callback's context.
+    Slot* const prev = active_;
+    const bool prev_faulted = call_faulted_;
     active_ = s;
-    engine_.deliver_command(s->inst, h.entity_id, attr, val, vlen, h.seq);
-    active_ = nullptr;
+    call_faulted_ = false;
+    const KsErr r = engine_.deliver_command(s->inst, h.entity_id, attr, val,
+                                            vlen, h.seq);
+    if (!call_faulted_ && r != KsErr::Ok) {
+      fault(s);  // a handler error is a fault too (spec §5.3), counted once
+    }
+    active_ = prev;
+    call_faulted_ = prev_faulted;
   }
 
   // ---- helpers -------------------------------------------------------------
@@ -284,22 +303,17 @@ class PluginManager {
       if (s.in_use && owns(&s, entity)) return &s;
     return nullptr;
   }
-  // Hand out a fresh plugin entity id. MONOTONIC: ids freed by a fault are
-  // never reused (tombstoned), so a stale rule/app reference to a removed
-  // plugin entity can never resolve to a different device later.
-  std::uint16_t alloc_entity_id() noexcept {
-    while (next_entity_id_ < 0xFFFE) {
-      const std::uint16_t id = next_entity_id_++;
-      if (reg_.find(id) == nullptr) return id;
-    }
-    return 0;
-  }
+  // Entity ids are handed out MONOTONICALLY from next_entity_id_ (see declare):
+  // ids freed by a fault are never reused (tombstoned), so a stale rule/app
+  // reference to a removed plugin entity can never resolve to a different
+  // device later.
 
   PluginEngine& engine_;
   Bus& bus_;
   Registry& reg_;
   Slot slots_[MaxPlugins];
   Slot* active_ = nullptr;
+  bool call_faulted_ = false;  // a fault occurred inside the current engine call
   std::uint16_t next_entity_id_ = kEntityBase;  // monotonic, never rewinds
 };
 

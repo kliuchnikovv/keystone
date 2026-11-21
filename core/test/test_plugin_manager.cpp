@@ -68,8 +68,14 @@ class FakePluginEngine : public core::plugin::PluginEngine {
     return reinterpret_cast<core::plugin::PluginInstance*>(&token_);
   }
   KsErr start(core::plugin::PluginInstance*) override {
-    ++started;
-    if (fault_on_start) return KsErr::NoMem;  // plugin trapped in on_start
+    const std::size_t n = static_cast<std::size_t>(started++);
+    if (fault_via_callback_on_start) {
+      cb_.on_fault(cb_.ctx, "boom");  // plugin faults, then the engine returns Ok
+      return KsErr::Ok;
+    }
+    bool do_fault = fault_on_start;
+    if (!start_faults.empty() && n < start_faults.size()) do_fault = start_faults[n];
+    if (do_fault) return KsErr::NoMem;  // plugin trapped in on_start
     if (declare_desc != nullptr) {
       declared_eid =
           cb_.declare_entity(cb_.ctx, declare_desc, declare_len);
@@ -101,6 +107,8 @@ class FakePluginEngine : public core::plugin::PluginEngine {
 
   // scripted behaviour
   bool fault_on_start = false;
+  bool fault_via_callback_on_start = false;
+  std::vector<bool> start_faults;  // per-start outcome by index, overrides above
   const std::uint8_t* declare_desc = nullptr;
   std::size_t declare_len = 0;
   std::uint16_t declared_eid = 0;
@@ -367,4 +375,192 @@ TEST_CASE("plugin manager: a plugin cannot command another plugin's entity") {
   bus.deliver(ch, cbuf, cr.len);
 
   CHECK(engine.last_send_result == KsErr::Denied);
+}
+
+TEST_CASE("plugin manager: a plugin cannot command a hub-admin entity") {
+  // C1 regression: a plugin must not reach a real hub entity (e.g. a chip
+  // self-entity 0x0001, which accepts pair/unpair meta COMMANDs), even by
+  // listing it in its own allow-list. send_command is inert in v1.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  std::uint8_t desc[32];
+  const std::size_t dn = make_switch_declare(0x0001, desc, sizeof(desc));
+  engine.declare_desc = desc;
+  engine.declare_len = dn;
+
+  core::plugin::Manifest m{};
+  std::strcpy(m.id, "tuya");
+  m.abi = core::plugin::kAbiVersion;
+  m.caps.add(Cap::EntityDeclare);
+  m.caps.add(Cap::BusCommand);
+  m.allow[0] = 0x0001;  // a real chip self-entity
+  m.allow_n = 1;
+
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const std::uint16_t eid = engine.declared_eid;
+
+  engine.send_on_command = true;
+  engine.send_entity = 0x0001;
+  engine.send_attr = 0x01;
+  engine.send_val = {254};
+
+  const std::size_t published_before = bus.published.size();
+  hp::Command cmd{eid, 0x01, hp::Value::make_bool(true)};
+  std::uint8_t cbuf[16];
+  auto cr = hp::encode_command(cmd, cbuf, sizeof(cbuf));
+  hp::Header ch{};
+  ch.type = hp::MsgType::Command;
+  ch.entity_id = eid;
+  bus.deliver(ch, cbuf, cr.len);
+
+  CHECK(engine.last_send_result == KsErr::Denied);
+  CHECK(bus.published.size() == published_before);  // nothing went to the hub
+}
+
+TEST_CASE("plugin manager: a fault during on_start is not overwritten by Ok") {
+  // I2: the plugin calls on_fault during on_start and the engine then returns
+  // Ok. The plugin must end up Faulted, not Started.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  engine.fault_via_callback_on_start = true;
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  mgr.start("tuya");
+  CHECK(mgr.state("tuya") == PluginState::Faulted);
+}
+
+TEST_CASE("plugin manager: a clean start does not reset the fault count") {
+  // I1: faults are counted over the plugin's life, not reset by a lucky start,
+  // so a fault/recover/fault loop still reaches quarantine.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  // fault, succeed, fault, fault  -> three lifetime faults -> quarantined.
+  engine.start_faults = {true, false, true, true};
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+
+  CHECK(mgr.start("tuya") != KsErr::Ok);  // fault 1
+  CHECK(mgr.start("tuya") == KsErr::Ok);  // clean start (must NOT reset)
+  CHECK(mgr.start("tuya") != KsErr::Ok);  // fault 2
+  CHECK(mgr.start("tuya") != KsErr::Ok);  // fault 3 -> threshold
+  const int before = engine.started;
+  CHECK(mgr.start("tuya") == KsErr::Denied);  // quarantined
+  CHECK(engine.started == before);            // engine not invoked
+}
+
+TEST_CASE("plugin manager: a single fault is counted once") {
+  // I1 double-count: an on_fault callback followed by an engine error return
+  // must count as ONE fault, so quarantine needs the full threshold.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  engine.fault_on_start = true;  // engine returns error (one fault per start)
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+
+  // threshold-1 faults must NOT yet quarantine.
+  for (int i = 0; i < Manager::kQuarantineThreshold - 1; ++i) {
+    CHECK(mgr.start("tuya") != KsErr::Ok);
+  }
+  const int before = engine.started;
+  CHECK(mgr.start("tuya") != KsErr::Denied);  // still allowed to run (not yet quarantined)
+  CHECK(engine.started == before + 1);        // engine WAS invoked
+}
+
+TEST_CASE("plugin manager: stop withdraws the plugin's entities") {
+  // I4: a stopped plugin must not leave ghost devices in the registry.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  std::uint8_t desc[32];
+  const std::size_t dn = make_switch_declare(0x0001, desc, sizeof(desc));
+  engine.declare_desc = desc;
+  engine.declare_len = dn;
+
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const std::uint16_t eid = engine.declared_eid;
+  REQUIRE(reg.find(eid) != nullptr);
+
+  mgr.stop("tuya");
+  CHECK(reg.find(eid) == nullptr);
+}
+
+TEST_CASE("plugin manager: a plugin cannot be started twice") {
+  // I4: a second start must not re-run on_start on a live plugin.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const int before = engine.started;
+  CHECK(mgr.start("tuya") == KsErr::Denied);
+  CHECK(engine.started == before);
+}
+
+TEST_CASE("plugin manager: publish_state rejects an out-of-range attr") {
+  // Minor3: attr is u16 on the wire of the host call but u8 as an attribute id;
+  // 0x0170 must not alias attr 0x70.
+  Registry reg;
+  FakeBus bus;
+  FakePluginEngine engine;
+  Manager mgr(engine, bus, reg);
+
+  // Declare an entity that really HAS attr 0x70, so truncation of 0x0170 would
+  // visibly write into it.
+  std::uint8_t desc[48];
+  hp::AttrDecl attrs[2] = {{0x01, hp::ValueType::Bool, hp::kFlagWritable},
+                           {0x70, hp::ValueType::Bool, hp::kFlagWritable}};
+  auto dr = hp::encode_declare(0x0001, hp::DeviceType::Switch, attrs, 2, nullptr,
+                               desc, sizeof(desc));
+  REQUIRE(dr.ok);
+  engine.declare_desc = desc;
+  engine.declare_len = dr.len;
+
+  const auto m = declare_manifest();
+  const std::uint8_t wasm[] = {0};
+  REQUIRE(mgr.install(m, wasm, sizeof(wasm)));
+  REQUIRE(mgr.start("tuya") == KsErr::Ok);
+  const std::uint16_t eid = engine.declared_eid;
+
+  engine.publish_on_command = true;
+  engine.pub_entity = eid;
+  engine.pub_attr = 0x0170;  // must NOT alias attr 0x70
+  engine.pub_val = {1};
+
+  hp::Command cmd{eid, 0x01, hp::Value::make_bool(true)};
+  std::uint8_t cbuf[16];
+  auto cr = hp::encode_command(cmd, cbuf, sizeof(cbuf));
+  hp::Header ch{};
+  ch.type = hp::MsgType::Command;
+  ch.entity_id = eid;
+  bus.deliver(ch, cbuf, cr.len);
+
+  // attr 0x70 must still be unset — 0x0170 was rejected, not truncated into it.
+  hp::Value got{};
+  CHECK_FALSE(reg.get_value(eid, 0x70, got));
 }
