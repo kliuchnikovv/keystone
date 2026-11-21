@@ -38,6 +38,19 @@ enum class ManifestError {
   TooLong,
 };
 
+// A plugin id is non-empty and uses only [a-z0-9_.-] — so it is safe as an NVS
+// key / log token, and two ids cannot differ only by case or whitespace.
+inline bool valid_plugin_id(const char* id) {
+  if (id[0] == '\0') return false;
+  for (const char* p = id; *p != '\0'; ++p) {
+    const char c = *p;
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                    c == '_' || c == '.' || c == '-';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 // Map a capability name token to its Cap bit. Returns false for an unknown
 // name — the one place the manifest's capability vocabulary is defined.
 inline bool cap_from_token(const JsonReader& r, int tok, Cap& out) {
@@ -98,21 +111,27 @@ inline ManifestError parse_manifest(const char* json, std::size_t len,
     return ManifestError::MissingField;
   }
   if (!r.get_string(id_tok, out.id, sizeof(out.id))) return ManifestError::TooLong;
+  if (!valid_plugin_id(out.id)) return ManifestError::BadJson;
 
-  // version — required non-negative number.
+  // version — required, fits u32 (overflow must not wrap, e.g. 2^32+1 -> 1).
   const int ver_tok = r.find(root, "version");
   if (ver_tok < 0) return ManifestError::MissingField;
   std::int64_t ver = 0;
-  if (!r.get_i64(ver_tok, ver) || ver < 0) return ManifestError::BadJson;
+  if (!r.get_i64(ver_tok, ver) || ver < 0 || ver > 0xFFFFFFFF) {
+    return ManifestError::BadJson;
+  }
   out.version = static_cast<uint32_t>(ver);
 
-  // abi — required, must equal the hub's ABI version.
+  // abi — required, must equal the hub's ABI version. Compared as int64 BEFORE
+  // any narrowing, so an out-of-range value (2^32+1) cannot wrap to kAbiVersion.
   const int abi_tok = r.find(root, "abi");
   if (abi_tok < 0) return ManifestError::MissingField;
   std::int64_t abi = 0;
-  if (!r.get_i64(abi_tok, abi) || abi < 0) return ManifestError::BadJson;
+  if (!r.get_i64(abi_tok, abi)) return ManifestError::BadJson;
+  if (abi != static_cast<std::int64_t>(kAbiVersion)) {
+    return ManifestError::AbiIncompatible;
+  }
   out.abi = static_cast<uint32_t>(abi);
-  if (out.abi != kAbiVersion) return ManifestError::AbiIncompatible;
 
   // caps — optional array of known capability names.
   const int caps_tok = r.find(root, "caps");

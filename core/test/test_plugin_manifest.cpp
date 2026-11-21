@@ -62,16 +62,36 @@ TEST_CASE("plugin manifest: parse, abi check, bad capability") {
   }
 
   SUBCASE("a duplicate hidden behind a JSON escape is rejected") {
-    // "caps" decodes to "caps": a raw-byte compare would miss it, a
-    // lenient parser would not. Keys are compared decoded, so this is caught.
-    CHECK(parse(R"({"id":"x","version":1,"abi":1,)"
-                R"("caps":["net_local"],"caps":["log"]})",
+    // The second key is "caps", which DECODES to "caps". A raw-byte
+    // compare misses it (the bytes differ); a decoding parser does not. The
+    // escape must survive the C++ raw string, so it reaches the JSON reader.
+    CHECK(parse("{\"id\":\"x\",\"version\":1,\"abi\":1,"
+                "\"caps\":[\"net_local\"],\"ca\\u0070s\":[\"log\"]}",
                 m) == ManifestError::BadJson);
   }
 
   SUBCASE("a duplicate of any key, not only known ones, is rejected") {
     CHECK(parse(R"({"id":"x","version":1,"abi":1,"foo":1,"foo":2})", m) ==
           ManifestError::BadJson);
+  }
+
+  SUBCASE("version/abi that overflow u32 are rejected, not wrapped") {
+    // 2^32 + 1 wraps to 1 under a naive cast; an anti-rollback version check or
+    // the ABI gate would then be bypassed. Both must be refused.
+    CHECK(parse(R"({"id":"x","version":4294967297,"abi":1,"caps":[]})", m) !=
+          ManifestError::Ok);
+    CHECK(parse(R"({"id":"x","version":1,"abi":4294967297,"caps":[]})", m) ==
+          ManifestError::AbiIncompatible);
+  }
+
+  SUBCASE("an empty id is rejected") {
+    CHECK(parse(R"({"id":"","version":1,"abi":1,"caps":[]})", m) !=
+          ManifestError::Ok);
+  }
+
+  SUBCASE("an id with illegal characters is rejected") {
+    CHECK(parse(R"({"id":"has space","version":1,"abi":1,"caps":[]})", m) !=
+          ManifestError::Ok);
   }
 
   SUBCASE("an over-long id is rejected") {
