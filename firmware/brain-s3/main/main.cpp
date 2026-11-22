@@ -90,7 +90,7 @@
 #include "ota_job.hpp"
 #include "relay_client.hpp"
 #include "status_led.hpp"
-#include "wasm_spike.hpp"
+#include "wasm_host/wasm_host.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
 #if __has_include("wifi_secrets.h")
@@ -535,6 +535,14 @@ class ChipRouter final : public core::Bus {
 
   bool publish(const hubproto::Header& h, const std::uint8_t* payload,
                std::size_t len) noexcept override {
+    // Plugin-owned chips (PluginManager::kChipBase..) have no UART — they
+    // live inside the hub process. A COMMAND to one of them is loop-back:
+    // deliver to subscribers (the PluginManager handles it on its way out).
+    // Any header.chip_id >= 0xC0 is such a self-hosted chip (Plan 1b).
+    if (h.chip_id >= 0xC0) {
+      fan_out(h, payload, len);
+      return true;
+    }
     // UartTransport::publish encodes into a shared buffer, so concurrent
     // publishers (main loop, UART RX tasks forwarding, the OTA task) must not
     // interleave. The router is the single funnel, so lock here.
@@ -5406,9 +5414,13 @@ extern "C" void app_main(void) {
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
 
-  // WAMR spike (wasm-plugin-spike): one-shot bring-up of the interpreter on a
-  // trivial `add(i32,i32)` module. Prints heap deltas and the call result.
-  wasm_spike_run();
+  // Plan 1b: plugin runtime. WAMR engine + PluginManager, one bundled test
+  // plugin (Switch(on_off) that echoes COMMANDs back as STATEs). The plugin's
+  // entity appears in the registry on plugin pseudo-chip 0xC0 and is
+  // addressable from the console/app like any other entity.
+  if (!wasm_host::start(bus, reg)) {
+    ESP_LOGE(kTag, "plugin runtime did not start; hub continues without plugins");
+  }
 #ifdef KEYSTONE_HAVE_MATTER
   // Every Matter node that joined our fabric earlier comes back here: the bridge re-reads
   // its descriptor and re-declares its entities, so a hub reboot does not lose the devices
