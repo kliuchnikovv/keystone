@@ -2332,6 +2332,19 @@ int cmd_heap(int /*argc*/, char** /*argv*/) {
   return 0;
 }
 
+// The plugin runtime's state: the plugin's lifecycle state and the engine's
+// counters. Reads only the engine's own counters (never the registry), so it
+// does not need the main loop's request queue.
+int cmd_plugins(int /*argc*/, char** /*argv*/) {
+  char buf[256];
+  if (!wasm_host::status(buf, sizeof(buf))) {
+    printf("%s\n", buf);
+    return 1;
+  }
+  printf("%s\n", buf);
+  return 0;
+}
+
 int cmd_schedules(int /*argc*/, char** /*argv*/) {
   char buf[640];
   Req r{};
@@ -3481,6 +3494,7 @@ void start_console() {
   reg_cmd("inject", "dev: pretend a device of a type exists (Matter chip only); inject <kind>|set|clear", &cmd_inject);
   reg_cmd("events", "events [<n>] - the newest hub events (what the app's history shows), newest first", &cmd_events);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
+  reg_cmd("plugins", "show the plugin runtime's state and the engine's counters", &cmd_plugins);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);

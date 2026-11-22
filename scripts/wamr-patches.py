@@ -13,6 +13,17 @@ What the patches do:
      stubs for fstatat/mkdirat/… see `struct stat` and `mode_t`.
   3. Rename invokeNative_xtensa.s -> .S so PlatformIO/SCons routes the file
      through gcc (as alone does not accept `-mlongcalls` on toolchain 15.2).
+  4. Enable INSTRUCTION METERING (Plan 1b task 2 — the callback watchdog).
+     Without it the fast interpreter has NO way to interrupt a plugin that
+     loops forever: the interpreter checks a suspend flag only in 15 places,
+     and `wasm_runtime_terminate()` merely sets an exception that a tight
+     loop never looks at. With WASM_ENABLE_INSTRUCTION_METERING=1 the
+     interpreter decrements a counter on EVERY opcode dispatch
+     (FETCH_OPCODE_AND_DISPATCH -> CHECK_INSTRUCTION_LIMIT), so
+     `wasm_runtime_set_instruction_count_limit()` turns an endless loop into
+     a clean trap: the plugin unwinds, the module instance stays intact and
+     can be unloaded normally. This is what makes "timeout -> faulted, the
+     hub lives" work without abandoning the executor thread.
 
 Idempotent: a patch already applied is a no-op.
 """
@@ -132,5 +143,64 @@ elif asm_dst.exists():
     print("  already renamed")
 else:
     raise SystemExit(f"neither {asm_src} nor {asm_dst} found")
+
+# --- 4. Instruction metering (the callback watchdog's interruption) -----------
+#
+# The Kconfig gains a knob; the esp-idf component CMakeLists turns it into the
+# WAMR_BUILD_INSTRUCTION_METERING variable that config_common.cmake turns into
+# -DWASM_ENABLE_INSTRUCTION_METERING=1.
+kconfig = ROOT / "build-scripts/esp-idf/wamr/Kconfig"
+esp_cmake = ROOT / "build-scripts/esp-idf/wamr/CMakeLists.txt"
+
+KCONFIG_ANCHOR = """    config WAMR_ENABLE_MEMORY_PROFILING
+        bool "Memory profiling"
+        default n
+"""
+KCONFIG_ADD = KCONFIG_ANCHOR + """
+    config WAMR_ENABLE_INSTRUCTION_METERING
+        bool "Instruction metering (watchdog: limit instructions per callback)"
+        default n
+"""
+print("Kconfig: WAMR_ENABLE_INSTRUCTION_METERING")
+replace_once(kconfig, KCONFIG_ANCHOR, KCONFIG_ADD)
+
+CMAKE_ANCHOR = """  if (CONFIG_WAMR_ENABLE_MEMORY_PROFILING)
+    set (WAMR_BUILD_MEMORY_PROFILING 1)
+  endif ()
+"""
+CMAKE_ADD = CMAKE_ANCHOR + """
+  if (CONFIG_WAMR_ENABLE_INSTRUCTION_METERING)
+    set (WAMR_BUILD_INSTRUCTION_METERING 1)
+  endif ()
+"""
+print("CMakeLists.txt: WAMR_BUILD_INSTRUCTION_METERING")
+replace_once(esp_cmake, CMAKE_ANCHOR, CMAKE_ADD)
+
+# The public header declares wasm_runtime_set_instruction_count_limit()
+# unconditionally, but the DEFINITION lives behind
+# `#if WASM_ENABLE_INSTRUCTION_METERING != 0` — so a build without metering
+# would fail to link if the host called it. Export the flag through the
+# public header so the host can guard the call.
+EXPORT_ANCHOR = """#include <stdint.h>
+#include <stdbool.h>
+#include "lib_export.h"
+"""
+EXPORT_ADD = EXPORT_ANCHOR + """
+/* WASM_ENABLE_INSTRUCTION_METERING is set by the build (see
+ * build-scripts/config_common.cmake). It gates the definition of
+ * wasm_runtime_set_instruction_count_limit(), so the host must know it:
+ * the flag is what makes the callback watchdog able to interrupt a plugin
+ * that loops forever. */
+#ifndef KS_WAMR_INSTRUCTION_METERING
+#define KS_WAMR_INSTRUCTION_METERING 0
+#endif
+#if WASM_ENABLE_INSTRUCTION_METERING != 0
+#undef KS_WAMR_INSTRUCTION_METERING
+#define KS_WAMR_INSTRUCTION_METERING 1
+#endif
+"""
+export_h = ROOT / "core/iwasm/include/wasm_export.h"
+print("wasm_export.h: KS_WAMR_INSTRUCTION_METERING")
+replace_once(export_h, EXPORT_ANCHOR, EXPORT_ADD)
 
 print("\nWAMR patches applied.")

@@ -1,5 +1,8 @@
 #include "wasm_host/wasm_host.hpp"
 
+#include <cstdio>
+#include <cstring>
+
 #include "core/entity_registry.hpp"
 #include "core/plugin_capabilities.hpp"
 #include "core/plugin_manager.hpp"
@@ -53,6 +56,21 @@ void plugin_ack_on_msg(void* /*ctx*/, const hubproto::Header& h,
 // outlive `start()` because the manager stays subscribed to the bus; the
 // static holds only the template-parameter-free view of the pair.
 WAMRPluginEngine g_engine;
+
+// The plugin id, in storage that outlives the install frame.
+constexpr const char* kPluginId = "test.switch";
+char g_plugin_id[core::plugin::Manifest::kMaxId] = {};
+
+// The manager is a template on the Registry type, so it cannot be a plain
+// static here; `g_manager` holds a type-erased view of the bits `status()`
+// needs (the plugin's state and its fault count).
+struct ManagerView {
+  const char* id = nullptr;
+  const char* state = nullptr;
+  int fault_count = 0;
+  bool valid = false;
+};
+ManagerView g_view;
 }  // namespace
 
 template <typename Registry>
@@ -77,7 +95,8 @@ bool start(core::Bus& bus, Registry& reg) {
   // wiring the fields come from here. Must declare EntityDeclare to let the
   // plugin call ks_entity_declare at all.
   core::plugin::Manifest m{};
-  std::strncpy(m.id, "test.switch", sizeof(m.id) - 1);
+  std::strncpy(m.id, kPluginId, sizeof(m.id) - 1);
+  std::strncpy(g_plugin_id, kPluginId, sizeof(g_plugin_id) - 1);
   m.version = 1;
   m.abi = core::plugin::kAbiVersion;
   m.caps.add(core::plugin::Cap::EntityDeclare);
@@ -97,6 +116,11 @@ bool start(core::Bus& bus, Registry& reg) {
   }
   log_heap("wasm_host::start: after start()");
   ESP_LOGI(kTag, "plugin '%s' started", m.id);
+
+  g_view.id = g_plugin_id;  // a static copy: m.id dies with this frame
+  g_view.state = "Started";
+  g_view.fault_count = 0;
+  g_view.valid = true;
   return true;
 }
 
@@ -104,5 +128,24 @@ bool start(core::Bus& bus, Registry& reg) {
 // uses `core::EntityRegistry<>` with the defaults — if that changes, update
 // this instantiation to match.
 template bool start<core::EntityRegistry<>>(core::Bus&, core::EntityRegistry<>&);
+
+bool status(char* out, std::size_t cap) {
+  if (out == nullptr || cap == 0) return false;
+  if (!g_view.valid) {
+    std::snprintf(out, cap, "plugin runtime: not up");
+    return false;
+  }
+  std::snprintf(out, cap,
+                "%s: %s, faults=%d | marshalled host calls=%u | last callback "
+                "%u ms (budget %u ms, instruction cap %d)",
+                g_view.id, g_view.state, g_view.fault_count,
+                (unsigned)g_engine.host_call_count(),
+                (unsigned)g_engine.last_callback_ms(),
+                (unsigned)g_engine.callback_budget_ms(),
+                (int)g_engine.instruction_limit());
+  return true;
+}
+
+const char* plugin_id() { return g_view.valid ? g_view.id : ""; }
 
 }  // namespace wasm_host

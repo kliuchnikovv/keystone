@@ -1,15 +1,24 @@
 #include "wasm_host/wamr_engine.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "wasm_export.h"
 
 namespace wasm_host {
 
 namespace {
 constexpr const char* kTag = "wamr-eng";
+
+// Monotonic milliseconds. The engine needs its own clock (the core has
+// none — it takes `now_ms` injected), and the callback budget must be
+// measured on the thread that waits for the plugin.
+std::uint32_t now_ms() {
+  return static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+}
 
 // There is one engine per hub (one WAMR runtime per process), so a static
 // pointer is enough to let the native shims reach it from a free function.
@@ -44,6 +53,11 @@ const std::uint8_t* xlate(wasm_module_inst_t inst, std::uint32_t off,
 // These names MUST match the imports in the plugin .wasm file and the ABI
 // the plugin SDK exports (core/plugin_host_api.hpp today is types-only; the
 // textual names "ks_entity_declare" etc. are the convention Plan 1b fixes).
+//
+// Every shim runs on the executor pthread, INSIDE the plugin's callback. The
+// core (bus/registry) is single-threaded (SPEC §3), so the shim does NOT
+// call the manager directly: it hands the request to the main thread through
+// the engine's host queue and waits for the result (design §5.5).
 
 // ks_entity_declare(desc_ptr i32, desc_len i32) -> i32 (entity_id or 0)
 int32_t shim_ks_entity_declare(wasm_exec_env_t env, int32_t desc_ptr,
@@ -56,7 +70,17 @@ int32_t shim_ks_entity_declare(wasm_exec_env_t env, int32_t desc_ptr,
       xlate(inst, static_cast<std::uint32_t>(desc_ptr),
             static_cast<std::uint32_t>(desc_len));
   if (desc == nullptr) return 0;
-  return cb.declare_entity(cb.ctx, desc, static_cast<std::size_t>(desc_len));
+  // Marshalled call: the main thread runs the manager's declare_entity.
+  WAMRPluginEngine::HostCall c{};
+  c.kind = WAMRPluginEngine::HostKind::kDeclare;
+  c.len = static_cast<std::size_t>(desc_len);
+  c.data = static_cast<std::uint8_t*>(std::malloc(c.len == 0 ? 1 : c.len));
+  if (c.data == nullptr) return 0;
+  std::memcpy(c.data, desc, c.len);
+  const bool ok = g_engine->call_host(c);
+  std::free(c.data);
+  if (!ok) return 0;
+  return static_cast<int32_t>(c.declare_result);
 }
 
 // ks_state_publish(entity i32, attr i32, val_ptr i32, val_len i32) -> i32 (KsErr)
@@ -70,10 +94,18 @@ int32_t shim_ks_state_publish(wasm_exec_env_t env, int32_t entity, int32_t attr,
       xlate(inst, static_cast<std::uint32_t>(val_ptr),
             static_cast<std::uint32_t>(val_len));
   if (val == nullptr) return static_cast<int32_t>(core::plugin::KsErr::BadArg);
-  return static_cast<int32_t>(
-      cb.publish_state(cb.ctx, static_cast<std::uint16_t>(entity),
-                       static_cast<std::uint16_t>(attr), val,
-                       static_cast<std::size_t>(val_len)));
+  WAMRPluginEngine::HostCall c{};
+  c.kind = WAMRPluginEngine::HostKind::kPublishState;
+  c.entity = static_cast<std::uint16_t>(entity);
+  c.attr = static_cast<std::uint16_t>(attr);
+  c.len = static_cast<std::size_t>(val_len);
+  c.data = static_cast<std::uint8_t*>(std::malloc(c.len == 0 ? 1 : c.len));
+  if (c.data == nullptr) return static_cast<int32_t>(core::plugin::KsErr::NoMem);
+  std::memcpy(c.data, val, c.len);
+  const bool ok = g_engine->call_host(c);
+  std::free(c.data);
+  if (!ok) return static_cast<int32_t>(core::plugin::KsErr::Denied);
+  return static_cast<int32_t>(c.err);
 }
 
 // ks_log(ptr i32, len i32) -> i32 (0).  Harmless, always granted.
@@ -127,10 +159,21 @@ bool WAMRPluginEngine::begin() {
 
   jobs_ = xQueueCreate(4, sizeof(Job*));
   done_ = xSemaphoreCreateBinary();
-  if (jobs_ == nullptr || done_ == nullptr) {
+  // The host-call queue: plugin thread -> main thread. Depth 8 is plenty:
+  // the plugin blocks on each call, so at most one is in flight per plugin.
+  host_q_ = xQueueCreate(8, sizeof(HostCall*));
+  host_done_ = xSemaphoreCreateBinary();
+  if (jobs_ == nullptr || done_ == nullptr || host_q_ == nullptr ||
+      host_done_ == nullptr) {
     ESP_LOGE(kTag, "queue/sem alloc failed");
     if (jobs_ != nullptr) vQueueDelete(jobs_);
     if (done_ != nullptr) vSemaphoreDelete(done_);
+    if (host_q_ != nullptr) vQueueDelete(host_q_);
+    if (host_done_ != nullptr) vSemaphoreDelete(host_done_);
+    jobs_ = nullptr;
+    done_ = nullptr;
+    host_q_ = nullptr;
+    host_done_ = nullptr;
     wasm_runtime_destroy();
     return false;
   }
@@ -143,6 +186,7 @@ bool WAMRPluginEngine::begin() {
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, 8192);
   g_engine = this;  // visible to the executor BEFORE pthread_create
+  main_task_ = xTaskGetCurrentTaskHandle();
   if (pthread_create(&executor_, &attr, &WAMRPluginEngine::executor_main,
                      this) != 0) {
     ESP_LOGE(kTag, "pthread_create failed");
@@ -150,15 +194,20 @@ bool WAMRPluginEngine::begin() {
     g_engine = nullptr;
     vQueueDelete(jobs_);
     vSemaphoreDelete(done_);
+    vQueueDelete(host_q_);
+    vSemaphoreDelete(host_done_);
     jobs_ = nullptr;
     done_ = nullptr;
+    host_q_ = nullptr;
+    host_done_ = nullptr;
     wasm_runtime_destroy();
     return false;
   }
   pthread_attr_destroy(&attr);
   executor_running_ = true;
   inited_ = true;
-  ESP_LOGI(kTag, "engine up (executor pthread started)");
+  ESP_LOGI(kTag, "engine up (executor pthread started, callback budget %u ms)",
+           static_cast<unsigned>(budget_ms_));
   return true;
 }
 
@@ -176,6 +225,8 @@ void WAMRPluginEngine::end() {
   }
   if (jobs_ != nullptr) { vQueueDelete(jobs_); jobs_ = nullptr; }
   if (done_ != nullptr) { vSemaphoreDelete(done_); done_ = nullptr; }
+  if (host_q_ != nullptr) { vQueueDelete(host_q_); host_q_ = nullptr; }
+  if (host_done_ != nullptr) { vSemaphoreDelete(host_done_); host_done_ = nullptr; }
   wasm_runtime_destroy();
   g_engine = nullptr;
   inited_ = false;
@@ -184,6 +235,87 @@ void WAMRPluginEngine::end() {
 void WAMRPluginEngine::set_host_callbacks(
     const core::plugin::PluginHostCallbacks& cb) {
   callbacks_ = cb;
+}
+
+// -- Host-call marshalling ---------------------------------------------------
+//
+// call_host() runs on the PLUGIN thread. It posts the request to the main
+// thread and waits for the answer.
+bool WAMRPluginEngine::call_host(HostCall& c) {
+  // Defensive: a host import called on the main thread itself (not our case)
+  // must not deadlock — serve it inline.
+  //
+  // NOTE: we compare FreeRTOS task handles, NOT pthread_self(): ESP-IDF's
+  // pthread_self() ASSERTS on any task that was not created by
+  // pthread_create (spike report §4.4), and the hub's main task is a plain
+  // FreeRTOS task. Calling it there would abort the chip.
+  if (xTaskGetCurrentTaskHandle() == main_task_) {
+    serve_host_call(c);
+    return true;
+  }
+  if (host_q_ == nullptr) return false;
+  HostCall* p = &c;
+  if (xQueueSend(host_q_, &p, pdMS_TO_TICKS(500)) != pdTRUE) {
+    ESP_LOGE(kTag, "host call: queue full or timed out");
+    return false;
+  }
+  ESP_LOGD(kTag, "host call #%u marshalled to the main loop", ++host_calls_);
+  // Wait for the main thread to serve it. The bound is generous: the main
+  // thread is inside a plugin callback, and the callback budget (100 ms by
+  // default) is what actually fires when a plugin misbehaves.
+  if (xSemaphoreTake(host_done_, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    ESP_LOGE(kTag, "host call: the main thread did not answer in time");
+    return false;
+  }
+  return true;
+}
+
+// serve_host_call() runs on the MAIN thread and performs the manager's
+// callback — i.e. the only place the core is touched.
+void WAMRPluginEngine::serve_host_call(HostCall& c) {
+  const auto& cb = callbacks_;
+  switch (c.kind) {
+    case HostKind::kDeclare:
+      c.declare_result = (cb.declare_entity != nullptr)
+                             ? cb.declare_entity(cb.ctx, c.data, c.len)
+                             : 0;
+      c.err = core::plugin::KsErr::Ok;
+      break;
+    case HostKind::kPublishState:
+      c.err = (cb.publish_state != nullptr)
+                  ? cb.publish_state(cb.ctx, c.entity, c.attr, c.data, c.len)
+                  : core::plugin::KsErr::Denied;
+      break;
+    case HostKind::kSendCommand:
+      c.err = (cb.send_command != nullptr)
+                  ? cb.send_command(cb.ctx, c.entity, c.attr, c.data, c.len, c.seq)
+                  : core::plugin::KsErr::Denied;
+      break;
+  }
+}
+
+// drain_host_calls() runs on the MAIN thread: it takes the pending host
+// calls and serves them. Called from run_job() while the plugin callback is
+// in flight.
+void WAMRPluginEngine::drain_host_calls(std::uint32_t budget_ms) {
+  if (host_q_ == nullptr) return;
+  const std::uint32_t t0 = now_ms();
+  for (;;) {
+    HostCall* p = nullptr;
+    if (xQueueReceive(host_q_, &p, 0) != pdTRUE) break;
+    host_inflight_ = p;
+    serve_host_call(*p);
+    host_inflight_ = nullptr;
+    xSemaphoreGive(host_done_);  // let the plugin thread continue
+    if (budget_ms != 0) {
+      const std::uint32_t dt = now_ms() - t0;
+      if (dt >= budget_ms) {
+        ESP_LOGE(kTag, "host calls overran the callback budget (%u ms)", dt);
+        budget_exceeded_ = true;
+        break;
+      }
+    }
+  }
 }
 
 core::plugin::PluginInstance* WAMRPluginEngine::load(const uint8_t* wasm,
@@ -275,12 +407,79 @@ void WAMRPluginEngine::unload(core::plugin::PluginInstance* inst) {
   (void)run_job(j);
 }
 
+// run_job() runs on the MAIN thread: it hands the job to the executor and
+// waits for it — while SERVING the host calls the plugin makes meanwhile.
+//
+// The wait is a slice loop, not a single blocking take, for two reasons:
+//   1. the plugin's host imports need the main thread to answer them, and
+//   2. the callback budget (design §5.5) can only be enforced by someone
+//      watching the clock — that is the main thread.
+//
+// The watchdog has two halves:
+//   - the INSTRUCTION limit (set on the exec_env before the call): the fast
+//     interpreter checks it on every opcode dispatch, so a plugin that loops
+//     forever traps with "instruction limit exceeded" and unwinds CLEANLY —
+//     the module instance stays intact and can be unloaded normally. This is
+//     what breaks the hang.
+//   - the WALL-CLOCK check below: it is the budget the design doc asks for
+//     (100 ms of wall time per callback). It notices a slow plugin and
+//     reports the overrun.
+//
+// The instruction limit is calibrated from the wall-clock budget, so a
+// plugin that spends its whole budget computing trips the instruction limit
+// at roughly the same moment.
 core::plugin::KsErr WAMRPluginEngine::run_job(Job& j) {
   if (!executor_running_) return core::plugin::KsErr::NoMem;
+  budget_exceeded_ = false;
   // The executor writes j.result and gives `done_`.
   Job* p = &j;
   xQueueSend(jobs_, &p, portMAX_DELAY);
-  xSemaphoreTake(done_, portMAX_DELAY);
+  const std::uint32_t t0 = now_ms();
+  for (;;) {
+    // Serve whatever the plugin asked for while it runs.
+    drain_host_calls(budget_ms_);
+    if (xSemaphoreTake(done_, pdMS_TO_TICKS(2)) == pdTRUE) break;
+    // Still running: check the budget.
+    const std::uint32_t dt = now_ms() - t0;
+    if (budget_ms_ != 0 && dt > budget_ms_) {
+      last_cb_ms_ = dt;
+      ESP_LOGE(kTag,
+               "callback budget exceeded: %u ms > %u ms — the plugin is faulted",
+               dt, static_cast<unsigned>(budget_ms_));
+      budget_exceeded_ = true;
+      // The plugin is still running on the executor thread. The instruction
+      // limit will break it shortly (the executor set it before the call);
+      // we wait for the executor to finish unwinding so the module can be
+      // unloaded without leaking. If it does NOT come back, the executor
+      // thread is abandoned and replaced — the fallback the design doc
+      // prescribes for the "can we free the module heap on fault?" risk
+      // (design §5.5, "бринг-ап-риск").
+      const std::uint32_t grace = now_ms();
+      while (now_ms() - grace < 500) {
+        drain_host_calls(budget_ms_);
+        if (xSemaphoreTake(done_, pdMS_TO_TICKS(10)) == pdTRUE) {
+          // The plugin unwound on its own: the trap is clean.
+          ESP_LOGE(kTag, "plugin unwound after %u ms (instruction limit)",
+                   dt);
+          last_cb_ms_ = now_ms() - t0;
+          return core::plugin::KsErr::NoMem;
+        }
+      }
+      ESP_LOGE(kTag, "plugin did not unwind — abandoning the executor thread");
+      faulted_ = true;
+      pthread_detach(executor_);
+      executor_running_ = false;
+      executor_ = pthread_t{};
+      // Wake the (still running) plugin thread's host-call wait so it can
+      // notice the fault and unwind.
+      if (host_done_ != nullptr) xSemaphoreGive(host_done_);
+      return core::plugin::KsErr::NoMem;
+    }
+  }
+  last_cb_ms_ = now_ms() - t0;
+  if (budget_exceeded_) {
+    return core::plugin::KsErr::NoMem;
+  }
   return j.result;
 }
 
@@ -297,6 +496,14 @@ void* WAMRPluginEngine::executor_main(void* arg) {
       break;
     }
     auto* plug = reinterpret_cast<Plugin*>(p->inst);
+    // Arm the watchdog: the fast interpreter decrements this counter on
+    // every opcode dispatch, so a plugin that never returns trips it and
+    // unwinds cleanly (the module stays intact, no thread is abandoned).
+    // -1 means "no limit".
+#if KS_WAMR_INSTRUCTION_METERING
+    wasm_runtime_set_instruction_count_limit(plug->env,
+                                             self->instruction_limit_);
+#endif
     switch (p->kind) {
       case JobKind::kStart: {
         wasm_function_inst_t fn =
