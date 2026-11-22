@@ -121,6 +121,24 @@ int ks_state_publish(unsigned entity, unsigned attr, const unsigned char* value,
 __attribute__((import_module("env"), import_name("ks_log")))
 int ks_log(const unsigned char* msg, unsigned len);
 
+/* Arm a timer.
+ *
+ * `ms` is the delay in milliseconds; `id` is the plugin's own handle — it
+ * comes back in on_timer(id). Arming the same id again replaces the
+ * previous timer, so a plugin has exactly one timer per id.
+ *
+ * The Timer capability is harmless and granted to every plugin.
+ */
+__attribute__((import_module("env"), import_name("ks_timer_set")))
+int ks_timer_set(unsigned ms, unsigned id);
+
+/* Arm a REPEATING timer: the hub calls on_timer(id) every `period_ms`
+ * until the timer is replaced or the plugin is unloaded. This is what a
+ * heartbeat is. A plugin that was asleep for a while gets one tick, not a
+ * burst of catch-up ticks. */
+__attribute__((import_module("env"), import_name("ks_timer_set_repeating")))
+int ks_timer_set_repeating(unsigned period_ms, unsigned id);
+
 /* ------------------------------------------------------------------ */
 /* Exports — the plugin's side of the contract                        */
 /* ------------------------------------------------------------------ */
@@ -151,6 +169,11 @@ void on_stop(void);
 __attribute__((export_name("on_command")))
 void on_command(unsigned entity, unsigned attr, const unsigned char* value,
                 unsigned value_len, unsigned seq);
+
+/* OPTIONAL. A timer the plugin armed with ks_timer_set() fired. `id` is
+ * the handle the plugin passed to ks_timer_set(). */
+__attribute__((export_name("on_timer")))
+void on_timer(unsigned id);
 
 /* ------------------------------------------------------------------ */
 /* Helpers for the freestanding build (no libc)                       */

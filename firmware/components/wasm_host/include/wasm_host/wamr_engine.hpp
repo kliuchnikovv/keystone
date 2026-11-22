@@ -53,6 +53,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "wasm_export.h"
 
 namespace wasm_host {
 
@@ -84,6 +85,44 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
                                     const std::uint8_t* val,
                                     std::size_t len) override;
   void unload(core::plugin::PluginInstance* inst) override;
+
+  // --- the timer API (Plan 1b task 4; design §6) ---------------------------
+  //
+  // A plugin arms a timer with the `ks_timer_set(ms, id)` host import; the
+  // hub calls the plugin's `on_timer(id)` export when it fires. The timer
+  // itself lives in the MAIN thread (the hub's clock is the main loop's),
+  // and the callback is delivered through the same job queue and under the
+  // same watchdog as every other plugin callback.
+  //
+  // `core::plugin::PluginEngine` is frozen (design §11), so this is NOT an
+  // override — it is the engine's own extension, and the firmware's timer
+  // service calls it.
+  //
+  // Arm a timer for one plugin. `ms` is the delay from now; `id` is the
+  // plugin's own handle (it comes back in on_timer). Re-arming the same
+  // (instance, id) replaces the previous timer.
+  void set_timer(core::plugin::PluginInstance* inst, std::uint32_t ms,
+                 std::uint32_t id);
+  // Arm a REPEATING timer: it fires every `period_ms` until it is replaced
+  // or cancelled. This is what a plugin's heartbeat is.
+  void set_repeating_timer(core::plugin::PluginInstance* inst,
+                           std::uint32_t period_ms, std::uint32_t id);
+  // Cancel one of the plugin's timers.
+  void cancel_timer(core::plugin::PluginInstance* inst, std::uint32_t id);
+  // Cancel EVERY timer of one plugin — used when the plugin faults: a
+  // faulted plugin must not keep waking the hub up.
+  void cancel_timers_of(core::plugin::PluginInstance* inst);
+  // The timers that are due at `now_ms` — the firmware's timer service
+  // calls this from the main loop and delivers each due timer through
+  // deliver_timer(). Returns how many fired.
+  std::size_t poll_timers(std::uint32_t now_ms,
+                          core::plugin::PluginInstance* inst);
+  // Run the plugin's on_timer(id). Under the same budget/watchdog as every
+  // other callback.
+  core::plugin::KsErr deliver_timer(core::plugin::PluginInstance* inst,
+                                    std::uint32_t id);
+  // The number of timers armed right now.
+  std::size_t timer_count() const noexcept { return timer_n_; }
 
   // Called by the native host-import shims (which run on the executor pthread).
   // The shims use these to reach the callbacks the manager installed.
@@ -126,6 +165,11 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
   // (the counter proves the plugin never touches the core directly).
   std::uint32_t host_call_count() const noexcept { return host_calls_; }
 
+  // Map a WAMR module instance back to the plugin that owns it. A plugin's
+  // host import only knows its exec_env, so the native shims need this to
+  // find the plugin a call belongs to.
+  void* instance_of(wasm_module_inst_t inst) const noexcept;
+
   // --- the host-call protocol (public: the native shims use it) ------------
   //
   // A host import made by the plugin, waiting to be served by the main
@@ -151,7 +195,8 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
   bool call_host(HostCall& c);
 
  private:
-  enum class JobKind : std::uint8_t { kStart, kStop, kDeliverCmd, kDeliverSt, kUnload };
+  enum class JobKind : std::uint8_t { kStart, kStop, kDeliverCmd, kDeliverSt, kUnload,
+                                     kDeliverTimer };
 
   struct Job {
     JobKind kind;
@@ -161,6 +206,7 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
     const std::uint8_t* val;  // native pointer; caller keeps alive for the call
     std::size_t len;
     std::uint16_t seq;
+    std::uint32_t timer_id;   // for kDeliverTimer
     core::plugin::KsErr result;
   };
 
@@ -195,6 +241,35 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
   std::int32_t instruction_limit_ = 100 * kInstructionsPerMs;  // per-callback cap
   std::uint32_t last_cb_ms_ = 0;
   std::uint32_t host_calls_ = 0;       // marshalled host calls so far
+
+  // The plugins this engine has loaded. The native shims need to map a WAMR
+  // module instance back to the plugin that owns it (a plugin's host import
+  // only knows its exec_env, not its handle).
+  void remember_instance(core::plugin::PluginInstance* inst,
+                         wasm_module_inst_t wasm_inst) noexcept;
+  void forget_instance(core::plugin::PluginInstance* inst) noexcept;
+
+  struct InstanceEntry {
+    core::plugin::PluginInstance* inst = nullptr;
+    wasm_module_inst_t wasm_inst = nullptr;
+  };
+  static constexpr std::size_t kMaxInstances = 8;
+  InstanceEntry instances_[kMaxInstances]{};
+
+  // --- the plugin's timers (design §6: ks_timer_set(ms, id) -> on_timer(id))
+  struct Timer {
+    core::plugin::PluginInstance* inst = nullptr;
+    std::uint32_t id = 0;
+    std::uint32_t due_ms = 0;
+    std::uint32_t period_ms = 0;  // 0 = one-shot
+    bool used = false;
+  };
+  static constexpr std::size_t kMaxTimers = 8;
+  Timer timers_[kMaxTimers]{};
+  std::size_t timer_n_ = 0;
+  // The timer list is the main thread's, but ks_timer_set() is called from
+  // the plugin thread — so it needs a lock.
+  SemaphoreHandle_t timer_mu_ = nullptr;
   // Set when a callback overran its budget: the plugin is faulted.
   bool budget_exceeded_ = false;
   // Set when the executor thread was abandoned because a callback hung

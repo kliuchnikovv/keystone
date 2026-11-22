@@ -22,6 +22,9 @@
 /* The attribute id of `on_off` in the Switch device type (SPEC §6.1). */
 #define ATTR_ON_OFF 0x01
 
+/* The handle of the plugin's timer. */
+#define TIMER_ID 7
+
 /* The entity id the hub assigned in on_start. 0 means "not declared yet". */
 static unsigned g_entity = 0;
 
@@ -42,6 +45,9 @@ void on_start(void) {
 
   ks_build_declare(desc, KS_DEVICE_SWITCH, attr_ids, value_types, flags, 1);
   g_entity = ks_entity_declare(desc, KS_DECLARE_SIZE(1));
+
+  /* Arm a repeating timer: the hub calls on_timer(TIMER_ID) every 5 s. */
+  ks_timer_set_repeating(5000, TIMER_ID);
 }
 
 void on_command(unsigned entity, unsigned attr, const unsigned char* value,
@@ -65,4 +71,14 @@ void on_command(unsigned entity, unsigned attr, const unsigned char* value,
   ks_put_bool(g_value, value[0] != 0);
   ks_state_publish(g_entity, ATTR_ON_OFF, g_value, 1);
 #endif
+}
+
+/* The plugin's timer fired. */
+void on_timer(unsigned id) {
+  (void)id;
+  /* The timer is a heartbeat: the plugin republishes its state, so the hub
+   * (and the app) see the device is still alive. */
+  if (g_entity == 0) return;
+  ks_put_bool(g_value, 0);
+  ks_state_publish(g_entity, ATTR_ON_OFF, g_value, 1);
 }

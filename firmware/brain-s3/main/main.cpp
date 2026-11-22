@@ -5634,6 +5634,12 @@ extern "C" void app_main(void) {
       }
     }
 
+    // The plugins' own timers (design §6: ks_timer_set(ms, id) -> on_timer(id)).
+    // The hub's clock is the main loop's, so the timers are fired here; the
+    // delivery to the plugin goes through the engine's job queue and under
+    // the same callback budget as every other plugin callback.
+    wasm_host::poll_timers(t);
+
     // Fire due timers.
     struct TimerFireContext {
       Dispatcher*   disp;

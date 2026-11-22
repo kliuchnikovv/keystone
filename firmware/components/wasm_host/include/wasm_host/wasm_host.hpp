@@ -46,4 +46,10 @@ bool install_bundled(const char* id);
 std::size_t bundled_count();
 const char* bundled_id(std::size_t i);
 
+// Deliver the plugin timers that are due. Called from the hub's main loop —
+// the hub's clock is the main loop's, and the plugin's on_timer(id) is
+// delivered under the same callback budget as every other plugin callback.
+// Returns how many timers fired.
+std::size_t poll_timers(std::uint32_t now_ms);
+
 }  // namespace wasm_host

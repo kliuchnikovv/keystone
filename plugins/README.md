@@ -23,6 +23,8 @@ interrupted, put into the `faulted` state, and its entities are withdrawn —
 | `ks_entity_declare(desc, len)` | declare a virtual entity; returns its id     |
 | `ks_state_publish(entity, attr, value, len)` | publish STATE for one of your own entities |
 | `ks_log(msg, len)`         | write a line to the hub's log                   |
+| `ks_timer_set(ms, id)`     | arm a one-shot timer                            |
+| `ks_timer_set_repeating(period_ms, id)` | arm a repeating timer (a heartbeat)  |
 
 And the exports the hub calls:
 
@@ -32,6 +34,7 @@ And the exports the hub calls:
 | `on_start()`               | once, when the plugin starts                    |
 | `on_stop()`                | when the plugin stops                           |
 | `on_command(entity, attr, value, len, seq)` | a COMMAND arrived for one of your entities |
+| `on_timer(id)`             | a timer the plugin armed fired                  |
 
 A plugin that does not export `ks_plugin_abi_version`, or exports a version
 the hub does not know, is refused.
@@ -116,6 +119,28 @@ home>      ->  0xe000 switch chip192: on_off=on
 home> off 0xe000
 home>      ->  0xe000 switch chip192: on_off=off
 ```
+
+### The timer
+
+`test-switch` also arms a repeating timer in `on_start`:
+
+```c
+ks_timer_set_repeating(5000, TIMER_ID);
+```
+
+and answers it in `on_timer(id)`. On the live S3-Zero the tick is exact:
+
+```
+I wamr-eng: ks_timer_set_repeating: 5000 ms, id 7
+I wamr-eng: on_timer(7) fired      <- 6783 ms
+I wamr-eng: on_timer(7) fired      <- 11783 ms
+I wamr-eng: on_timer(7) fired      <- 16783 ms
+```
+
+The timer list belongs to the **main loop** (the hub's clock is the main
+loop's), and the delivery to the plugin goes through the same job queue and
+under the same callback budget as every other plugin callback. A plugin that
+faults loses its timers — a faulted plugin must not keep waking the hub up.
 
 ### The same plugin, built with `-DKS_PLUGIN_CRASH=1`
 

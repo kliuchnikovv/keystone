@@ -127,10 +127,53 @@ int32_t shim_ks_log(wasm_exec_env_t env, int32_t ptr, int32_t len) {
   return 0;
 }
 
+// ks_timer_set(ms i32, id i32) -> i32 (KsErr). Arms a timer; the hub calls
+// the plugin's on_timer(id) when it fires. The Timer capability is harmless
+// and granted to every plugin (design §5.4).
+int32_t shim_ks_timer_set(wasm_exec_env_t env, int32_t ms, int32_t id) {
+  if (g_engine == nullptr) return static_cast<int32_t>(core::plugin::KsErr::Denied);
+  if (ms <= 0) return static_cast<int32_t>(core::plugin::KsErr::BadArg);
+  // The plugin handle is the instance the exec_env belongs to. The engine
+  // maps it back from the exec_env's module instance.
+  wasm_module_inst_t inst = wasm_runtime_get_module_inst(env);
+  void* owner = g_engine->instance_of(inst);
+  if (owner == nullptr) {
+    ESP_LOGE(kTag, "ks_timer_set: the plugin is not registered");
+    return static_cast<int32_t>(core::plugin::KsErr::NotFound);
+  }
+  g_engine->set_timer(reinterpret_cast<core::plugin::PluginInstance*>(owner),
+                      static_cast<std::uint32_t>(ms),
+                      static_cast<std::uint32_t>(id));
+  ESP_LOGI(kTag, "ks_timer_set: %u ms, id %u", (unsigned)ms, (unsigned)id);
+  return static_cast<int32_t>(core::plugin::KsErr::Ok);
+}
+
+// ks_timer_set_repeating(period_ms i32, id i32) -> i32 (KsErr). A heartbeat:
+// the hub calls on_timer(id) every period_ms until the timer is replaced.
+int32_t shim_ks_timer_set_repeating(wasm_exec_env_t env, int32_t period_ms,
+                                     int32_t id) {
+  if (g_engine == nullptr) return static_cast<int32_t>(core::plugin::KsErr::Denied);
+  if (period_ms <= 0) return static_cast<int32_t>(core::plugin::KsErr::BadArg);
+  wasm_module_inst_t inst = wasm_runtime_get_module_inst(env);
+  void* owner = g_engine->instance_of(inst);
+  if (owner == nullptr) {
+    ESP_LOGE(kTag, "ks_timer_set_repeating: the plugin is not registered");
+    return static_cast<int32_t>(core::plugin::KsErr::NotFound);
+  }
+  g_engine->set_repeating_timer(
+      reinterpret_cast<core::plugin::PluginInstance*>(owner),
+      static_cast<std::uint32_t>(period_ms), static_cast<std::uint32_t>(id));
+  ESP_LOGI(kTag, "ks_timer_set_repeating: %u ms, id %u", (unsigned)period_ms,
+           (unsigned)id);
+  return static_cast<int32_t>(core::plugin::KsErr::Ok);
+}
+
 NativeSymbol kNatives[] = {
     {"ks_entity_declare", (void*)shim_ks_entity_declare, "(ii)i", nullptr},
     {"ks_state_publish", (void*)shim_ks_state_publish, "(iiii)i", nullptr},
     {"ks_log", (void*)shim_ks_log, "(ii)i", nullptr},
+    {"ks_timer_set", (void*)shim_ks_timer_set, "(ii)i", nullptr},
+    {"ks_timer_set_repeating", (void*)shim_ks_timer_set_repeating, "(ii)i", nullptr},
 };
 }  // namespace
 
@@ -163,17 +206,20 @@ bool WAMRPluginEngine::begin() {
   // the plugin blocks on each call, so at most one is in flight per plugin.
   host_q_ = xQueueCreate(8, sizeof(HostCall*));
   host_done_ = xSemaphoreCreateBinary();
+  timer_mu_ = xSemaphoreCreateMutex();
   if (jobs_ == nullptr || done_ == nullptr || host_q_ == nullptr ||
-      host_done_ == nullptr) {
+      host_done_ == nullptr || timer_mu_ == nullptr) {
     ESP_LOGE(kTag, "queue/sem alloc failed");
     if (jobs_ != nullptr) vQueueDelete(jobs_);
     if (done_ != nullptr) vSemaphoreDelete(done_);
     if (host_q_ != nullptr) vQueueDelete(host_q_);
     if (host_done_ != nullptr) vSemaphoreDelete(host_done_);
+    if (timer_mu_ != nullptr) vSemaphoreDelete(timer_mu_);
     jobs_ = nullptr;
     done_ = nullptr;
     host_q_ = nullptr;
     host_done_ = nullptr;
+    timer_mu_ = nullptr;
     wasm_runtime_destroy();
     return false;
   }
@@ -196,10 +242,12 @@ bool WAMRPluginEngine::begin() {
     vSemaphoreDelete(done_);
     vQueueDelete(host_q_);
     vSemaphoreDelete(host_done_);
+    vSemaphoreDelete(timer_mu_);
     jobs_ = nullptr;
     done_ = nullptr;
     host_q_ = nullptr;
     host_done_ = nullptr;
+    timer_mu_ = nullptr;
     wasm_runtime_destroy();
     return false;
   }
@@ -227,6 +275,7 @@ void WAMRPluginEngine::end() {
   if (done_ != nullptr) { vSemaphoreDelete(done_); done_ = nullptr; }
   if (host_q_ != nullptr) { vQueueDelete(host_q_); host_q_ = nullptr; }
   if (host_done_ != nullptr) { vSemaphoreDelete(host_done_); host_done_ = nullptr; }
+  if (timer_mu_ != nullptr) { vSemaphoreDelete(timer_mu_); timer_mu_ = nullptr; }
   wasm_runtime_destroy();
   g_engine = nullptr;
   inited_ = false;
@@ -235,6 +284,37 @@ void WAMRPluginEngine::end() {
 void WAMRPluginEngine::set_host_callbacks(
     const core::plugin::PluginHostCallbacks& cb) {
   callbacks_ = cb;
+}
+
+// The engine's loaded-plugin registry: a plugin's host import only knows
+// its exec_env, so the shim needs a way back from a WAMR module instance to
+// the plugin that owns it.
+void* WAMRPluginEngine::instance_of(wasm_module_inst_t inst) const noexcept {
+  for (const auto& e : instances_) {
+    if (e.inst != nullptr && e.wasm_inst == inst) return e.inst;
+  }
+  return nullptr;
+}
+
+void WAMRPluginEngine::remember_instance(core::plugin::PluginInstance* inst,
+                                          wasm_module_inst_t wasm_inst) noexcept {
+  for (auto& e : instances_) {
+    if (e.inst == nullptr) {
+      e.inst = inst;
+      e.wasm_inst = wasm_inst;
+      return;
+    }
+  }
+}
+
+void WAMRPluginEngine::forget_instance(
+    core::plugin::PluginInstance* inst) noexcept {
+  for (auto& e : instances_) {
+    if (e.inst == inst) {
+      e.inst = nullptr;
+      e.wasm_inst = nullptr;
+    }
+  }
 }
 
 // The wall-clock budget and the instruction cap are two halves of one
@@ -364,7 +444,9 @@ core::plugin::PluginInstance* WAMRPluginEngine::load(const uint8_t* wasm,
     return nullptr;
   }
   auto* p = new Plugin{module, inst, env, copy, len};
-  return reinterpret_cast<core::plugin::PluginInstance*>(p);
+  auto* handle = reinterpret_cast<core::plugin::PluginInstance*>(p);
+  remember_instance(handle, inst);
+  return handle;
 }
 
 core::plugin::KsErr WAMRPluginEngine::start(core::plugin::PluginInstance* inst) {
@@ -414,6 +496,131 @@ void WAMRPluginEngine::unload(core::plugin::PluginInstance* inst) {
   j.kind = JobKind::kUnload;
   j.inst = inst;
   (void)run_job(j);
+}
+
+// ---- the plugin's timers (design §6) -------------------------------------
+
+// set_timer() is called from the plugin thread (the ks_timer_set import) or
+// from the main thread. The timer list is the MAIN thread's — the hub's
+// clock is the main loop's — so the list is guarded by a mutex. (The plugin
+// thread only ever touches ONE entry, under the same lock.)
+void WAMRPluginEngine::set_timer(core::plugin::PluginInstance* inst,
+                                  std::uint32_t ms, std::uint32_t id) {
+  set_repeating_timer(inst, ms, id);
+  // A one-shot: clear the period of the slot we just armed.
+  xSemaphoreTake(timer_mu_, portMAX_DELAY);
+  for (auto& t : timers_) {
+    if (t.used && t.inst == inst && t.id == id) t.period_ms = 0;
+  }
+  xSemaphoreGive(timer_mu_);
+}
+
+void WAMRPluginEngine::set_repeating_timer(core::plugin::PluginInstance* inst,
+                                           std::uint32_t period_ms,
+                                           std::uint32_t id) {
+  if (inst == nullptr) return;
+  xSemaphoreTake(timer_mu_, portMAX_DELAY);
+  // Re-arming the same (plugin, id) replaces the previous timer — the plugin
+  // gets exactly one timer per id.
+  Timer* slot = nullptr;
+  for (auto& t : timers_) {
+    if (t.used && t.inst == inst && t.id == id) {
+      slot = &t;
+      break;
+    }
+  }
+  if (slot == nullptr) {
+    for (auto& t : timers_) {
+      if (!t.used) {
+        slot = &t;
+        break;
+      }
+    }
+  }
+  if (slot == nullptr) {
+    xSemaphoreGive(timer_mu_);
+    ESP_LOGW(kTag, "no free timer slot (the plugin has %u)",
+             (unsigned)timer_count());
+    return;
+  }
+  slot->inst = inst;
+  slot->id = id;
+  slot->due_ms = now_ms() + period_ms;
+  slot->period_ms = period_ms;
+  slot->used = true;
+  xSemaphoreGive(timer_mu_);
+}
+
+void WAMRPluginEngine::cancel_timer(core::plugin::PluginInstance* inst,
+                                     std::uint32_t id) {
+  xSemaphoreTake(timer_mu_, portMAX_DELAY);
+  for (auto& t : timers_) {
+    if (t.used && (inst == nullptr || t.inst == inst) && t.id == id) {
+      t.used = false;
+    }
+  }
+  xSemaphoreGive(timer_mu_);
+}
+
+// poll_timers() runs on the MAIN thread: it delivers the timers that are
+// due. Each delivery goes through the same job queue and the same watchdog
+// as every other plugin callback.
+std::size_t WAMRPluginEngine::poll_timers(std::uint32_t now,
+                                           core::plugin::PluginInstance* inst) {
+  // Collect the due timers first (the delivery blocks on the plugin, and we
+  // must not hold the lock while it runs).
+  struct Due {
+    core::plugin::PluginInstance* inst;
+    std::uint32_t id;
+  };
+  Due due[kMaxTimers]{};
+  std::size_t n = 0;
+  xSemaphoreTake(timer_mu_, portMAX_DELAY);
+  for (auto& t : timers_) {
+    if (!t.used) continue;
+    if (inst != nullptr && t.inst != inst) continue;
+    if (static_cast<std::int32_t>(now - t.due_ms) < 0) continue;
+    if (n < kMaxTimers) {
+      due[n].inst = t.inst;
+      due[n].id = t.id;
+      ++n;
+    }
+    if (t.period_ms != 0) {
+      // A repeating timer: re-arm it for the next period. The period is
+      // measured from the DUE time, not from now, so a late poll does not
+      // make the tick drift.
+      t.due_ms += t.period_ms;
+      // A plugin that was asleep for a long time must not get a burst of
+      // catch-up ticks: skip the periods it missed.
+      const std::int32_t behind =
+          static_cast<std::int32_t>(now - t.due_ms);
+      if (behind >= static_cast<std::int32_t>(t.period_ms)) {
+        t.due_ms = now + t.period_ms;
+      }
+    } else {
+      t.used = false;  // one-shot
+    }
+  }
+  xSemaphoreGive(timer_mu_);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    const core::plugin::KsErr r = deliver_timer(due[i].inst, due[i].id);
+    if (r != core::plugin::KsErr::Ok) {
+      ESP_LOGE(kTag, "on_timer(%u) failed: %d", (unsigned)due[i].id, (int)r);
+    } else {
+      ESP_LOGI(kTag, "on_timer(%u) fired", (unsigned)due[i].id);
+    }
+  }
+  return n;
+}
+
+core::plugin::KsErr WAMRPluginEngine::deliver_timer(
+    core::plugin::PluginInstance* inst, std::uint32_t id) {
+  Job j{};
+  j.kind = JobKind::kDeliverTimer;
+  j.inst = inst;
+  j.timer_id = id;
+  return run_job(j);
 }
 
 // run_job() runs on the MAIN thread: it hands the job to the executor and
@@ -485,14 +692,32 @@ core::plugin::KsErr WAMRPluginEngine::run_job(Job& j) {
       // Wake the (still running) plugin thread's host-call wait so it can
       // notice the fault and unwind.
       if (host_done_ != nullptr) xSemaphoreGive(host_done_);
+      cancel_timers_of(j.inst);
       return core::plugin::KsErr::NoMem;
     }
   }
   last_cb_ms_ = now_ms() - t0;
   if (budget_exceeded_) {
+    // The plugin overran its budget: it is faulted. Drop its timers — a
+    // faulted plugin must not keep waking the hub up.
+    cancel_timers_of(j.inst);
     return core::plugin::KsErr::NoMem;
   }
+  if (j.result != core::plugin::KsErr::Ok) {
+    // A trapped callback: the plugin is faulted too (the manager counts it).
+    cancel_timers_of(j.inst);
+  }
   return j.result;
+}
+
+// cancel_timers_of() drops every timer of one plugin.
+void WAMRPluginEngine::cancel_timers_of(core::plugin::PluginInstance* inst) {
+  if (inst == nullptr) return;
+  xSemaphoreTake(timer_mu_, portMAX_DELAY);
+  for (auto& t : timers_) {
+    if (t.used && t.inst == inst) t.used = false;
+  }
+  xSemaphoreGive(timer_mu_);
 }
 
 void* WAMRPluginEngine::executor_main(void* arg) {
@@ -515,6 +740,7 @@ void* WAMRPluginEngine::executor_main(void* arg) {
 #if KS_WAMR_INSTRUCTION_METERING
     wasm_runtime_set_instruction_count_limit(plug->env,
                                              self->instruction_limit_);
+    ESP_LOGD(kTag, "armed the instruction cap: %d", (int)self->instruction_limit_);
 #endif
     switch (p->kind) {
       case JobKind::kStart: {
@@ -589,8 +815,36 @@ void* WAMRPluginEngine::executor_main(void* arg) {
         p->result = core::plugin::KsErr::Ok;
         break;
       }
+      case JobKind::kDeliverTimer: {
+        // The plugin's on_timer(id). Optional export: a plugin without it
+        // simply has no timers.
+        wasm_function_inst_t fn =
+            wasm_runtime_lookup_function(plug->inst, "on_timer");
+        if (fn == nullptr) {
+          p->result = core::plugin::KsErr::NotFound;
+          break;
+        }
+        uint32_t argv[1] = {static_cast<uint32_t>(p->timer_id)};
+        const std::uint32_t t_call = now_ms();
+        const bool ok = wasm_runtime_call_wasm(plug->env, fn, 1, argv);
+        if (!ok) {
+          ESP_LOGE(kTag, "on_timer(%u) trap after %u ms: %s (cap %d)",
+                   (unsigned)p->timer_id, now_ms() - t_call,
+                   wasm_runtime_get_exception(plug->inst),
+                   (int)self->instruction_limit_);
+          p->result = core::plugin::KsErr::NoMem;
+        } else {
+          ESP_LOGD(kTag, "on_timer(%u) returned in %u ms", (unsigned)p->timer_id,
+                   now_ms() - t_call);
+          p->result = core::plugin::KsErr::Ok;
+        }
+        break;
+      }
       case JobKind::kUnload: {
         if (plug != nullptr) {
+          self->forget_instance(p->inst);
+          // The plugin's timers die with it.
+          self->cancel_timers_of(p->inst);
           wasm_runtime_destroy_exec_env(plug->env);
           wasm_runtime_deinstantiate(plug->inst);
           wasm_runtime_unload(plug->module);

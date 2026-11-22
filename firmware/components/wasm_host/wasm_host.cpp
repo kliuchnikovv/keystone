@@ -224,4 +224,8 @@ const char* bundled_id(std::size_t i) {
   return i < kBundledCount ? kBundled[i].id : "";
 }
 
+std::size_t poll_timers(std::uint32_t now_ms) {
+  return g_engine.poll_timers(now_ms, nullptr);
+}
+
 }  // namespace wasm_host
