@@ -37,4 +37,13 @@ bool status(char* out, std::size_t cap);
 // the runtime is not up.
 const char* plugin_id();
 
+// Install and start one of the plugins the image carries, by name. The
+// console `plugin <name>` command uses this to bring up the crash plugin
+// (the watchdog's target) next to the good one.
+bool install_bundled(const char* id);
+
+// The names of the plugins the image carries.
+std::size_t bundled_count();
+const char* bundled_id(std::size_t i);
+
 }  // namespace wasm_host

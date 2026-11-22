@@ -19,6 +19,11 @@ firmware/*/managed_components.stale/
 firmware/components/wamr/
 firmware/*/dependencies.lock
 
+# Plugin build output (scripts/build-plugins.sh): the .wasm files are
+# artefacts — the copies the firmware links in are regenerated into
+# firmware/components/wasm_host/include/wasm_host/*_wasm.hpp.
+plugins/build/
+
 # A crash dump read off a co-processor (scripts/flash-thread-c6-matter.sh
 # --coredump): a local artefact of one crash, never in git.
 firmware/*/coredump.bin

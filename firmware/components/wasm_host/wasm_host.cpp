@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "hubproto/message.hpp"
 #include "hubproto/payload.hpp"
+#include "wasm_host/test_plugin_crash_wasm.hpp"
 #include "wasm_host/test_plugin_wasm.hpp"
 #include "wasm_host/wamr_engine.hpp"
 
@@ -57,20 +58,50 @@ void plugin_ack_on_msg(void* /*ctx*/, const hubproto::Header& h,
 // static holds only the template-parameter-free view of the pair.
 WAMRPluginEngine g_engine;
 
-// The plugin id, in storage that outlives the install frame.
-constexpr const char* kPluginId = "test.switch";
-char g_plugin_id[core::plugin::Manifest::kMaxId] = {};
+// The plugins the image carries. `test.switch` is the good one (a Switch
+// that echoes COMMANDs as STATEs); `test.crash` is the same shape but its
+// on_command never returns — the watchdog's target (design §10).
+struct BundledPlugin {
+  const char* id;
+  const std::uint8_t* wasm;
+  std::size_t len;
+};
+constexpr BundledPlugin kBundled[] = {
+    {"test.switch", kTestPluginWasm, kTestPluginWasmLen},
+    {"test.crash", kTestPluginCrashWasm, kTestPluginCrashWasmLen},
+};
+constexpr std::size_t kBundledCount = sizeof(kBundled) / sizeof(kBundled[0]);
 
 // The manager is a template on the Registry type, so it cannot be a plain
-// static here; `g_manager` holds a type-erased view of the bits `status()`
+// static here; `g_view` holds a type-erased view of the bits `status()`
 // needs (the plugin's state and its fault count).
 struct ManagerView {
-  const char* id = nullptr;
-  const char* state = nullptr;
-  int fault_count = 0;
   bool valid = false;
 };
 ManagerView g_view;
+
+// The id of the plugin the runtime installed, in storage that outlives the
+// install frame.
+char g_plugin_id[core::plugin::Manifest::kMaxId] = {};
+
+// The manager's type-erased entry points. The manager is a template on the
+// Registry type, so these are function pointers filled in by start().
+using InstallFn = bool (*)(const char* id, const std::uint8_t* wasm, std::size_t len);
+using StartFn = core::plugin::KsErr (*)(const char* id);
+using StateFn = core::plugin::PluginState (*)(const char* id);
+InstallFn g_install = nullptr;
+StartFn g_start = nullptr;
+StateFn g_state = nullptr;
+
+const char* state_name(core::plugin::PluginState s) {
+  switch (s) {
+    case core::plugin::PluginState::Installed: return "Installed";
+    case core::plugin::PluginState::Started: return "Started";
+    case core::plugin::PluginState::Stopped: return "Stopped";
+    case core::plugin::PluginState::Faulted: return "Faulted";
+  }
+  return "?";
+}
 }  // namespace
 
 template <typename Registry>
@@ -91,35 +122,39 @@ bool start(core::Bus& bus, Registry& reg) {
   bus.subscribe(&plugin_ack_on_msg, nullptr);
   log_heap("wasm_host::start: after manager");
 
+  // The manager's type-erased entry points (see the note on g_install).
+  g_install = [](const char* id, const std::uint8_t* wasm, std::size_t len) {
+    core::plugin::Manifest m{};
+    std::strncpy(m.id, id, sizeof(m.id) - 1);
+    m.version = 1;
+    m.abi = core::plugin::kAbiVersion;
+    m.caps.add(core::plugin::Cap::EntityDeclare);
+    m.caps.add(core::plugin::Cap::Log);
+    m.caps.add(core::plugin::Cap::Timer);
+    return manager.install(m, wasm, len);
+  };
+  g_start = [](const char* id) { return manager.start(id); };
+  g_state = [](const char* id) { return manager.state(id); };
+
   // Hand-built manifest — Plan 1b will parse one from JSON; for the first
   // wiring the fields come from here. Must declare EntityDeclare to let the
   // plugin call ks_entity_declare at all.
-  core::plugin::Manifest m{};
-  std::strncpy(m.id, kPluginId, sizeof(m.id) - 1);
-  std::strncpy(g_plugin_id, kPluginId, sizeof(g_plugin_id) - 1);
-  m.version = 1;
-  m.abi = core::plugin::kAbiVersion;
-  m.caps.add(core::plugin::Cap::EntityDeclare);
-  m.caps.add(core::plugin::Cap::Log);
-  m.caps.add(core::plugin::Cap::Timer);
-
-  if (!manager.install(m, kTestPluginWasm, kTestPluginWasmLen)) {
-    ESP_LOGE(kTag, "install %s failed", m.id);
+  const BundledPlugin& p = kBundled[0];
+  if (!g_install(p.id, p.wasm, p.len)) {
+    ESP_LOGE(kTag, "install %s failed", p.id);
     return false;
   }
   log_heap("wasm_host::start: after install");
 
-  const core::plugin::KsErr r = manager.start(m.id);
+  const core::plugin::KsErr r = g_start(p.id);
   if (r != core::plugin::KsErr::Ok) {
-    ESP_LOGE(kTag, "start %s: %d", m.id, (int)r);
+    ESP_LOGE(kTag, "start %s: %d", p.id, (int)r);
     return false;
   }
   log_heap("wasm_host::start: after start()");
-  ESP_LOGI(kTag, "plugin '%s' started", m.id);
+  ESP_LOGI(kTag, "plugin '%s' started", p.id);
 
-  g_view.id = g_plugin_id;  // a static copy: m.id dies with this frame
-  g_view.state = "Started";
-  g_view.fault_count = 0;
+  std::strncpy(g_plugin_id, p.id, sizeof(g_plugin_id) - 1);
   g_view.valid = true;
   return true;
 }
@@ -135,17 +170,58 @@ bool status(char* out, std::size_t cap) {
     std::snprintf(out, cap, "plugin runtime: not up");
     return false;
   }
-  std::snprintf(out, cap,
-                "%s: %s, faults=%d | marshalled host calls=%u | last callback "
-                "%u ms (budget %u ms, instruction cap %d)",
-                g_view.id, g_view.state, g_view.fault_count,
-                (unsigned)g_engine.host_call_count(),
-                (unsigned)g_engine.last_callback_ms(),
-                (unsigned)g_engine.callback_budget_ms(),
-                (int)g_engine.instruction_limit());
+  // The manager's own view of each plugin (a plugin may have faulted since
+  // it started — the watchdog's whole point).
+  std::size_t off = 0;
+  for (std::size_t i = 0; i < kBundledCount && off + 1 < cap; ++i) {
+    const char* state = g_state != nullptr ? state_name(g_state(kBundled[i].id))
+                                           : "?";
+    const int n = std::snprintf(out + off, cap - off, "%s: %s\n",
+                                kBundled[i].id, state);
+    if (n <= 0) break;
+    off += static_cast<std::size_t>(n);
+  }
+  if (off + 1 < cap) {
+    std::snprintf(out + off, cap - off,
+                  "engine: marshalled host calls=%u | last callback %u ms "
+                  "(budget %u ms, instruction cap %d)",
+                  (unsigned)g_engine.host_call_count(),
+                  (unsigned)g_engine.last_callback_ms(),
+                  (unsigned)g_engine.callback_budget_ms(),
+                  (int)g_engine.instruction_limit());
+  }
   return true;
 }
 
-const char* plugin_id() { return g_view.valid ? g_view.id : ""; }
+const char* plugin_id() { return g_view.valid ? g_plugin_id : ""; }
+
+// Install and start one of the bundled plugins by name. Used by the console
+// `plugin <name>` command to bring up the crash plugin (the watchdog's
+// target) next to the good one.
+bool install_bundled(const char* id) {
+  if (g_install == nullptr || g_start == nullptr) return false;
+  for (std::size_t i = 0; i < kBundledCount; ++i) {
+    if (std::strcmp(kBundled[i].id, id) != 0) continue;
+    if (!g_install(kBundled[i].id, kBundled[i].wasm, kBundled[i].len)) {
+      ESP_LOGE(kTag, "install %s failed", id);
+      return false;
+    }
+    const core::plugin::KsErr r = g_start(kBundled[i].id);
+    if (r != core::plugin::KsErr::Ok) {
+      ESP_LOGE(kTag, "start %s: %d", id, (int)r);
+      return false;
+    }
+    ESP_LOGI(kTag, "plugin '%s' installed and started", id);
+    return true;
+  }
+  ESP_LOGE(kTag, "no bundled plugin named '%s'", id);
+  return false;
+}
+
+// The names of the plugins the image carries.
+std::size_t bundled_count() { return kBundledCount; }
+const char* bundled_id(std::size_t i) {
+  return i < kBundledCount ? kBundled[i].id : "";
+}
 
 }  // namespace wasm_host

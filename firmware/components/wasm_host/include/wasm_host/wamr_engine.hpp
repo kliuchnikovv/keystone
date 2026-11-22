@@ -95,20 +95,27 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
   // not returned within this many milliseconds is faulted: the plugin is
   // stopped and its entities withdrawn, the hub keeps running.
   // 0 disables the watchdog (not recommended).
-  void set_callback_budget_ms(std::uint32_t ms) noexcept {
-    budget_ms_ = ms;
-  }
+  //
+  // Setting it also re-derives the instruction limit (see below), so the two
+  // halves of the watchdog always agree.
+  void set_callback_budget_ms(std::uint32_t ms) noexcept;
   std::uint32_t callback_budget_ms() const noexcept { return budget_ms_; }
 
   // How many interpreter instructions the plugin may execute per callback.
   // The fast interpreter checks this counter on EVERY opcode dispatch, so
   // the limit is what actually breaks a plugin that loops forever (the
-  // wall-clock watchdog on the main thread only *notices*). The default is
-  // calibrated for the S3 at 240 MHz: roughly 3 M instructions per 100 ms
-  // of budget (measured: ~30 M instr/s for the fast interpreter on S3).
-  void set_instruction_limit(std::int32_t limit) noexcept {
-    instruction_limit_ = limit;
-  }
+  // wall-clock watchdog on the main thread only *notices*).
+  //
+  // The limit is DERIVED from the wall-clock budget so the two agree: the
+  // interpreter's speed on the S3 is measured at ~4 M instructions per
+  // second, so a 100 ms budget allows ~400 K instructions. When the
+  // interpreter trips the limit, the wall-clock check fires at about the
+  // same moment and the plugin unwinds cleanly.
+  //
+  // Measured on the S3-Zero (ESP32-S3FH4R2 @ 240 MHz, fast interpreter):
+  // 3 000 000 instructions took ~730 ms, i.e. ~4.1 M instr/s.
+  static constexpr std::int32_t kInstructionsPerMs = 4'000;  // ~4 M/s
+
   std::int32_t instruction_limit() const noexcept { return instruction_limit_; }
 
   // The wall-clock time the last callback took, in ms (for the log line the
@@ -185,7 +192,7 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
   // make (spike report §4.4), and the main task is a plain FreeRTOS task.
   TaskHandle_t main_task_ = nullptr;
   std::uint32_t budget_ms_ = 100;      // callback time budget (design §5.5)
-  std::int32_t instruction_limit_ = 3'000'000;  // per-callback instruction cap
+  std::int32_t instruction_limit_ = 100 * kInstructionsPerMs;  // per-callback cap
   std::uint32_t last_cb_ms_ = 0;
   std::uint32_t host_calls_ = 0;       // marshalled host calls so far
   // Set when a callback overran its budget: the plugin is faulted.

@@ -1110,7 +1110,8 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
                REQ_ROOM_SET, REQ_ROOM_CLEAR, REQ_ROOMS_LIST,
-               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA };
+               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA,
+               REQ_PLUGIN };
 
 struct Req {
   ReqKind kind;
@@ -2336,12 +2337,41 @@ int cmd_heap(int /*argc*/, char** /*argv*/) {
 // counters. Reads only the engine's own counters (never the registry), so it
 // does not need the main loop's request queue.
 int cmd_plugins(int /*argc*/, char** /*argv*/) {
-  char buf[256];
+  char buf[512];
   if (!wasm_host::status(buf, sizeof(buf))) {
     printf("%s\n", buf);
     return 1;
   }
-  printf("%s\n", buf);
+  printf("%s", buf);
+  return 0;
+}
+
+// Install and start one of the plugins the image carries. `plugin` alone
+// lists them. The crash plugin's on_command never returns — it exists to
+// prove the callback watchdog: the hub must fault it, withdraw its entity
+// and keep running.
+int cmd_plugin(int argc, char** argv) {
+  if (argc < 2) {
+    printf("bundled plugins:");
+    for (std::size_t i = 0; i < wasm_host::bundled_count(); ++i) {
+      printf(" %s", wasm_host::bundled_id(i));
+    }
+    printf("\n");
+    return 0;
+  }
+  // Installing a plugin touches the registry, so it must run on the main
+  // loop. The console enqueues the request and the main loop performs it.
+  // `target` is a pointer the main loop reads before the console returns.
+  static char name[32];
+  std::snprintf(name, sizeof(name), "%s", argv[1]);
+  Req r{};
+  r.kind = REQ_PLUGIN;
+  r.target = name;
+  if (!submit(r)) {
+    printf("timeout\n");
+    return 1;
+  }
+  printf("plugin '%s' installed and started\n", argv[1]);
   return 0;
 }
 
@@ -3495,6 +3525,7 @@ void start_console() {
   reg_cmd("events", "events [<n>] - the newest hub events (what the app's history shows), newest first", &cmd_events);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
   reg_cmd("plugins", "show the plugin runtime's state and the engine's counters", &cmd_plugins);
+  reg_cmd("plugin", "plugin [<name>] - list the bundled plugins, or install and start one", &cmd_plugin);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
@@ -6572,6 +6603,20 @@ extern "C" void app_main(void) {
               const std::size_t n = std::strlen(r->out);
               if (n < r->out_cap) std::snprintf(r->out + n, r->out_cap - n, ")\n");
             }
+          }
+          break;
+        }
+        case REQ_PLUGIN: {
+          // Installing a plugin declares entities, so it must happen here,
+          // on the main loop (the core is single-threaded).
+          if (!wasm_host::install_bundled(r->target)) {
+            if (r->out != nullptr) {
+              std::snprintf(r->out, r->out_cap, "plugin '%s': install failed\n",
+                            r->target);
+            }
+          } else if (r->out != nullptr) {
+            std::snprintf(r->out, r->out_cap, "plugin '%s' installed and started\n",
+                          r->target);
           }
           break;
         }

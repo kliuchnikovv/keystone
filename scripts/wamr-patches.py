@@ -65,10 +65,13 @@ def patch_contains(path: Path, marker: str) -> bool:
 
 def replace_once(path: Path, old: str, new: str) -> None:
     text = path.read_text()
+    # Idempotence check FIRST, and against the ADDED text (not the anchor):
+    # the anchor is usually a substring of the addition, so searching for the
+    # anchor alone would re-apply the patch on every run.
+    if new in text:
+        print(f"  {path.name}: already patched")
+        return
     if old not in text:
-        if new in text:
-            print(f"  {path.name}: already patched")
-            return
         raise SystemExit(f"{path}: anchor text not found; WAMR upstream may have changed")
     text = text.replace(old, new, 1)
     path.write_text(text)
@@ -175,6 +178,23 @@ CMAKE_ADD = CMAKE_ANCHOR + """
 """
 print("CMakeLists.txt: WAMR_BUILD_INSTRUCTION_METERING")
 replace_once(esp_cmake, CMAKE_ANCHOR, CMAKE_ADD)
+
+# The host (firmware/components/wasm_host) must know that the metering is
+# on: wasm_runtime_set_instruction_count_limit() is only DEFINED when
+# WASM_ENABLE_INSTRUCTION_METERING != 0, so the host's call has to be
+# guarded by the same condition. config_common.cmake's add_definitions()
+# only reaches THIS component's own sources, so the flag has to be
+# exported PUBLIC — and that has to happen AFTER idf_component_register
+# (${COMPONENT_LIB} does not exist before it).
+CMAKE2_ANCHOR = """target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format" "-Wno-type-limits")
+"""
+CMAKE2_ADD = CMAKE2_ANCHOR + """
+if (CONFIG_WAMR_ENABLE_INSTRUCTION_METERING)
+  target_compile_definitions(${COMPONENT_LIB} PUBLIC -DWASM_ENABLE_INSTRUCTION_METERING=1)
+endif ()
+"""
+print("CMakeLists.txt: export WASM_ENABLE_INSTRUCTION_METERING (PUBLIC)")
+replace_once(esp_cmake, CMAKE2_ANCHOR, CMAKE2_ADD)
 
 # The public header declares wasm_runtime_set_instruction_count_limit()
 # unconditionally, but the DEFINITION lives behind

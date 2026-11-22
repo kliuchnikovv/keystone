@@ -237,6 +237,15 @@ void WAMRPluginEngine::set_host_callbacks(
   callbacks_ = cb;
 }
 
+// The wall-clock budget and the instruction cap are two halves of one
+// watchdog: the cap is what BREAKS a plugin that loops forever (the fast
+// interpreter checks it on every opcode dispatch), the budget is what
+// NOTICES it. Deriving the cap from the budget keeps them in step.
+void WAMRPluginEngine::set_callback_budget_ms(std::uint32_t ms) {
+  budget_ms_ = ms;
+  instruction_limit_ = static_cast<std::int32_t>(ms) * kInstructionsPerMs;
+}
+
 // -- Host-call marshalling ---------------------------------------------------
 //
 // call_host() runs on the PLUGIN thread. It posts the request to the main
@@ -415,19 +424,22 @@ void WAMRPluginEngine::unload(core::plugin::PluginInstance* inst) {
 //   2. the callback budget (design §5.5) can only be enforced by someone
 //      watching the clock — that is the main thread.
 //
-// The watchdog has two halves:
-//   - the INSTRUCTION limit (set on the exec_env before the call): the fast
-//     interpreter checks it on every opcode dispatch, so a plugin that loops
-//     forever traps with "instruction limit exceeded" and unwinds CLEANLY —
-//     the module instance stays intact and can be unloaded normally. This is
-//     what breaks the hang.
-//   - the WALL-CLOCK check below: it is the budget the design doc asks for
-//     (100 ms of wall time per callback). It notices a slow plugin and
-//     reports the overrun.
+// The watchdog has two halves, and they are not equal:
 //
-// The instruction limit is calibrated from the wall-clock budget, so a
-// plugin that spends its whole budget computing trips the instruction limit
-// at roughly the same moment.
+//   - The INSTRUCTION limit is the mechanism. It is armed on the exec_env
+//     before the call, and the fast interpreter checks it on EVERY opcode
+//     dispatch, so a plugin that loops forever trips it and unwinds CLEANLY:
+//     the module instance stays intact and can be unloaded normally.
+//   - The WALL-CLOCK check is the backstop. It notices that the callback is
+//     over the budget (100 ms) and reports it. Because the instruction limit
+//     is calibrated to roughly the same wall time, the plugin normally
+//     unwinds on its own a moment later — the main thread waits for that
+//     unwinding instead of killing anything.
+//
+// If the plugin does NOT unwind (a limit that is set too high, or a hang
+// that is not an instruction loop), the executor thread is abandoned and
+// replaced — the fallback the design doc prescribes for the "can we free the
+// module heap on fault?" risk (design §5.5, "бринг-ап-риск").
 core::plugin::KsErr WAMRPluginEngine::run_job(Job& j) {
   if (!executor_running_) return core::plugin::KsErr::NoMem;
   budget_exceeded_ = false;
@@ -447,24 +459,24 @@ core::plugin::KsErr WAMRPluginEngine::run_job(Job& j) {
                "callback budget exceeded: %u ms > %u ms — the plugin is faulted",
                dt, static_cast<unsigned>(budget_ms_));
       budget_exceeded_ = true;
-      // The plugin is still running on the executor thread. The instruction
-      // limit will break it shortly (the executor set it before the call);
-      // we wait for the executor to finish unwinding so the module can be
-      // unloaded without leaking. If it does NOT come back, the executor
-      // thread is abandoned and replaced — the fallback the design doc
-      // prescribes for the "can we free the module heap on fault?" risk
-      // (design §5.5, "бринг-ап-риск").
-      const std::uint32_t grace = now_ms();
-      while (now_ms() - grace < 500) {
+      // Give the interpreter time to reach its instruction limit and unwind.
+      // It normally does so within a few tens of milliseconds — the limit is
+      // calibrated to the budget.
+      const std::uint32_t grace_start = now_ms();
+      const std::uint32_t grace_ms = 500;
+      while (now_ms() - grace_start < grace_ms) {
         drain_host_calls(budget_ms_);
-        if (xSemaphoreTake(done_, pdMS_TO_TICKS(10)) == pdTRUE) {
-          // The plugin unwound on its own: the trap is clean.
-          ESP_LOGE(kTag, "plugin unwound after %u ms (instruction limit)",
-                   dt);
+        if (xSemaphoreTake(done_, pdMS_TO_TICKS(5)) == pdTRUE) {
+          // The plugin unwound on its own: the trap is clean, the module
+          // instance is intact and can be unloaded without leaking.
+          ESP_LOGE(kTag, "plugin unwound %u ms after the budget (%u ms total)",
+                   now_ms() - grace_start, now_ms() - t0);
           last_cb_ms_ = now_ms() - t0;
           return core::plugin::KsErr::NoMem;
         }
       }
+      // It did not unwind: the executor thread is stuck. Abandon it — the
+      // fallback the design doc prescribes.
       ESP_LOGE(kTag, "plugin did not unwind — abandoning the executor thread");
       faulted_ = true;
       pthread_detach(executor_);
@@ -557,13 +569,16 @@ void* WAMRPluginEngine::executor_main(void* arg) {
             static_cast<uint32_t>(p->len),
             static_cast<uint32_t>(p->seq),
         };
+        const std::uint32_t t_call = now_ms();
         const bool ok = wasm_runtime_call_wasm(plug->env, fn, 5, argv);
+        const std::uint32_t dt = now_ms() - t_call;
         if (app_ptr64 != 0) wasm_runtime_module_free(plug->inst, app_ptr64);
         if (!ok) {
-          ESP_LOGE(kTag, "on_command trap: %s",
+          ESP_LOGE(kTag, "on_command trap after %u ms: %s", dt,
                    wasm_runtime_get_exception(plug->inst));
           p->result = core::plugin::KsErr::NoMem;
         } else {
+          ESP_LOGD(kTag, "on_command returned in %u ms", dt);
           p->result = core::plugin::KsErr::Ok;
         }
         break;
