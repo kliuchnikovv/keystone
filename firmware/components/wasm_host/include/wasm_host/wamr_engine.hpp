@@ -86,6 +86,26 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
                                     std::size_t len) override;
   void unload(core::plugin::PluginInstance* inst) override;
 
+  // --- the ABI check (design §3, §11) ---------------------------------------
+  //
+  // A plugin must export `ks_plugin_abi_version()` returning the ABI it was
+  // built against, and the hub must refuse a plugin whose ABI it does not
+  // know (design §3: "хаб обязан принимать совместимые версии и отказывать
+  // несовместимым с понятной ошибкой").
+  //
+  // The MANIFEST declares an ABI too, and the manifest parser checks it
+  // against `core::plugin::kAbiVersion`. But a manifest is data — it can lie
+  // (or come from a different source than the binary). The export inside the
+  // binary is the ground truth, so the engine reads it and compares it
+  // itself. A plugin that does not export it is refused.
+  //
+  // The read has to happen on the executor thread (WAMR may only run on a
+  // pthread — see the spike report §4.4), so it goes through the job queue.
+  //
+  // Returns the ABI the plugin reports, or 0 if the plugin does not export
+  // the function / could not be asked.
+  std::uint32_t plugin_abi_version(core::plugin::PluginInstance* inst);
+
   // --- the timer API (Plan 1b task 4; design §6) ---------------------------
   //
   // A plugin arms a timer with the `ks_timer_set(ms, id)` host import; the
@@ -196,7 +216,7 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
 
  private:
   enum class JobKind : std::uint8_t { kStart, kStop, kDeliverCmd, kDeliverSt, kUnload,
-                                     kDeliverTimer };
+                                     kDeliverTimer, kReadAbi };
 
   struct Job {
     JobKind kind;
@@ -207,6 +227,7 @@ class WAMRPluginEngine final : public core::plugin::PluginEngine {
     std::size_t len;
     std::uint16_t seq;
     std::uint32_t timer_id;   // for kDeliverTimer
+    std::uint32_t abi_version;  // for kReadAbi
     core::plugin::KsErr result;
   };
 

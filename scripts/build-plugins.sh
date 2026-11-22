@@ -61,5 +61,11 @@ build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch
 build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-crash \
   -DKS_PLUGIN_CRASH=1
 
+# The incompatible one: it reports a FOREIGN ABI version. The hub must
+# refuse to load it (design §3 — the export inside the binary is the ground
+# truth; a manifest's declaration is not).
+build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-abi2 \
+  -DKS_PLUGIN_ABI=2
+
 echo
 echo "built into $OUT"

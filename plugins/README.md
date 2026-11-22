@@ -36,6 +36,41 @@ And the exports the hub calls:
 | `on_command(entity, attr, value, len, seq)` | a COMMAND arrived for one of your entities |
 | `on_timer(id)`             | a timer the plugin armed fired                  |
 
+### The ABI check is two-layered
+
+A plugin declares its ABI **twice**, and both must agree with the hub:
+
+1. **In the manifest** — `"abi": 1`. The hub parses the manifest and refuses
+   one that declares a different ABI.
+2. **In the binary** — the `ks_plugin_abi_version()` export. The hub reads
+   it out of the module when it loads it and refuses a plugin that reports
+   something else — or that does not export it at all.
+
+Layer 2 is the one that cannot be lied to: a manifest is data and may come
+from a different source than the binary, while the export lives inside the
+binary itself. The plugin is refused **before it runs and before it
+declares anything**, so a foreign plugin never touches the hub's registry.
+
+On the live S3-Zero:
+
+```
+plugin test.abi2
+E wamr-eng: load: the plugin speaks ABI 2, the hub speaks 1 — refusing it
+plugin 'test.abi2' REFUSED (see the log)
+```
+
+### The manifest
+
+```json
+{"id":"test.switch","version":1,"abi":1,
+ "caps":["entity_declare","log","timer"]}
+```
+
+`id` (lowercase letters, digits, `_`, `.`, `-`), `version`, `abi` and
+`caps` are required; `allow` (a list of entity ids) is optional. The hub
+parses and validates it — an unknown capability or a foreign ABI is
+refused before the plugin is loaded.
+
 A plugin that does not export `ks_plugin_abi_version`, or exports a version
 the hub does not know, is refused.
 

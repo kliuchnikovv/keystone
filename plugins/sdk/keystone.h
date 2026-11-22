@@ -145,7 +145,13 @@ int ks_timer_set_repeating(unsigned period_ms, unsigned id);
 
 /* REQUIRED. Returns the ABI version the plugin was built against. The hub
  * refuses a plugin that does not export it, or that returns anything but
- * KS_ABI_VERSION. */
+ * KS_ABI_VERSION.
+ *
+ * This export is checked when the plugin is LOADED, before it runs and
+ * before it declares anything: the hub reads it out of the binary and
+ * refuses a plugin that speaks a different ABI. The manifest declares an
+ * ABI too, but the manifest is data and can lie — this export lives inside
+ * the binary, so it is the ground truth. */
 __attribute__((export_name("ks_plugin_abi_version")))
 unsigned ks_plugin_abi_version(void);
 

@@ -18,6 +18,16 @@
 
 namespace wasm_host {
 
+// Why an install did not happen. The console needs to tell "refused" (the
+// plugin is bad — it never runs) from "already there" (nothing to do) —
+// they are very different messages.
+enum class InstallResult : std::uint8_t {
+  kOk,
+  kRefused,        // the manifest or the binary was refused
+  kAlreadyThere,   // the hub already holds this plugin
+  kNoSuchPlugin,   // no bundled plugin by that name
+};
+
 // Start the plugin runtime: WAMR engine, PluginManager, one bundled plugin.
 // Called once from app_main AFTER the hub's bus/registry are up. Returns
 // false if any step fails; the hub keeps running without plugins.
@@ -40,7 +50,10 @@ const char* plugin_id();
 // Install and start one of the plugins the image carries, by name. The
 // console `plugin <name>` command uses this to bring up the crash plugin
 // (the watchdog's target) next to the good one.
-bool install_bundled(const char* id);
+//
+// The outcome is reported in detail, because the cases are very different
+// and the console must not confuse them: a refused plugin never runs.
+InstallResult install_bundled(const char* id);
 
 // The names of the plugins the image carries.
 std::size_t bundled_count();

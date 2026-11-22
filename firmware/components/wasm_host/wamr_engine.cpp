@@ -407,6 +407,24 @@ void WAMRPluginEngine::drain_host_calls(std::uint32_t budget_ms) {
   }
 }
 
+// plugin_abi_version() asks the plugin itself which ABI it was built
+// against. The plugin's export is the ground truth (a manifest is data and
+// can lie); the manifest's declared ABI is checked separately.
+//
+// The call runs on the executor thread — WAMR may only execute on a pthread
+// (spike report §4.4) — so it goes through the job queue like every other
+// plugin call.
+std::uint32_t WAMRPluginEngine::plugin_abi_version(
+    core::plugin::PluginInstance* inst) {
+  if (inst == nullptr) return 0;
+  Job j{};
+  j.kind = JobKind::kReadAbi;
+  j.inst = inst;
+  j.abi_version = 0;
+  if (run_job(j) != core::plugin::KsErr::Ok) return 0;
+  return j.abi_version;
+}
+
 core::plugin::PluginInstance* WAMRPluginEngine::load(const uint8_t* wasm,
                                                      std::size_t len) {
   if (!inited_) return nullptr;
@@ -446,6 +464,41 @@ core::plugin::PluginInstance* WAMRPluginEngine::load(const uint8_t* wasm,
   auto* p = new Plugin{module, inst, env, copy, len};
   auto* handle = reinterpret_cast<core::plugin::PluginInstance*>(p);
   remember_instance(handle, inst);
+
+  // The ABI check (design §3, §11). The plugin must export
+  // `ks_plugin_abi_version()` and report the ABI the hub speaks; a plugin
+  // that does not, or that reports a different one, is REFUSED — it never
+  // reaches the manager, never declares an entity, never runs.
+  //
+  // This reads the plugin's own export, not the manifest's declaration: a
+  // manifest is data that can lie (or come from a different source than the
+  // binary), while the export inside the binary is the ground truth.
+  const std::uint32_t abi = plugin_abi_version(handle);
+  if (abi == 0) {
+    ESP_LOGE(kTag,
+             "load: the plugin does not report a usable ABI — refusing it");
+    forget_instance(handle);
+    wasm_runtime_destroy_exec_env(env);
+    wasm_runtime_deinstantiate(inst);
+    wasm_runtime_unload(module);
+    std::free(copy);
+    delete p;
+    return nullptr;
+  }
+  if (abi != core::plugin::kAbiVersion) {
+    ESP_LOGE(kTag, "load: the plugin speaks ABI %u, the hub speaks %u — "
+                   "refusing it",
+             (unsigned)abi, (unsigned)core::plugin::kAbiVersion);
+    forget_instance(handle);
+    wasm_runtime_destroy_exec_env(env);
+    wasm_runtime_deinstantiate(inst);
+    wasm_runtime_unload(module);
+    std::free(copy);
+    delete p;
+    return nullptr;
+  }
+  ESP_LOGI(kTag, "load: the plugin speaks ABI %u — accepted",
+           (unsigned)abi);
   return handle;
 }
 
@@ -807,6 +860,37 @@ void* WAMRPluginEngine::executor_main(void* arg) {
           ESP_LOGD(kTag, "on_command returned in %u ms", dt);
           p->result = core::plugin::KsErr::Ok;
         }
+        break;
+      }
+      case JobKind::kReadAbi: {
+        // Ask the plugin which ABI it was built against. The export is
+        // REQUIRED (design §11: "Манифест обязан её объявить, иначе
+        // AbiIncompatible") — a plugin without it is refused, because we
+        // cannot know whether it speaks our host-import ABI.
+        wasm_function_inst_t fn =
+            wasm_runtime_lookup_function(plug->inst, "ks_plugin_abi_version");
+        if (fn == nullptr) {
+          ESP_LOGE(kTag, "the plugin does not export ks_plugin_abi_version");
+          p->abi_version = 0;
+          p->result = core::plugin::KsErr::NotFound;
+          break;
+        }
+        // wasm_runtime_call_wasm does not hand back a return value, so use
+        // the variant that does.
+        wasm_val_t results[1]{};
+        results[0].kind = WASM_I32;
+        wasm_val_t args[1]{};
+        args[0].kind = WASM_I32;
+        if (!wasm_runtime_call_wasm_a(plug->env, fn, 1, results, 0, args)) {
+          ESP_LOGE(kTag, "ks_plugin_abi_version trap: %s",
+                   wasm_runtime_get_exception(plug->inst));
+          p->abi_version = 0;
+          p->result = core::plugin::KsErr::NoMem;
+          break;
+        }
+        p->abi_version = static_cast<std::uint32_t>(results[0].of.i32);
+        ESP_LOGI(kTag, "the plugin reports ABI %u", (unsigned)p->abi_version);
+        p->result = core::plugin::KsErr::Ok;
         break;
       }
       case JobKind::kDeliverSt: {

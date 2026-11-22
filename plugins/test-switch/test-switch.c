@@ -15,6 +15,11 @@
  * the overrun, fault the plugin, withdraw its entity and keep running
  * (design §10, "принудительно упавший плагин").
  *
+ * With -DKS_PLUGIN_ABI=N the plugin reports a FOREIGN ABI version. The hub
+ * must refuse to load it (design §3: "хаб обязан принимать совместимые
+ * версии и отказывать несовместимым с понятной ошибкой") — the export
+ * inside the binary is the ground truth, a manifest's declaration is not.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "keystone.h"
@@ -31,7 +36,13 @@ static unsigned g_entity = 0;
 /* Scratch space for the value bytes (a bool is one byte). */
 static unsigned char g_value[4];
 
-unsigned ks_plugin_abi_version(void) { return KS_ABI_VERSION; }
+unsigned ks_plugin_abi_version(void) {
+#ifdef KS_PLUGIN_ABI
+  return KS_PLUGIN_ABI;
+#else
+  return KS_ABI_VERSION;
+#endif
+}
 
 void on_start(void) {
   /* The DECLARE payload, laid out by hand — the hub reads it as:

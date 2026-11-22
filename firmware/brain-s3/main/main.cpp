@@ -2349,7 +2349,8 @@ int cmd_plugins(int /*argc*/, char** /*argv*/) {
 // Install and start one of the plugins the image carries. `plugin` alone
 // lists them. The crash plugin's on_command never returns — it exists to
 // prove the callback watchdog: the hub must fault it, withdraw its entity
-// and keep running.
+// and keep running. The abi2 plugin reports a foreign ABI version and must
+// be refused outright.
 int cmd_plugin(int argc, char** argv) {
   if (argc < 2) {
     printf("bundled plugins:");
@@ -2364,14 +2365,19 @@ int cmd_plugin(int argc, char** argv) {
   // `target` is a pointer the main loop reads before the console returns.
   static char name[32];
   std::snprintf(name, sizeof(name), "%s", argv[1]);
+  char out[160];
   Req r{};
   r.kind = REQ_PLUGIN;
   r.target = name;
+  r.out = out;
+  r.out_cap = sizeof(out);
   if (!submit(r)) {
     printf("timeout\n");
     return 1;
   }
-  printf("plugin '%s' installed and started\n", argv[1]);
+  // The main loop writes what actually happened: a plugin that was refused
+  // (a foreign ABI, a bad manifest) must NOT be reported as installed.
+  printf("%s", out);
   return 0;
 }
 
@@ -6615,14 +6621,30 @@ extern "C" void app_main(void) {
         case REQ_PLUGIN: {
           // Installing a plugin declares entities, so it must happen here,
           // on the main loop (the core is single-threaded).
-          if (!wasm_host::install_bundled(r->target)) {
-            if (r->out != nullptr) {
-              std::snprintf(r->out, r->out_cap, "plugin '%s': install failed\n",
-                            r->target);
-            }
-          } else if (r->out != nullptr) {
-            std::snprintf(r->out, r->out_cap, "plugin '%s' installed and started\n",
-                          r->target);
+          //
+          // The outcome goes back to the console, and the cases are kept
+          // apart: a plugin that was REFUSED (a foreign ABI, an unknown
+          // capability, a manifest that does not parse) never runs and must
+          // not be reported as installed; one that is ALREADY THERE is not
+          // an error either.
+          switch (wasm_host::install_bundled(r->target)) {
+            case wasm_host::InstallResult::kOk:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' installed and started\n", r->target);
+              break;
+            case wasm_host::InstallResult::kAlreadyThere:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' is already installed\n", r->target);
+              break;
+            case wasm_host::InstallResult::kNoSuchPlugin:
+              std::snprintf(r->out, r->out_cap,
+                            "no bundled plugin named '%s'\n", r->target);
+              break;
+            case wasm_host::InstallResult::kRefused:
+            default:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' REFUSED (see the log)\n", r->target);
+              break;
           }
           break;
         }
