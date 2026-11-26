@@ -80,6 +80,32 @@ describe('the climate sensor card', () => {
   });
 });
 
+describe('a Matter temperature sensor', () => {
+  it('shows its reading like any other sensor', () => {
+    // The hub's own Matter device: chip 3, entity 0x0300, a temperature sensor
+    // with a battery (the verified hardware log, 17.11.2026).
+    const sensor = {
+      id: 0x0300,
+      name: 'Climate',
+      room: null,
+      chip: 3,
+      device: 'sensor',
+      attrs: [
+        attr(0x10, 'temperature', 'i16', 215),
+        attr(0x1f, 'battery', 'u8', 11),
+      ],
+    };
+    render(
+      <ThemeProvider mode="light">
+        <DeviceWidget entity={sensor} status="online" reachable onOpen={() => {}} />
+      </ThemeProvider>,
+    );
+    expect(screen.getByLabelText('Device Climate')).toBeTruthy();
+    expect(screen.getByText('21.5 °C')).toBeTruthy();
+    expect(screen.getByText('11 %')).toBeTruthy();
+  });
+});
+
 describe('the room chips', () => {
   it('offers All and the rooms', () => {
     render(
