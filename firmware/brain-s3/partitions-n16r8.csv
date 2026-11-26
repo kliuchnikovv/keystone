@@ -1,0 +1,29 @@
+# Partition table for the brain on ESP32-S3-WROOM-1 N16R8 (16 MB flash,
+# 8 MB octal PSRAM).
+#
+# - `nvs`, `phy_init` and `otadata` keep the exact offsets of the S3-Zero
+#   table (partitions.csv), so Wi-Fi credentials, the web token, entity
+#   names/rooms, timers, schedules, rules, scenes, desired state, OTA state,
+#   the relay identity and everything else in NVS survive the move from the
+#   4 MB board to the 16 MB one.
+# - OTA slots grow from 1.92 MB to 4 MB each. The Matter image on the S3-Zero
+#   fit with ~6 KB to spare — on this board we can afford the full Mozilla CA
+#   bundle, the groupcast cluster and all the Matter clusters that had to be
+#   cut for size (see sdkconfig.defaults.matter and scripts/matter-patches.py
+#   patch 7).
+# - `plugins` is a 2 MB region reserved for the WASM plugin filesystem
+#   (Plan 1b — see docs/superpowers/specs/2026-11-20-plugin-runtime-design.md).
+#   Subtype `spiffs` is a placeholder: LittleFS reads a SPIFFS-typed partition
+#   fine, and switching to a dedicated `littlefs` subtype is a one-liner once
+#   the plugin loader lands.
+# - 6 MB past `plugins` is left unformatted, as headroom for future partitions
+#   (bigger OTA slots on esp-matter growth, a scene/history persistence blob,
+#   firmware OTA images for other devices, etc.).
+#
+# Name,    Type, SubType, Offset,    Size,      Flags
+nvs,       data, nvs,     0x9000,    0x6000,
+phy_init,  data, phy,     0xf000,    0x1000,
+otadata,   data, ota,     0x10000,   0x2000,
+ota_0,     app,  ota_0,   0x20000,   0x400000,
+ota_1,     app,  ota_1,   0x420000,  0x400000,
+plugins,   data, spiffs,  0x820000,  0x200000,

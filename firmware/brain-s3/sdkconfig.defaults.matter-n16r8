@@ -1,0 +1,20 @@
+# Matter-build extras for the N16R8 brain. Applied on top of
+# sdkconfig.defaults.matter by `scripts/matter-build.sh brain-s3 --n16r8`
+# AFTER the base matter overlay but BEFORE sdkconfig.defaults.n16r8 (so the
+# partition/PSRAM/flash choices from the N16R8 overlay still win).
+#
+# The Matter image on the Zero squeezed into a 1.92 MB app partition only
+# because we sacrificed things that are useful. On the N16R8 the slots are
+# 4 MB, so we take them back:
+
+# --- Full Mozilla CA bundle. The base matter overlay sets ..._DEFAULT_CMN
+# (~30 KB, enough for the hosts a hub typically meets). The full bundle
+# (~69 KB) is better for OTA over HTTPS against any public host.
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN is not set
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# --- Groupcast cluster. The base overlay pins it off ("until verified"); the
+# flash cost is small and there is no runtime cost until a group actually
+# shows up. Keeping it on lets the hub respond to Group-Write and Group-Read
+# commands from controllers like Apple Home.
+CONFIG_SUPPORT_GROUPCAST_CLUSTER=y

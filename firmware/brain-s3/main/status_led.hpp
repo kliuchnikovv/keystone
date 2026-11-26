@@ -1,4 +1,6 @@
-// Status LED on the ESP32-S3-Zero's on-board WS2812 (GPIO 21).
+// Status LED on the brain's on-board WS2812. The GPIO is board-specific
+// (CONFIG_KS_STATUS_LED_GPIO, defaults to 21 for the S3-Zero; 48 for
+// ESP32-S3-DevKitC-1 v1.1 and WeAct Core S3 / N16R8 boards).
 // Colour reflects hub health; updated from the main loop.
 #pragma once
 
