@@ -67,5 +67,23 @@ build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-crash \
 build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-abi2 \
   -DKS_PLUGIN_ABI=2
 
+# A read-only sensor example: declares temperature + humidity + battery in
+# ONE DECLARE and heartbeats STATE every 10 s. No on_command — a sensor is
+# read-only, so the plugin never asks for the Command capability.
+build_one "$ROOT/plugins/climate-sensor/climate-sensor.c" climate-sensor
+
+# A metered outlet example: on_off (writable) + power_w + energy_wh in one
+# entity. on_command flips the switch, the heartbeat draws power while on
+# and accumulates energy in watt-seconds so the long-run Wh total stays
+# exact despite integer truncation.
+build_one "$ROOT/plugins/smart-plug/smart-plug.c" smart-plug
+
+# A LOGIC plugin (not a virtual device): projects a calendar as a Sensor
+# with in_minutes / busy / imminent attributes a rule can match. The event
+# fetch (HTTP) and the clock (ks_time_now) are stubbed with a static table
+# and a tick counter — the TODOs mark where the real implementation hooks
+# in once the SDK grows net_outbound + ks_time_now.
+build_one "$ROOT/plugins/calendar/calendar.c" calendar
+
 echo
 echo "built into $OUT"

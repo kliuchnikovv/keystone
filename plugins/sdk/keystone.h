@@ -223,6 +223,14 @@ static inline void ks_put_u16(unsigned char* out, unsigned value) {
   out[1] = (unsigned char)((value >> 8) & 0xFFu);
 }
 
+/* Store an i16 attribute value (two bytes, little-endian two's complement).
+ * Signed temperatures and setpoints go on the wire as i16 in 0.1 °C. */
+static inline void ks_put_i16(unsigned char* out, int value) {
+  unsigned u = (unsigned)(value & 0xFFFF);
+  out[0] = (unsigned char)(u & 0xFFu);
+  out[1] = (unsigned char)((u >> 8) & 0xFFu);
+}
+
 /* Store a u32 attribute value (four bytes, little-endian) into the plugin's
  * memory. */
 static inline void ks_put_u32(unsigned char* out, unsigned value) {
