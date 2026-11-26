@@ -1,0 +1,38 @@
+# Overlay for the ESP32-S3-WROOM-1 N16R8 brain board (DevKitC-1 v1.1 /
+# WeAct Core S3 / compatible). Applied on top of sdkconfig.defaults by:
+#   - PlatformIO: `[env:brain-s3-n16r8]` passes this via
+#       `-DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.n16r8'`;
+#   - scripts/matter-build.sh brain-s3 --n16r8: same, with the Matter overlay
+#     between the two (Matter changes land first, then the N16R8 ones win).
+#
+# The N16R8 differs from the Zero in three real ways: 16 MB flash (needs a
+# different partition table), 8 MB **octal** PSRAM (needs SPIRAM_MODE_OCT),
+# and the on-board WS2812 sits on GPIO 48 instead of 21.
+#
+# Everything else that was tight on the Zero (BLE/Matter buffers, task
+# stacks, internal-RAM reserves) stays as sized for the Zero: it is correct
+# there and not harmful here, and future changes can tune it separately.
+
+# --- 16 MB flash + new partition table (4 MB OTA slots + 2 MB plugins area).
+# Was CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y in the base defaults.
+# CONFIG_ESPTOOLPY_FLASHSIZE_4MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-n16r8.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions-n16r8.csv"
+
+# --- Octal PSRAM (AP_3v3). The Zero uses embedded Quad PSRAM via the
+# ESP32-S3FH4R2 chip; N16R8 modules use external Octal PSRAM. Wrong mode =
+# PSRAM silently stays uninitialised (confirmed by esptool chip-id output and
+# by `I (528) esp_psram: SPI SRAM memory test OK` in the boot log).
+# CONFIG_SPIRAM_MODE_QUAD is not set
+CONFIG_SPIRAM_MODE_OCT=y
+
+# The N16R8 has four times the PSRAM of the Zero (8 MB vs 2 MB); we can
+# afford to keep more of the heap in internal RAM for BLE/Wi-Fi/DMA paths.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+
+# --- On-board LED. 48 is the WS2812 pin on DevKitC-1 v1.1 and WeAct Core S3
+# (confirmed empirically on this board — the "TEAL" cue in the scout sketch).
+CONFIG_KS_STATUS_LED_GPIO=48
