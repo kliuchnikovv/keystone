@@ -12,7 +12,17 @@ firmware/*/sdkconfig.bak
 firmware/*/sdkconfig.bod
 firmware/*/managed_components/
 firmware/*/managed_components_rootowned/
+firmware/*/managed_components.stale/
+# wasm-plugin-spike: WAMR is vendored into firmware/components/wamr for patching
+# (component manager re-downloads managed/ on every reconfigure, losing the
+# patches). Not committed — see scripts/wamr-patches.py to re-materialise it.
+firmware/components/wamr/
 firmware/*/dependencies.lock
+
+# Plugin build output (scripts/build-plugins.sh): the .wasm files are
+# artefacts — the copies the firmware links in are regenerated into
+# firmware/components/wasm_host/include/wasm_host/*_wasm.hpp.
+plugins/build/
 
 # A crash dump read off a co-processor (scripts/flash-thread-c6-matter.sh
 # --coredump): a local artefact of one crash, never in git.
@@ -68,3 +78,10 @@ app/android/
 # Relay Go binary (built)
 /relay/relay
 .claude/
+
+# A plugin .wasm left next to its source by a manual build (the build script
+# puts its output in plugins/build/).
+plugins/*/*.wasm
+
+# Python bytecode cache.
+__pycache__/

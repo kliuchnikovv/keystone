@@ -90,6 +90,7 @@
 #include "ota_job.hpp"
 #include "relay_client.hpp"
 #include "status_led.hpp"
+#include "wasm_host/wasm_host.hpp"
 
 // Wi-Fi credentials live in main/wifi_secrets.h (gitignored; see the .example.h).
 #if __has_include("wifi_secrets.h")
@@ -534,6 +535,14 @@ class ChipRouter final : public core::Bus {
 
   bool publish(const hubproto::Header& h, const std::uint8_t* payload,
                std::size_t len) noexcept override {
+    // Plugin-owned chips (PluginManager::kChipBase..) have no UART — they
+    // live inside the hub process. A COMMAND to one of them is loop-back:
+    // deliver to subscribers (the PluginManager handles it on its way out).
+    // Any header.chip_id >= 0xC0 is such a self-hosted chip (Plan 1b).
+    if (h.chip_id >= 0xC0) {
+      fan_out(h, payload, len);
+      return true;
+    }
     // UartTransport::publish encodes into a shared buffer, so concurrent
     // publishers (main loop, UART RX tasks forwarding, the OTA task) must not
     // interleave. The router is the single funnel, so lock here.
@@ -1101,7 +1110,8 @@ enum ReqKind { REQ_HOME, REQ_GET, REQ_SETONOFF, REQ_TIMER, REQ_TIMERS, REQ_CANCE
                REQ_TIME, REQ_TZ,
                REQ_NAME_SET, REQ_NAME_CLEAR, REQ_NAMES_LIST,
                REQ_ROOM_SET, REQ_ROOM_CLEAR, REQ_ROOMS_LIST,
-               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA };
+               REQ_RULE, REQ_DESIRED, REQ_SCENE, REQ_INJECT, REQ_DEV_OTA,
+               REQ_PLUGIN };
 
 struct Req {
   ReqKind kind;
@@ -2323,6 +2333,54 @@ int cmd_heap(int /*argc*/, char** /*argv*/) {
   return 0;
 }
 
+// The plugin runtime's state: the plugin's lifecycle state and the engine's
+// counters. Reads only the engine's own counters (never the registry), so it
+// does not need the main loop's request queue.
+int cmd_plugins(int /*argc*/, char** /*argv*/) {
+  char buf[512];
+  if (!wasm_host::status(buf, sizeof(buf))) {
+    printf("%s\n", buf);
+    return 1;
+  }
+  printf("%s", buf);
+  return 0;
+}
+
+// Install and start one of the plugins the image carries. `plugin` alone
+// lists them. The crash plugin's on_command never returns — it exists to
+// prove the callback watchdog: the hub must fault it, withdraw its entity
+// and keep running. The abi2 plugin reports a foreign ABI version and must
+// be refused outright.
+int cmd_plugin(int argc, char** argv) {
+  if (argc < 2) {
+    printf("bundled plugins:");
+    for (std::size_t i = 0; i < wasm_host::bundled_count(); ++i) {
+      printf(" %s", wasm_host::bundled_id(i));
+    }
+    printf("\n");
+    return 0;
+  }
+  // Installing a plugin touches the registry, so it must run on the main
+  // loop. The console enqueues the request and the main loop performs it.
+  // `target` is a pointer the main loop reads before the console returns.
+  static char name[32];
+  std::snprintf(name, sizeof(name), "%s", argv[1]);
+  char out[160];
+  Req r{};
+  r.kind = REQ_PLUGIN;
+  r.target = name;
+  r.out = out;
+  r.out_cap = sizeof(out);
+  if (!submit(r)) {
+    printf("timeout\n");
+    return 1;
+  }
+  // The main loop writes what actually happened: a plugin that was refused
+  // (a foreign ABI, a bad manifest) must NOT be reported as installed.
+  printf("%s", out);
+  return 0;
+}
+
 int cmd_schedules(int /*argc*/, char** /*argv*/) {
   char buf[640];
   Req r{};
@@ -3472,6 +3530,8 @@ void start_console() {
   reg_cmd("inject", "dev: pretend a device of a type exists (Matter chip only); inject <kind>|set|clear", &cmd_inject);
   reg_cmd("events", "events [<n>] - the newest hub events (what the app's history shows), newest first", &cmd_events);
   reg_cmd("heap", "show free heap (now / lowest since boot / largest block)", &cmd_heap);
+  reg_cmd("plugins", "show the plugin runtime's state and the engine's counters", &cmd_plugins);
+  reg_cmd("plugin", "plugin [<name>] - list the bundled plugins, or install and start one", &cmd_plugin);
   reg_cmd("webtoken", "webtoken [<token>|clear] - app protocol secret (shows status without args)", &cmd_webtoken);
   reg_cmd("webplain", "webplain [on|off] - allow plain ws:// next to TLS (development only)", &cmd_webplain);
   reg_cmd("unschedule", "unschedule <n> - delete a schedule", &cmd_unschedule);
@@ -5404,6 +5464,14 @@ extern "C" void app_main(void) {
   g_req_q = xQueueCreate(8, sizeof(Req*));
   start_console();
   ESP_LOGI(kTag, "brain up; console ready (type 'help'), awaiting HELLO from chips");
+
+  // Plan 1b: plugin runtime. WAMR engine + PluginManager, one bundled test
+  // plugin (Switch(on_off) that echoes COMMANDs back as STATEs). The plugin's
+  // entity appears in the registry on plugin pseudo-chip 0xC0 and is
+  // addressable from the console/app like any other entity.
+  if (!wasm_host::start(bus, reg)) {
+    ESP_LOGE(kTag, "plugin runtime did not start; hub continues without plugins");
+  }
 #ifdef KEYSTONE_HAVE_MATTER
   // Every Matter node that joined our fabric earlier comes back here: the bridge re-reads
   // its descriptor and re-declares its entities, so a hub reboot does not lose the devices
@@ -5571,6 +5639,12 @@ extern "C" void app_main(void) {
         ESP_LOGD(kTag, "self-heal QUERY -> chip 0x%02x", id);
       }
     }
+
+    // The plugins' own timers (design §6: ks_timer_set(ms, id) -> on_timer(id)).
+    // The hub's clock is the main loop's, so the timers are fired here; the
+    // delivery to the plugin goes through the engine's job queue and under
+    // the same callback budget as every other plugin callback.
+    wasm_host::poll_timers(t);
 
     // Fire due timers.
     struct TimerFireContext {
@@ -6541,6 +6615,36 @@ extern "C" void app_main(void) {
               const std::size_t n = std::strlen(r->out);
               if (n < r->out_cap) std::snprintf(r->out + n, r->out_cap - n, ")\n");
             }
+          }
+          break;
+        }
+        case REQ_PLUGIN: {
+          // Installing a plugin declares entities, so it must happen here,
+          // on the main loop (the core is single-threaded).
+          //
+          // The outcome goes back to the console, and the cases are kept
+          // apart: a plugin that was REFUSED (a foreign ABI, an unknown
+          // capability, a manifest that does not parse) never runs and must
+          // not be reported as installed; one that is ALREADY THERE is not
+          // an error either.
+          switch (wasm_host::install_bundled(r->target)) {
+            case wasm_host::InstallResult::kOk:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' installed and started\n", r->target);
+              break;
+            case wasm_host::InstallResult::kAlreadyThere:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' is already installed\n", r->target);
+              break;
+            case wasm_host::InstallResult::kNoSuchPlugin:
+              std::snprintf(r->out, r->out_cap,
+                            "no bundled plugin named '%s'\n", r->target);
+              break;
+            case wasm_host::InstallResult::kRefused:
+            default:
+              std::snprintf(r->out, r->out_cap,
+                            "plugin '%s' REFUSED (see the log)\n", r->target);
+              break;
           }
           break;
         }

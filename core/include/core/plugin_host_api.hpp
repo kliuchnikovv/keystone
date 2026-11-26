@@ -17,6 +17,17 @@ namespace core::plugin {
 
 // The ABI version a plugin's manifest must match to be loadable. Bumped on
 // any incompatible change to the host-import signatures below.
+//
+// The check is TWO-layered, and both layers must pass:
+//   1. the MANIFEST declares an ABI, and parse_manifest refuses a manifest
+//      whose abi is not this one (ManifestError::AbiIncompatible);
+//   2. the plugin BINARY exports `ks_plugin_abi_version()` and reports this
+//      version — the firmware's engine reads that export when it loads the
+//      module and refuses a plugin that reports something else (or does not
+//      export it at all).
+// Layer 2 is the one that cannot be lied to: a manifest is data and may
+// come from a different source than the binary, while the export lives
+// inside the binary itself.
 inline constexpr uint32_t kAbiVersion = 1;
 
 // The result of a host call. Ok is 0 so a plugin can test truthiness.

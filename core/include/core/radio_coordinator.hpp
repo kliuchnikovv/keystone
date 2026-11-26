@@ -130,6 +130,12 @@ void RadioCoordinator<Registry, MaxChips>::handle(const hubproto::Header& h,
                                                   const std::uint8_t* payload,
                                                   std::size_t len) noexcept {
   const std::uint8_t chip = h.chip_id;
+  // Plugin pseudo-chips (PluginManager::kChipBase = 0xC0 and up) live inside
+  // the hub — they have no boot_id lifecycle to track and their entities are
+  // not managed by this coordinator. Treating a plugin's COMMAND loopback as
+  // a new chip would clear its entities. See §5.2 of the plugin runtime design.
+  if (chip >= 0xC0) return;
+
   const ChipState* existing = find_chip(chip);
 
   // An unknown chip (e.g. after a brain reboot), or a chip whose boot_id

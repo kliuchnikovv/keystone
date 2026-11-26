@@ -60,3 +60,22 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# WAMR (plugin runtime spike). Interpreter-only — no AOT, no WASI, no app
+# framework, no pthread. These three together are what explodes the flash /
+# RAM budget, and WASI even fails to compile against the ESP-IDF newlib on
+# this version (no fstatat/mkdirat/utimensat).
+CONFIG_WAMR_ENABLE_AOT=n
+CONFIG_WAMR_ENABLE_INTERP=y
+CONFIG_WAMR_INTERP_FAST=y
+CONFIG_WAMR_ENABLE_LIBC_BUILTIN=y
+CONFIG_WAMR_ENABLE_LIBC_WASI=n
+CONFIG_WAMR_ENABLE_LIB_PTHREAD=n
+CONFIG_WAMR_ENABLE_APP_FRAMEWORK=n
+# Instruction metering (Plan 1b task 2 — the callback watchdog). The fast
+# interpreter checks the instruction counter on EVERY opcode dispatch, so
+# `wasm_runtime_set_instruction_count_limit()` turns a plugin stuck in an
+# endless loop into a clean trap: it unwinds, the module instance stays
+# intact, the hub keeps running. Without this the only way out of a hung
+# callback is to abandon the executor thread and leak the plugin's heap.
+CONFIG_WAMR_ENABLE_INSTRUCTION_METERING=y
