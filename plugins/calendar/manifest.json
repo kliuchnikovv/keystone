@@ -1,0 +1,6 @@
+{
+  "id": "example.calendar",
+  "version": 1,
+  "abi": 1,
+  "caps": ["entity_declare", "log", "timer"]
+}

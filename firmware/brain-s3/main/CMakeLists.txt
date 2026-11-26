@@ -9,6 +9,10 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/hub_identity.cpp")
 endif()
 
 set(KS_REQUIRES core esp_uart_link hubproto esp_timer esp_http_client esp_http_server esp_https_server esp-tls mdns esp_websocket_client
+                # Plugin runtime (Plan 1b): the engine + manager live in wasm_host,
+                # the interpreter in the vendored `wamr` component. `main` only
+                # calls `wasm_host::start(bus, reg)`.
+                wasm_host
                 # PlatformIO adds the components of the headers a source includes; with
                 # plain idf.py they have to be named here.
                 esp_wifi esp_event esp_netif console esp_app_format nvs_flash)

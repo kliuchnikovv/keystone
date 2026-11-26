@@ -7,7 +7,8 @@ export type GlyphName =
   | 'light' | 'switch' | 'sensor' | 'occupancy' | 'contact' | 'cover' | 'lock' | 'climate' | 'button'
   | 'phone'
   | 'home' | 'automation' | 'hub' | 'history' | 'plus' | 'pencil' | 'chevron' | 'back' | 'play' | 'check'
-  | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff' | 'battery' | 'humidity' | 'plug';
+  | 'bolt' | 'chip' | 'signal' | 'eye' | 'eyeOff' | 'battery' | 'humidity' | 'plug'
+  | 'settings' | 'chevronRight' | 'trash' | 'wifi' | 'timer' | 'schedule' | 'rule' | 'scene' | 'room' | 'qr';
 
 export interface GlyphProps {
   name: GlyphName;
@@ -245,6 +246,75 @@ function icon(name: GlyphName, c: Stroke, on: Solid): ReactNode {
           {/* socket holes at 90° and 270° (left and right), a bit wider */}
           <Circle cx="8" cy="12" r="1.8" {...c} />
           <Circle cx="16" cy="12" r="1.8" {...c} />
+        </>
+      );
+
+    /* ---- the shell: settings, rows, and what the «+» menu offers ---- */
+    case 'settings':
+      return (
+        <>
+          {/* the sun of the mockup: a ring with rays */}
+          <Circle cx="12" cy="12" r="3.5" {...on} />
+          <Path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1" {...c} />
+        </>
+      );
+    case 'chevronRight':
+      return <Path d="m9 18 6-6-6-6" {...c} />;
+    case 'trash':
+      return (
+        <>
+          <Path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" {...c} />
+          <Path d="M10 11v6M14 11v6" {...c} />
+        </>
+      );
+    case 'wifi':
+      return (
+        <>
+          <Path d="M2 8.8a15 15 0 0 1 20 0" {...c} />
+          <Path d="M5 12.6a11 11 0 0 1 14 0" {...c} />
+          <Path d="M8.5 16.1a6 6 0 0 1 7 0" {...on} />
+          <Path d="M12 20h.01" {...c} />
+        </>
+      );
+    case 'timer':
+      return (
+        <>
+          <Path d="M10 2h4M12 8v6l4 2" {...c} />
+          <Circle cx="12" cy="14" r="8" {...on} />
+        </>
+      );
+    case 'schedule':
+      return (
+        <>
+          <Circle cx="12" cy="12" r="9" {...on} />
+          <Path d="M12 7v5l3 2" {...c} />
+        </>
+      );
+    case 'rule':
+      return (
+        <>
+          <Path d="M4 7h10M4 12h7M4 17h12" {...c} />
+          <Path d="m18 15 2 2-6 6-3 1 1-3Z" {...on} />
+        </>
+      );
+    case 'scene':
+      return (
+        <Path d="m12 3 2.5 5 5.5.8-4 3.9 1 5.5L12 15.8 6.9 18.2l1-5.5-4-3.9 5.5-.8L12 3Z" {...on} />
+      );
+    case 'room':
+      return (
+        <>
+          <Path d="M3 10.5 12 3l9 7.5" {...c} />
+          <Path d="M5 9.5V20h14V9.5" {...on} />
+        </>
+      );
+    case 'qr':
+      return (
+        <>
+          <Rect x="3" y="3" width="7" height="7" rx="1" {...c} />
+          <Rect x="14" y="3" width="7" height="7" rx="1" {...c} />
+          <Rect x="3" y="14" width="7" height="7" rx="1" {...c} />
+          <Path d="M14 14h3v3h-3zM19 19h2v2h-2z" {...on} />
         </>
       );
   }

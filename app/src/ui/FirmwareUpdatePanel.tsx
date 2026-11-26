@@ -5,7 +5,7 @@
 // It lives in the device sheet, so it follows the sheet's language: a block under a
 // hairline, quiet buttons, the same type sizes.
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from './kit';
 import { otaInputProblem, otaPhaseLabel, otaStatusLabel } from '../model/devices';
 import type { DeviceOtaSession } from '../protocol/messages';
 import { Button, ErrorText, Field, Input } from './controls';

@@ -1,16 +1,92 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import {
-  addableSettings, captureScene, describeScene, draftsFromCurrentState, draftsRequest, sceneDrafts, inputUnit, sceneRequest,
+  WEEK, actionText, localDate, addableSettings, captureScene, describeScene, describeTimePoint, draftsFromCurrentState, draftsRequest, isSunPoint, sceneDrafts, type SceneDraft, inputUnit, sceneRequest, scheduleRequest, switchTargets, timerRequest,
   type AttrOption,
-  type SceneDraft,
 } from '../model/automation';
-import { deviceTitle } from '../model/devices';
-import type { Entity, Scene } from '../protocol/messages';
+import { formatCountdown } from '../model/automation';
+import { attrOf, deviceIcon, deviceTitle, primarySwitch } from '../model/devices';
+import type { Action, Days, Entity, Scene, Weekday } from '../protocol/messages';
 import { Button, Chip, ChipRow, ErrorText, Field, Input, Picker } from './controls';
+import { DurationWheel } from './DurationWheel';
+import { Glyph } from './Glyph';
 import { useTheme } from './theme';
 
 type Submit = (args: Record<string, unknown>) => Promise<boolean>;
+
+const ACTIONS: Action[] = ['on', 'off', 'toggle'];
+const DAY_LABEL: Record<Weekday, string> = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+
+function DevicePicker({ label, devices, value, onChange }: { label: string; devices: Entity[]; value: number | null; onChange(id: number): void }) {
+  return (
+    <Picker
+      label={label}
+      placeholder="Choose a device"
+      options={devices}
+      selected={devices.find((d) => d.id === value) ?? null}
+      onSelect={(d) => onChange(d.id)}
+      keyOf={(d) => String(d.id)}
+      textOf={deviceTitle}
+    />
+  );
+}
+
+function ActionChips({ value, onChange }: { value: Action; onChange(a: Action): void }) {
+  return (
+    <ChipRow>
+      {ACTIONS.map((a) => (
+        <Chip key={a} label={actionText(a)} a11y={`Action ${actionText(a)}`} selected={value === a} onPress={() => onChange(a)} />
+      ))}
+    </ChipRow>
+  );
+}
+
+type Target = 'device' | 'scene';
+
+/** "A device" or "A scene": shown only when the hub has scenes. */
+function TargetToggle({ scenes, value, onChange }: { scenes: Scene[]; value: Target; onChange(t: Target): void }) {
+  if (scenes.length === 0) return null;
+  return (
+    <ChipRow>
+      <Chip label="A device" a11y="Target a device" selected={value === 'device'} onPress={() => onChange('device')} />
+      <Chip label="A scene" a11y="Target a scene" selected={value === 'scene'} onPress={() => onChange('scene')} />
+    </ChipRow>
+  );
+}
+
+function SceneChoice({ scenes, value, onChange }: { scenes: Scene[]; value: string | null; onChange(name: string): void }) {
+  return (
+    <ChipRow>
+      {scenes.map((s) => (
+        <Chip key={s.name} label={s.name} a11y={`Scene ${s.name}`} selected={value === s.name} onPress={() => onChange(s.name)} />
+      ))}
+    </ChipRow>
+  );
+}
+
+/** "07:30", or sunrise / sunset with an offset: a text field plus quick chips that fill in the sun words. */
+function TimePointInput({ label, value, onChange, placeholder, hasLocation }: {
+  label: string; value: string; onChange(v: string): void; placeholder: string; hasLocation: boolean;
+}) {
+  const t = useTheme();
+  return (
+    <View>
+      <Input label={label} value={value} onChangeText={onChange} placeholder={placeholder} maxLength={14} />
+      <View style={{ marginTop: 6 }}>
+        <ChipRow>
+          <Chip label="Sunrise" a11y={`${label}: sunrise`} selected={/^sunrise/.test(value)} onPress={() => onChange('sunrise')} />
+          <Chip label="Sunset" a11y={`${label}: sunset`} selected={/^sunset/.test(value)} onPress={() => onChange('sunset')} />
+        </ChipRow>
+      </View>
+      {isSunPoint(value) && (
+        <Text style={{ color: hasLocation ? t.muted : t.warn, fontSize: 12, marginTop: 6 }}>
+          {describeTimePoint(value)}
+          {hasLocation ? '. Add +30 or -15 for minutes after or before.' : ". The hub needs its location first (Hub tab); until then this waits."}
+        </Text>
+      )}
+    </View>
+  );
+}
 
 function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }: {
   title: string; children: React.ReactNode; error: string | null; onCancel(): void; onSave(): void; busy: boolean; saveLabel: string;
@@ -29,7 +105,133 @@ function FormShell({ title, children, error, onCancel, onSave, busy, saveLabel }
   );
 }
 
-// ---- editing a scene -------------------------------------------------------------------------
+// ---- schedule ---------------------------------------------------------------------------
+
+export function ScheduleForm({ entities, scenes, hasLocation, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; hasLocation: boolean; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+  const [time, setTime] = useState('');
+  const [days, setDays] = useState<Days>('daily');
+  const [date, setDate] = useState<string | null>(null);  // set = a one-off on that day
+  const [entity, setEntity] = useState<number | null>(null);
+  const [action, setAction] = useState<Action>('off');
+  const [target, setTarget] = useState<Target>('device');
+  const [scene, setScene] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const custom = date === null && Array.isArray(days);
+  const toggleDay = (d: Weekday) => {
+    const cur = Array.isArray(days) ? days : [];
+    setDays(cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]);
+  };
+
+  const save = async () => {
+    const r = scheduleRequest({ time, days, date, entity, action, scene: target === 'scene' ? scene ?? '' : null });
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    await onSubmit(r.value);
+  };
+
+  return (
+    <FormShell title="New schedule" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save schedule">
+      <Field label="Time (24 h, hub's time zone — or at the sun)">
+        <TimePointInput label="Time" value={time} onChange={setTime} placeholder="07:30 or sunset+30" hasLocation={hasLocation} />
+      </Field>
+      <Field label="Days">
+        <ChipRow>
+          <Chip label="Every day" selected={date === null && days === 'daily'} onPress={() => { setDate(null); setDays('daily'); }} />
+          <Chip label="Weekdays" selected={date === null && days === 'weekdays'} onPress={() => { setDate(null); setDays('weekdays'); }} />
+          <Chip label="Weekends" selected={date === null && days === 'weekends'} onPress={() => { setDate(null); setDays('weekends'); }} />
+          <Chip label="Pick days" selected={custom} onPress={() => { setDate(null); setDays(custom ? 'daily' : []); }} />
+          <Chip label="Once, on a date" selected={date !== null} onPress={() => setDate(date === null ? localDate() : null)} />
+        </ChipRow>
+        {date !== null && (
+          <View style={{ marginTop: 8 }}>
+            <Input label="Date" value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" autoCapitalize="none" />
+          </View>
+        )}
+        {custom && (
+          <View style={{ marginTop: 8 }}>
+            <ChipRow>
+              {WEEK.map((d) => (
+                <Chip key={d} label={DAY_LABEL[d]} a11y={`Day ${DAY_LABEL[d]}`} selected={(days as Weekday[]).includes(d)} onPress={() => toggleDay(d)} />
+              ))}
+            </ChipRow>
+          </View>
+        )}
+      </Field>
+      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
+      {target === 'scene' ? (
+        <Field label="Scene">
+          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
+        </Field>
+      ) : (
+        <>
+          <Field label="Device">
+            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
+          </Field>
+          <Field label="Do">
+            <ActionChips value={action} onChange={setAction} />
+          </Field>
+        </>
+      )}
+    </FormShell>
+  );
+}
+
+// ---- timer ------------------------------------------------------------------------------
+
+export function TimerForm({ entities, scenes, busy, onSubmit, onCancel }: { entities: Entity[]; scenes: Scene[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
+  const t = useTheme();
+  const [entity, setEntity] = useState<number | null>(null);
+  const [action, setAction] = useState<Action>('off');
+  // The duration: hours and minutes, the way a phone asks for it.
+  const [hours, setHours] = useState(0);
+  const [minutes, setMinutes] = useState(30);
+  const [target, setTarget] = useState<Target>('device');
+  const [scene, setScene] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // The wheel speaks in hours and minutes; the hub speaks in seconds.
+  const totalMinutes = hours * 60 + minutes;
+
+  const save = async () => {
+    const r = timerRequest({ entity, action, minutes: String(totalMinutes), scene: target === 'scene' ? scene ?? '' : null });
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    await onSubmit(r.value);
+  };
+
+  return (
+    <FormShell title="New timer" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Start timer">
+      <TargetToggle scenes={scenes} value={target} onChange={setTarget} />
+      {target === 'scene' ? (
+        <Field label="Scene">
+          <SceneChoice scenes={scenes} value={scene} onChange={setScene} />
+        </Field>
+      ) : (
+        <>
+          <Field label="Device">
+            <DevicePicker label="Device" devices={switchTargets(entities)} value={entity} onChange={setEntity} />
+          </Field>
+          <Field label="Then">
+            <ActionChips value={action} onChange={setAction} />
+          </Field>
+        </>
+      )}
+      <Field label="After">
+        <DurationWheel hours={hours} minutes={minutes} onChange={(h, m) => { setHours(h); setMinutes(m); }} />
+        <View style={[styles.timerNote, { backgroundColor: t.card, borderColor: t.border }]}>
+          <Text style={{ color: t.muted, fontSize: 12, lineHeight: 17 }}>
+            Fires once, in{' '}
+            <Text style={{ color: t.accentInk, fontWeight: '700' }}>{formatCountdown(totalMinutes * 60)}</Text>
+            , then forgets itself.
+          </Text>
+        </View>
+      </Field>
+    </FormShell>
+  );
+}
+
+// ---- rule -------------------------------------------------------------------------------
 
 /** `scope` ("When", "Then", "Only while") keeps the labels of the three value fields distinct. */
 function ValueField({ scope, option, value, onChange }: { scope: string; option: AttrOption | null; value: string; onChange(v: string): void }) {
@@ -45,6 +247,8 @@ function ValueField({ scope, option, value, onChange }: { scope: string; option:
   const unit = inputUnit(option.name);
   return <Input label={`${scope} value`} value={value} onChangeText={onChange} placeholder={unit ? `number, in ${unit}` : 'number'} keyboardType="numbers-and-punctuation" />;
 }
+
+// ---- editing a scene -------------------------------------------------------------------------
 
 /** Change the values of an existing scene, drop settings, add others, or take everything from the devices' state right now. Saves under the same name. */
 export function SceneEditor({ scene, entities, busy, onSubmit, onCancel }: { scene: Scene; entities: Entity[]; busy: boolean; onSubmit: Submit; onCancel(): void }) {
@@ -117,19 +321,46 @@ export function SceneForm({ entities, busy, onSubmit, onCancel }: { entities: En
 
   return (
     <FormShell title="New scene" error={error} onCancel={onCancel} onSave={save} busy={busy} saveLabel="Save scene">
-      <Text style={{ color: t.muted, fontSize: 12, lineHeight: 17 }}>
-        A scene remembers how the chosen devices are set right now (on or off, brightness). Set them up first, then save.
-      </Text>
+      <View style={[styles.sceneNote, { backgroundColor: t.card, borderColor: t.border }]}>
+        <Text style={{ color: t.muted, fontSize: 12.5, lineHeight: 18 }}>
+          A scene remembers what the chosen devices are doing{' '}
+          <Text style={{ color: t.text, fontWeight: '600' }}>right now</Text>, to bring back in one tap.
+        </Text>
+      </View>
       <Field label="Name">
         <Input label="Scene name" value={name} onChangeText={setName} placeholder="e.g. evening" />
       </Field>
-      <Field label="Devices">
+      <Field label="Include these devices">
         {candidates.length === 0 && <Text style={{ color: t.muted }}>No devices to save yet.</Text>}
-        <ChipRow>
-          {candidates.map((e) => (
-            <Chip key={e.id} label={deviceTitle(e)} a11y={`Include ${deviceTitle(e)}`} selected={picked.includes(e.id)} onPress={() => toggle(e.id)} />
-          ))}
-        </ChipRow>
+        {candidates.map((e) => {
+          const on = picked.includes(e.id);
+          const state = sceneStateOf(e);
+          return (
+            <Pressable
+              key={e.id}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`Include ${deviceTitle(e)}`}
+              accessibilityState={{ checked: on }}
+              onPress={() => toggle(e.id)}
+              style={[styles.sceneRow, { backgroundColor: t.card, borderColor: t.border }]}
+            >
+              <View style={[styles.sceneTile, { backgroundColor: on ? t.accent : t.fill }]}>
+                <Glyph name={deviceIcon(e.device)} size={18} color={on ? t.onAccent : t.muted} />
+              </View>
+              <View style={styles.sceneText}>
+                <Text style={[styles.sceneName, { color: t.text }]} numberOfLines={1}>
+                  {deviceTitle(e)}
+                </Text>
+                <Text style={[styles.sceneState, { color: t.muted }]} numberOfLines={1}>
+                  {state}
+                </Text>
+              </View>
+              <View style={[styles.check, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accent : 'transparent' }]}>
+                {on ? <Glyph name="check" size={13} color={t.onAccent} /> : null}
+              </View>
+            </Pressable>
+          );
+        })}
       </Field>
       {actions.length > 0 && (
         <Text accessibilityLabel="Scene contents" style={{ color: t.text, fontSize: 13, marginTop: 4 }}>
@@ -140,9 +371,30 @@ export function SceneForm({ entities, busy, onSubmit, onCancel }: { entities: En
   );
 }
 
+/** What a device is doing right now — the state a scene would remember. */
+function sceneStateOf(e: Entity): string {
+  const sw = primarySwitch(e);
+  if (sw === undefined) return 'Reads only';
+  const on = sw.value === true;
+  const bright = attrOf(e, 'brightness');
+  if (on && bright !== undefined && typeof bright.value === 'number') {
+    return `On · ${Math.round((bright.value / 254) * 100)} %`;
+  }
+  return on ? 'On' : 'Off';
+}
+
 const styles = StyleSheet.create({
+  sceneNote: { borderWidth: 1, borderRadius: 16, padding: 13, marginBottom: 12 },
+  sceneRow: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 11, borderRadius: 16, borderWidth: 1, marginBottom: 8 },
+  sceneTile: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  sceneText: { flex: 1, gap: 2, minWidth: 0 },
+  sceneName: { fontSize: 14, fontWeight: '600' },
+  sceneState: { fontSize: 12 },
+  check: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  timerNote: { borderWidth: 1, borderRadius: 14, padding: 12, marginTop: 12 },
   form: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 14 },
   title: { fontSize: 17, fontWeight: '700' },
   buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 16 },
+  pair: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   setting: { marginTop: 10, gap: 6 },
 });

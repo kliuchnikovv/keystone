@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keystone — датчик климата</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --page:#f4efe4; --card:#fffdf8; --line:#e8e1d0;
+    --ink:#1a1813; --muted:#746d5d;
+    --gold:#cf9f33; --gold-ink:#9a7117; --gold-soft:rgba(207,159,51,0.16);
+    --good:#2f7d4f; --good-soft:rgba(47,125,79,0.12); --bad:#b5543b;
+    --warn:#b7791f; --warn-soft:rgba(183,121,31,0.14);
+    --shadow:0 1px 2px rgba(40,33,15,0.04), 0 8px 24px rgba(40,33,15,0.05);
+  }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:'Geist',system-ui,sans-serif;
+    background:radial-gradient(1500px 800px at 50% -5%, #faf6ec 0%, var(--page) 60%);
+    color:var(--ink);-webkit-font-smoothing:antialiased;padding:30px 18px 60px;}
+  .mono{font-family:'Geist Mono',ui-monospace,monospace;}
+  h1{text-align:center;font-size:22px;font-weight:700;margin:0 0 4px;}
+  .lead{text-align:center;color:var(--muted);font-size:13px;margin:0 auto 26px;max-width:640px;}
+  .deck{display:flex;flex-wrap:wrap;gap:34px;justify-content:center;max-width:1180px;margin:0 auto;align-items:flex-start;}
+  .col{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:360px;}
+  .caption{font-size:12.5px;font-weight:700;text-align:center;}
+  .sub{font-size:11.5px;color:var(--muted);text-align:center;line-height:16px;}
+
+  /* device tile (grid button) */
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:330px;}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:7px;min-height:118px;}
+  .tile.wide{grid-column:span 3;min-height:0;flex-direction:row;align-items:center;gap:11px;}
+  .tile.tall{grid-column:span 2;}
+  .ic{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#efe9dc;color:#a69c86;flex:0 0 auto;}
+  .ic svg{width:20px;height:20px;}
+  .tname{font-size:13px;font-weight:600;line-height:15px;}
+  .big{font-size:26px;font-weight:700;letter-spacing:-.5px;line-height:1;}
+  .big .u{font-size:13px;font-weight:600;color:var(--muted);}
+  .foot{font-size:10.5px;color:#a69c86;margin-top:auto;}
+
+  /* 2x2 reading grid inside a tall tile */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:2px;}
+  .cell{border-radius:12px;padding:9px 10px;background:#f6f1e6;border:1px solid var(--line);}
+  .cell .k{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  .cell .v{font-size:18px;font-weight:700;margin-top:3px;}
+  .cell.ok{background:var(--good-soft);border-color:rgba(47,125,79,.25);}
+  .cell.ok .v{color:var(--good);}
+  .cell.hi{background:var(--warn-soft);border-color:rgba(183,121,31,.3);}
+  .cell.hi .v{color:var(--warn);}
+  .pill{align-self:flex-start;font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--gold-soft);color:var(--gold-ink);}
+  .batchip{position:absolute;top:11px;right:12px;display:flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;color:var(--muted);}
+  .batchip svg{width:17px;height:14px;}
+
+  .faded{opacity:.42;}
+  .offnote{font-size:10.5px;color:var(--muted);margin-top:auto;display:flex;align-items:center;gap:5px;}
+  .dot{width:7px;height:7px;border-radius:50%;background:#c3b89e;display:inline-block;}
+
+  /* device sheet */
+  .sheet{width:330px;background:var(--card);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);overflow:hidden;}
+  .grab{width:40px;height:4px;border-radius:999px;background:#e0d8c5;margin:10px auto 2px;}
+  .shead{display:flex;align-items:center;gap:12px;padding:10px 16px 14px;border-bottom:1px solid var(--line);}
+  .shead .big{font-size:30px;}
+  .sname{font-size:16px;font-weight:700;} .sroom{font-size:11.5px;color:var(--muted);margin-top:1px;}
+  .srows{padding:8px 16px 16px;}
+  .srow{display:flex;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);}
+  .srow:last-child{border-bottom:none;}
+  .srow .k{font-size:13px;color:var(--muted);} .srow .v{margin-left:auto;font-size:15px;font-weight:700;}
+  .srow .v.ok{color:var(--good);} .srow .v.hi{color:var(--warn);}
+  .bat{display:flex;align-items:center;gap:8px;margin-left:auto;}
+  .batbar{width:40px;height:9px;border-radius:3px;background:#eadfca;overflow:hidden;border:1px solid var(--line);}
+  .batfill{height:100%;background:var(--good);}
+  .upd{font-size:11px;color:#a69c86;padding:0 16px 14px;}
+</style>
+</head>
+<body>
+  <h1>Датчик климата — виджеты</h1>
+  <p class="lead">casanomi-paper. Плитка показывает главное; много показаний — сеткой 2×2 с цветом «норма/много»; нет связи — вся карточка блёкнет фейдом; полный разбор — в листе устройства по долгому тапу.</p>
+
+  <div class="deck">
+
+    <!-- TILES -->
+    <div class="col">
+      <div class="tiles">
+        <!-- single-reading temperature tile; battery is a corner glyph, part of the sensor -->
+        <div class="tile tall" style="grid-column:span 2;position:relative">
+          <div class="batchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="8" width="16" height="8" rx="2"/><path d="M20 11v2"/><rect x="4" y="10" width="9" height="4" rx="1" fill="currentColor" stroke="none"/></svg>82%</div>
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div>
+          <div class="tname">Bedroom sensor</div>
+          <div class="big">21.4<span class="u"> °C</span></div>
+          <div class="foot">Humidity 48% · updated 12 s ago</div>
+        </div>
+      </div>
+
+      <div class="tiles" style="margin-top:12px">
+        <!-- air-quality / many readings grid -->
+        <div class="tile tall" style="grid-column:span 3">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8c3-3 6 3 9 0s6-3 9 0M3 14c3-3 6 3 9 0s6-3 9 0"/></svg></div>
+            <div><div class="tname">Living room air</div><div class="foot" style="margin:0">updated 4 s ago</div></div>
+          </div>
+          <div class="grid2">
+            <div class="cell ok"><div class="k">Temp</div><div class="v">22.1°</div></div>
+            <div class="cell ok"><div class="k">Humidity</div><div class="v">45%</div></div>
+            <div class="cell hi"><div class="k">CO₂</div><div class="v">1180</div></div>
+            <div class="cell ok"><div class="k">Light</div><div class="v">320 lx</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="caption" style="margin-top:14px">Плитки</div>
+      <div class="sub">Одно показание — крупная цифра + подпись и «updated 12 s ago»; батарея — маленький значок в углу самой плитки датчика, не отдельной карточкой. Много показаний — сетка 2×2: зелёное = норма, янтарное = много (CO₂ 1180).</div>
+    </div>
+
+    <!-- OFFLINE + SHEET -->
+    <div class="col">
+      <div class="tiles" style="grid-template-columns:repeat(2,1fr)">
+        <div class="tile tall faded" style="grid-column:span 2">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div>
+          <div class="tname">Garage sensor</div>
+          <div class="big">18.2<span class="u"> °C</span></div>
+          <div class="offnote"><span class="dot"></span> No connection · last seen 6 min ago</div>
+        </div>
+      </div>
+      <div class="caption" style="margin-top:12px">Нет связи — фейд</div>
+      <div class="sub">Датчик молчит → вся карточка блёкнет (opacity 0.42), показывает последнее значение и «last seen 6 min ago». Без красных меток.</div>
+
+      <!-- device sheet -->
+      <div class="sheet" style="margin-top:18px">
+        <div class="grab"></div>
+        <div class="shead">
+          <div class="ic" style="width:48px;height:48px;border-radius:14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div>
+          <div><div class="sname">Living room air</div><div class="sroom">Living room</div></div>
+          <div class="big" style="margin-left:auto">22.1<span class="u">°C</span></div>
+        </div>
+        <div class="srows">
+          <div class="srow"><div class="k">Temperature</div><div class="v ok">22.1 °C</div></div>
+          <div class="srow"><div class="k">Humidity</div><div class="v ok">45 %</div></div>
+          <div class="srow"><div class="k">CO₂</div><div class="v hi">1180 ppm</div></div>
+          <div class="srow"><div class="k">Illuminance</div><div class="v ok">320 lx</div></div>
+          <div class="srow"><div class="k">Battery</div><div class="bat"><div class="batbar"><div class="batfill" style="width:82%"></div></div><span style="font-size:13px;font-weight:700">82%</span></div></div>
+        </div>
+        <div class="upd">Updated 4 s ago · Rename · Move to another room</div>
+      </div>
+      <div class="caption" style="margin-top:12px">Лист устройства (долгий тап)</div>
+      <div class="sub">Все показания строками с цветом нормы, батарея полоской, когда обновлялось, Rename / Move to room.</div>
+    </div>
+
+  </div>
+</body>
+</html>

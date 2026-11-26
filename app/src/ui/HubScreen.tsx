@@ -1,21 +1,20 @@
 import { useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { useGeofence, presenceRequest } from '../hooks/useGeofence';
-import type { HubConnection } from '../hooks/useHub';
 import { describeLocation, locationRequest } from '../model/automation';
 import { chipRows, chipSummary } from '../model/health';
 import { locatePhone } from '../native/position';
 import type { HomeState } from '../protocol/store';
 import { Button, ErrorText, Input } from './controls';
+import { Glyph } from './Glyph';
 import { ScreenHeader } from './ScreenHeader';
-import { AccessCard, FirmwareCard, HubActionsCard } from './HubCards';
+import { HubActionsCard } from './HubCards';
 import { PresenceCard } from './PresenceCard';
-import { WifiCard } from './WifiCard';
-import { PALETTES, THEMES, radius, useTheme, type PaletteId } from './theme';
+import { radius, useTheme } from './theme';
 
 /** The hub's position: what makes "at sunset" mean something. */
-function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
+export function LocationCard({ home, commands }: { home: HomeState; commands: Commands }) {
   const t = useTheme();
   const [editing, setEditing] = useState(false);
   const [lat, setLat] = useState('');
@@ -82,7 +81,7 @@ function LocationCard({ home, commands }: { home: HomeState; commands: Commands 
 // In a production build this would come from the hub via the protocol.
 const MATTER_SETUP_CODE = '3497-0112-332';
 
-function MatterBridgeCard({ home }: { home: HomeState }) {
+export function MatterBridgeCard({ home }: { home: HomeState }) {
   const t = useTheme();
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
   // thread-c6 is chip 0x02
@@ -135,42 +134,43 @@ function MatterBridgeCard({ home }: { home: HomeState }) {
   );
 }
 
-/** The app's own look: the palette is a setting of the phone, not of the hub. */
-function AppearanceCard({ palette, onPalette }: { palette: PaletteId; onPalette?(id: PaletteId): void }) {
+/** The hub's own card: who it is, where it is, what it is running. */
+export function HubSummaryCard({ home, url }: { home: HomeState; url: string }) {
   const t = useTheme();
+  const hub = home.hub;
+  const tone = { good: t.good, warn: t.warn, bad: t.bad };
+  // One dot for the whole hub: healthy, degraded (a chip is quiet) or offline.
+  const hubTone = home.status !== 'ready' ? 'bad' : home.chips.some((c) => c.status !== 'ready') ? 'warn' : 'good';
+  const hubStatus = hubTone === 'bad' ? 'offline' : hubTone === 'warn' ? 'degraded' : 'healthy';
   return (
-    <View accessibilityLabel="Appearance" style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
-      <Text style={[styles.h2, { color: t.text }]}>Appearance</Text>
-      <Text style={{ color: t.muted, fontSize: 13 }}>The palette the app wears. Ember is the dark glass look, Paper the always-light one.</Text>
-      <View style={styles.paletteRow}>
-        {PALETTES.map((p) => {
-          const on = p.id === palette;
-          const preview = THEMES[p.id];
-          return (
-            <Pressable
-              key={p.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Palette ${p.name}`}
-              accessibilityState={{ selected: on }}
-              onPress={() => onPalette?.(p.id)}
-              style={[styles.palette, { borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accentSoft : t.fill }]}
-            >
-              <View style={styles.swatches}>
-                <View style={[styles.swatch, { backgroundColor: preview.bg, borderColor: preview.border }]} />
-                <View style={[styles.swatch, { backgroundColor: preview.card, borderColor: preview.border }]} />
-                <View style={[styles.swatch, { backgroundColor: preview.accent, borderColor: preview.accent }]} />
-              </View>
-              <Text style={{ color: on ? t.accent : t.text, fontSize: 14, fontWeight: '700' }}>{p.name}</Text>
-              <Text style={{ color: t.muted, fontSize: 11 }}>{p.hint}</Text>
-            </Pressable>
-          );
-        })}
+    <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
+      <View style={styles.hubHead}>
+        <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
+        <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
+        <Text style={{ color: tone[hubTone], fontWeight: '600', fontSize: 12 }}>{hubStatus}</Text>
       </View>
+      <View style={styles.kv}>
+        <Text style={{ color: t.muted }}>{url}</Text>
+      </View>
+      {hub && (
+        <>
+          <View style={styles.kv}>
+            <Text style={{ color: t.muted }}>Firmware</Text>
+            <Text style={{ color: t.text, fontWeight: '600' }}>{hub.fw}</Text>
+          </View>
+          <View style={styles.kv}>
+            <Text style={{ color: t.muted }}>Clock</Text>
+            <Text style={{ color: t.text, fontWeight: '600' }} numberOfLines={1}>
+              {hub.synced ? `${new Date(hub.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${hub.tz}` : 'not synced'}
+            </Text>
+          </View>
+        </>
+      )}
     </View>
   );
 }
 
-export function HubScreen({ home, url, onChangeHub, commands, client, onTokenChange, onUseRelay, palette, onPalette }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; client: HubConnection; onTokenChange?(token: string): Promise<void>; onUseRelay?(url: string): void; palette?: PaletteId; onPalette?(id: PaletteId): void }) {
+export function HubScreen({ home, url, onChangeHub, commands, onBack }: { home: HomeState; url: string; onChangeHub(): void; commands: Commands; onBack?(): void }) {
   const t = useTheme();
   const hub = home.hub;
   const tone = { good: t.good, warn: t.warn, bad: t.bad };
@@ -189,34 +189,20 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
   );
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <ScreenHeader title="Hub" />
-      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, borderRadius: t.cardRadius }]}>
-        <View style={styles.hubHead}>
-          <View style={[styles.dot, { backgroundColor: tone[hubTone] }]} accessibilityLabel={`Hub is ${hubStatus}`} />
-          <Text style={[styles.h, { color: t.text }]}>{hub?.name ?? 'Hub'}</Text>
-          <Text style={{ color: tone[hubTone], fontWeight: '600', fontSize: 12 }}>{hubStatus}</Text>
-        </View>
-        <View style={styles.kv}>
-          <Text style={{ color: t.muted }}>{url}</Text>
-        </View>
-        {hub && (
-          <>
-            <View style={styles.kv}>
-              <Text style={{ color: t.muted }}>Firmware</Text>
-              <Text style={{ color: t.text, fontWeight: '600' }}>{hub.fw}</Text>
-            </View>
-            <View style={styles.kv}>
-              <Text style={{ color: t.muted }}>Clock</Text>
-              <Text style={{ color: t.text, fontWeight: '600' }} numberOfLines={1}>
-                {hub.synced ? `${new Date(hub.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${hub.tz}` : 'not synced'}
-              </Text>
-            </View>
-          </>
-        )}
-      </View>
+      <ScreenHeader
+        title="Hub"
+        {...(onBack
+          ? {
+              left: (
+                <Pressable accessibilityRole="button" accessibilityLabel="Back to Settings" onPress={onBack} style={styles.back}>
+                  <Glyph name="back" size={20} color={t.muted} />
+                </Pressable>
+              ),
+            }
+          : {})}
+      />
+      <HubSummaryCard home={home} url={url} />
 
-      <WifiCard home={home} commands={commands} />
-      <LocationCard home={home} commands={commands} />
       <PresenceCard home={home} commands={commands} />
       <MatterBridgeCard home={home} />
 
@@ -240,10 +226,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
         );
       })}
 
-      <FirmwareCard home={home} client={client} commands={commands} />
-      <AccessCard client={client} commands={commands} {...(onTokenChange ? { onTokenChange } : {})} {...(onUseRelay ? { onUseRelay } : {})} />
       <HubActionsCard commands={commands} onChangeHub={onChangeHub} />
-      <AppearanceCard palette={palette ?? 'sandstone'} onPalette={onPalette} />
 
       <Pressable accessibilityRole="button" accessibilityLabel="Change hub" onPress={onChangeHub} style={[styles.change, { borderColor: t.border }]}>
         <Text style={{ color: t.accent, fontWeight: '600' }}>Change hub or token</Text>
@@ -254,6 +237,7 @@ export function HubScreen({ home, url, onChangeHub, commands, client, onTokenCha
 
 const styles = StyleSheet.create({
   page: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 110 : 98, gap: 10 },
+  back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   card: { borderWidth: 1, padding: 14, gap: 4 },
   h: { fontSize: 22, fontWeight: '700' },
   hubHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -268,8 +252,8 @@ const styles = StyleSheet.create({
   codeBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
              borderWidth: 1, borderRadius: radius.field, paddingHorizontal: 14, paddingVertical: 10, marginTop: 4 },
   code: { fontSize: 22, fontWeight: '700', letterSpacing: 2, fontVariant: ['tabular-nums'] },
-  paletteRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  palette: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
+  modeRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  mode: { flex: 1, borderWidth: 1, borderRadius: radius.card, paddingHorizontal: 12, paddingVertical: 10, gap: 2 },
   swatches: { flexDirection: 'row', gap: 4, marginBottom: 6 },
   swatch: { width: 14, height: 14, borderRadius: 7, borderWidth: 1 },
 });

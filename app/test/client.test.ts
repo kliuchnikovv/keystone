@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import { HubClient, HubError, type HubClientOptions, type SocketLike } from '../src/protocol/client';
 import { attrValue, initialState, type HomeState } from '../src/protocol/store';
-import { MockHub, MAX_CLIENTS } from '../tools/mock-hub/hub';
+import { MockHub, MAX_CLIENTS, defaultEntities } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
 
@@ -48,7 +48,7 @@ describe('handshake', () => {
     await ready(c);
     const s = c.getSnapshot();
     expect(s.hub).toMatchObject({ name: 'mock-home', synced: true });
-    expect(s.entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null]);
+    expect(s.entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null, 'Climate']);
     expect(seen).toContain('authenticating');
   });
 
@@ -56,7 +56,7 @@ describe('handshake', () => {
     const c = client({ socketFactory: undefined });
     c.connect();
     await ready(c);
-    expect(c.getSnapshot().entities).toHaveLength(3);
+    expect(c.getSnapshot().entities).toHaveLength(defaultEntities().length);
   });
 
   it('a wrong token is fatal: status unauthorized and no reconnect loop', async () => {
@@ -119,7 +119,8 @@ describe('split snapshot', () => {
   it('a snapshot in several parts is assembled and only then ready', async () => {
     await hub.close();
     hub = await MockHub.start({ helloTimeoutMs: 300, ackDelayMs: 10, snapshotChunk: 7 });
-    hub.addEntities(30); // 3 default + 30 = 33 entities -> 5 frames of 7
+    const total = defaultEntities().length + 30;
+    hub.addEntities(30); // the default devices plus 30 more
     const c = client({ url: hub.url });
     const statuses: string[] = [];
     const sizes: number[] = [];
@@ -130,19 +131,20 @@ describe('split snapshot', () => {
     c.connect();
     await ready(c);
     const s = c.getSnapshot();
-    expect(s.entities).toHaveLength(33);
-    expect(new Set(s.entities.map((e) => e.id)).size).toBe(33);
+    expect(s.entities).toHaveLength(total);
+    expect(new Set(s.entities.map((e) => e.id)).size).toBe(total);
     expect(s.chips).toHaveLength(2);
     // Never 'ready' while only part of the home was known.
     const firstReady = statuses.indexOf('ready');
-    expect(sizes[firstReady]).toBe(33);
-    expect(sizes.some((n) => n > 0 && n < 33)).toBe(true);
+    expect(sizes[firstReady]).toBe(total);
+    expect(sizes.some((n) => n > 0 && n < total)).toBe(true);
   });
 
   it('a resync replaces the lists instead of duplicating them', async () => {
     await hub.close();
     hub = await MockHub.start({ helloTimeoutMs: 300, ackDelayMs: 10, snapshotChunk: 5 });
     hub.addEntities(12);
+    const total = defaultEntities().length + 12;
     const c = client({ url: hub.url });
     c.connect();
     await ready(c);
@@ -151,7 +153,7 @@ describe('split snapshot', () => {
     hub.resync();
     await new Promise((r) => setTimeout(r, 150));
     const s = c.getSnapshot();
-    expect(s.entities).toHaveLength(15);
+    expect(s.entities).toHaveLength(total);
     expect(s.chips).toHaveLength(2);
     expect(s.status).toBe('ready');
     expect(attrValue(s, 0x0200, 0x01)).toBe(true);
@@ -706,7 +708,7 @@ describe('reconnecting', () => {
     expect(c.getSnapshot().status).toBe('closed');
     c.connect();
     await ready(c);
-    expect(c.getSnapshot().entities).toHaveLength(3);
+    expect(c.getSnapshot().entities).toHaveLength(defaultEntities().length);
   });
 
   it('reconnect: false leaves it disconnected after a drop', async () => {
@@ -859,7 +861,7 @@ describe('the cached state', () => {
     c.hydrate(cached);
     c.connect();
     await ready(c);
-    expect(c.getSnapshot().entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null]);
+    expect(c.getSnapshot().entities.map((e) => e.name)).toEqual(['plug1', 'lamp', null, 'Climate']);
     expect(c.getSnapshot().stale).toBe(false);
     expect(c.getSnapshot().savedAt).toBeNull();
   });
@@ -869,7 +871,7 @@ describe('the cached state', () => {
     c.connect();
     await ready(c);
     c.hydrate(cached);
-    expect(c.getSnapshot().entities).toHaveLength(3);
+    expect(c.getSnapshot().entities).toHaveLength(defaultEntities().length);
     expect(c.getSnapshot().stale).toBe(false);
   });
 

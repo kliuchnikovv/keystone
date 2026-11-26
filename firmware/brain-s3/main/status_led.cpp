@@ -2,11 +2,15 @@
 
 #include "esp_log.h"
 #include "led_strip.h"
+#include "sdkconfig.h"
 
 namespace status_led {
 namespace {
 
-constexpr int kGpio = 21;
+// The WS2812 pin is board-specific: 21 on the S3-Zero (original brain), 48 on
+// ESP32-S3-DevKitC-1 v1.1 / WeAct / N16R8 boards. Picked in sdkconfig via
+// main/Kconfig.projbuild → CONFIG_KS_STATUS_LED_GPIO.
+constexpr int kGpio = CONFIG_KS_STATUS_LED_GPIO;
 constexpr int kMaxBrightness = 12;
 
 led_strip_handle_t g_strip = nullptr;
@@ -15,16 +19,19 @@ std::uint32_t g_last_ms = 0;
 
 struct Rgb { std::uint8_t r, g, b; };
 
-// The PlatformIO-bundled led_strip driver sends bytes as-is (no GRB reorder),
-// so we pass (G, R, B) to get the right colour on a WS2812.
+// espressif/led_strip (>=3.x) takes honest RGB and does the GRB reorder for
+// WS2812 itself (see led_strip_rmt_set_pixel + LED_STRIP_COLOR_COMPONENT_FMT_GRB
+// default). Before 3.x some bundled drivers sent bytes as-is and the hub
+// pre-swapped R and G; that pre-swap now shows up as inverted colours
+// (Healthy came out RED, Offline came out GREEN). Swap removed.
 Rgb base_colour(State s) {
   switch (s) {
-    case State::Booting:  return {0, 0, kMaxBrightness};
-    case State::Healthy:  return {kMaxBrightness, 0, 0};
-    case State::Degraded: return {static_cast<std::uint8_t>(kMaxBrightness / 3), kMaxBrightness, 0};
-    case State::Offline:  return {0, kMaxBrightness, 0};
-    case State::Setup:    return {0, 0, kMaxBrightness};
-    case State::Pairing:  return {kMaxBrightness, 0, 0};
+    case State::Booting:  return {0, 0, kMaxBrightness};                                                   // blue
+    case State::Healthy:  return {0, kMaxBrightness, 0};                                                   // green
+    case State::Degraded: return {kMaxBrightness, static_cast<std::uint8_t>(kMaxBrightness / 3), 0};       // amber
+    case State::Offline:  return {kMaxBrightness, 0, 0};                                                   // red
+    case State::Setup:    return {0, 0, kMaxBrightness};                                                   // blue pulse
+    case State::Pairing:  return {0, kMaxBrightness, 0};                                                   // green pulse
     case State::Off:      return {0, 0, 0};
   }
   return {0, 0, 0};

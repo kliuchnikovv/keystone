@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { describeWifi, signalText, wifiRequest } from '../model/automation';
 import type { WifiNetwork } from '../protocol/messages';

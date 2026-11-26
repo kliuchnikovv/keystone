@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import type { HomeState } from '../protocol/store';
 import { Glyph } from './Glyph';

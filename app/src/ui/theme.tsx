@@ -1,27 +1,28 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
 
-// The keystone idiom: warm sandstone paper, ink text, a single terracotta accent
-// ("ember") that only ever means two things — affordance, or live heat.
+// The keystone idiom, restated in the casanomi-paper language: a warm page,
+// ink text, a single honey-gold accent that only ever means two things —
+// affordance, or live heat — and a near-black primary action.
 //
-// The palette is a setting: "sandstone" is this paper-and-ink look (it follows the
-// system light/dark), "ember" is the dark glass-and-amber look of the room mock —
-// always dark, with warm translucent surfaces, "paper" is the always-light look of
-// the remote-access mock — cream page, white cards with a hairline, terracotta.
+// There are two themes in that one language: `paperLight` (a warm cream page)
+// and `paperDark` (a warm dark ground, never grey). The app chooses between
+// them with a mode: System (follow the phone), Light, or Dark.
 
-/** The palettes the app can wear. */
-export type PaletteId = 'sandstone' | 'ember' | 'paper';
+/** How the app chooses its theme. */
+export type ThemeMode = 'system' | 'light' | 'dark';
 
-export interface PaletteInfo {
-  id: PaletteId;
+export interface ModeInfo {
+  id: ThemeMode;
   name: string;
   hint: string;
 }
 
-export const PALETTES: PaletteInfo[] = [
-  { id: 'sandstone', name: 'Sandstone', hint: 'Warm paper, terracotta accent' },
-  { id: 'ember', name: 'Ember', hint: 'Dark glass, amber accent' },
-  { id: 'paper', name: 'Paper', hint: 'Always light, cream and ink' },
+/** The modes a picker offers, in the order it offers them. */
+export const MODES: ModeInfo[] = [
+  { id: 'system', name: 'System', hint: 'Follow the phone' },
+  { id: 'light', name: 'Light', hint: 'Warm paper' },
+  { id: 'dark', name: 'Dark', hint: 'Warm night' },
 ];
 
 export interface Theme {
@@ -43,17 +44,22 @@ export interface Theme {
   accent: string;
   /** The deeper ink of the accent — accent text on a soft accent chip. */
   accentInk: string;
-  /** A 10–14 % wash of the accent, for selected chips and soft chips. */
+  /** A 10–16 % wash of the accent, for selected chips and soft chips. */
   accentSoft: string;
   /** A quiet filled surface: secondary buttons, pressed rows. */
   fill: string;
-  /** The quiet button: a filled surface in the dark palettes, an outline on paper. */
+  /** The quiet button: a filled surface in the dark theme, an outline on paper. */
   secondaryBg: string;
   /** The line around the quiet button. */
   secondaryBorder: string;
-  /** A cool accent — the one place the palette is allowed a second hue. */
+  /** The cool accent — the one place the theme is allowed a second hue. */
   cool: string;
+  /** The ink on a gold surface: a chip, a tile, an icon. Dark, so it reads. */
   onAccent: string;
+  /** The main action: near-black ink, not the gold accent. */
+  primary: string;
+  /** The ink on the main action. */
+  onPrimary: string;
   good: string;
   /** The ink of a note that says everything works. */
   goodInk: string;
@@ -63,144 +69,98 @@ export interface Theme {
   goodBorder: string;
   warn: string;
   bad: string;
-  /** Which palette this theme came from. */
-  palette: PaletteId;
-  /** The radius of a card-like surface: 18 in sandstone, 22 in ember. */
+  /** The radius of a card-like surface. */
   cardRadius: number;
   /** The bottom bar that holds the tabs. */
   tabBar: string;
+  /** The gold hairline of a lit card. */
+  glowBorder: string;
+  /** The warm gold wash over a lit card. */
+  glowFill: string;
+  /** The gold the glow casts (a shadow on native, a tint on the web). */
+  glowShadow: string;
 }
 
-const light: Theme = {
-  bg: '#f5f1e8',
-  card: '#ffffff',
-  surface: '#ffffff',
-  glass: 'rgba(255,255,255,0.70)',
-  glassBorder: 'rgba(255,255,255,0.70)',
-  glassSheen: 'rgba(255,255,255,0.95)',
-  text: '#15171c',
-  muted: '#6f6a5c',
-  border: '#e3ddcd',
-  accent: '#c4512a',
-  accentInk: '#a23e1f',
-  accentSoft: 'rgba(196,81,42,0.12)',
-  fill: 'rgba(0,0,0,0.06)',
-  secondaryBg: 'rgba(0,0,0,0.06)',
-  secondaryBorder: 'rgba(0,0,0,0.06)',
-  cool: '#2f6fb8',
-  onAccent: '#ffffff',
-  good: '#2f7a4d',
-  goodInk: '#215c3a',
-  goodSoft: 'rgba(47,125,79,0.07)',
-  goodBorder: 'rgba(47,125,79,0.22)',
-  warn: '#a8760f',
-  bad: '#b53b3b',
-  palette: 'sandstone',
-  cardRadius: 18,
-  tabBar: 'rgba(255,255,255,0.97)',
-};
-
-const dark: Theme = {
-  bg: '#14161b',
-  card: '#1d2027',
-  surface: '#1d2027',
-  glass: 'rgba(40,44,54,0.72)',
-  glassBorder: 'rgba(255,255,255,0.10)',
-  glassSheen: 'rgba(255,255,255,0.18)',
-  text: '#f3efe7',
-  muted: '#9a9384',
-  border: '#2c303a',
-  accent: '#e07a4a',
-  accentInk: '#f0a077',
-  accentSoft: 'rgba(224,122,74,0.18)',
-  fill: 'rgba(255,255,255,0.08)',
-  secondaryBg: 'rgba(255,255,255,0.08)',
-  secondaryBorder: 'rgba(255,255,255,0.08)',
-  cool: '#5aa2e8',
-  onAccent: '#14161b',
-  good: '#4fbe7f',
-  goodInk: '#b9f0cf',
-  goodSoft: 'rgba(79,190,127,0.10)',
-  goodBorder: 'rgba(79,190,127,0.28)',
-  warn: '#e0a63c',
-  bad: '#ef6b6b',
-  palette: 'sandstone',
-  cardRadius: 18,
-  tabBar: 'rgba(20,22,27,0.97)',
-};
-
-// Ember: the room mock. Near-black warm ground, amber as the only accent,
-// everything else a warm translucent pane of glass.
-const ember: Theme = {
-  bg: '#0d0602',
-  card: 'rgba(255,255,255,0.07)',
-  surface: '#171009',
-  glass: 'rgba(255,255,255,0.058)',
-  glassBorder: 'rgba(255,182,92,0.12)',
-  glassSheen: 'rgba(255,238,148,0.12)',
-  text: '#fffcf5',
-  muted: 'rgba(255,205,128,0.62)',
-  border: 'rgba(255,182,92,0.14)',
-  accent: '#FF9F0A',
-  accentInk: '#ffc36b',
-  accentSoft: 'rgba(255,152,32,0.26)',
-  fill: 'rgba(255,255,255,0.06)',
-  secondaryBg: 'rgba(255,255,255,0.06)',
-  secondaryBorder: 'rgba(255,255,255,0.06)',
-  cool: '#64b4ff',
-  onAccent: '#1a0b00',
-  good: '#78f096',
-  goodInk: '#c9f7d6',
-  goodSoft: 'rgba(120,240,150,0.10)',
-  goodBorder: 'rgba(120,240,150,0.28)',
-  warn: '#ffc048',
-  bad: '#ff6e5a',
-  palette: 'ember',
-  cardRadius: 22,
-  tabBar: 'rgba(8,3,1,0.97)',
-};
-
-// Paper: the remote-access mock. Always light — a cream page, white cards with
-// a hairline, terracotta for what can be pressed, green for what works.
-const paper: Theme = {
-  bg: '#f5f1e8',
-  card: '#ffffff',
-  surface: '#ffffff',
-  glass: '#ffffff',
-  glassBorder: '#e3ddcd',
-  glassSheen: 'rgba(255,255,255,0.95)',
-  text: '#15171c',
-  muted: '#6f6a5c',
-  border: '#e3ddcd',
-  accent: '#c4512a',
-  accentInk: '#a23e1f',
-  accentSoft: 'rgba(196,81,42,0.09)',
-  fill: '#eee9dc',
+// Paper: a warm cream page, cards a touch warmer than white, honey gold for
+// what can be pressed, green for what works.
+const paperLight: Theme = {
+  bg: '#f4efe4',
+  card: '#fffdf8',
+  surface: '#fffdf8',
+  glass: 'rgba(255,253,248,0.72)',
+  glassBorder: 'rgba(232,225,208,0.90)',
+  glassSheen: 'rgba(255,253,248,0.95)',
+  text: '#1a1813',
+  muted: '#746d5d',
+  border: '#e8e1d0',
+  accent: '#cf9f33',
+  accentInk: '#9a7117',
+  accentSoft: 'rgba(207,159,51,0.16)',
+  fill: 'rgba(26,24,19,0.05)',
   // On paper a quiet button is an outline, not a grey slab.
   secondaryBg: 'transparent',
-  secondaryBorder: '#e3ddcd',
+  secondaryBorder: '#e8e1d0',
   cool: '#2f6fb8',
-  onAccent: '#ffffff',
+  onAccent: '#1a1813',
+  primary: '#1a1813',
+  onPrimary: '#fdf7ea',
   good: '#2f7d4f',
   goodInk: '#215c3a',
-  goodSoft: 'rgba(47,125,79,0.07)',
+  goodSoft: 'rgba(47,125,79,0.09)',
   goodBorder: 'rgba(47,125,79,0.22)',
   warn: '#a8760f',
   bad: '#b53b3b',
-  palette: 'paper',
-  cardRadius: 16,
-  tabBar: 'rgba(255,255,255,0.97)',
+  cardRadius: 22,
+  tabBar: 'rgba(255,253,248,0.97)',
+  glowBorder: 'rgba(207,159,51,0.55)',
+  glowFill: '#fff8e8',
+  glowShadow: '#cf9f33',
 };
 
-const ThemeContext = createContext<Theme>(light);
+// Night: the same language, warm instead of cool — a dark brown ground, cards
+// a touch lighter, the same honey gold, and a near-white ink as the action.
+const paperDark: Theme = {
+  bg: '#1c1813',
+  card: '#272119',
+  surface: '#2c251c',
+  glass: 'rgba(58,49,38,0.66)',
+  glassBorder: 'rgba(232,225,208,0.14)',
+  glassSheen: 'rgba(242,236,224,0.10)',
+  text: '#f2ece0',
+  muted: '#a89d89',
+  border: '#3b332a',
+  accent: '#e0b23f',
+  accentInk: '#f0c96a',
+  accentSoft: 'rgba(224,178,63,0.18)',
+  fill: 'rgba(242,236,224,0.08)',
+  secondaryBg: 'rgba(242,236,224,0.08)',
+  secondaryBorder: 'rgba(242,236,224,0.12)',
+  cool: '#7fb2e8',
+  onAccent: '#241b03',
+  primary: '#f7f1e4',
+  onPrimary: '#1a1813',
+  good: '#5fbf85',
+  goodInk: '#b6e8cb',
+  goodSoft: 'rgba(95,191,133,0.12)',
+  goodBorder: 'rgba(95,191,133,0.28)',
+  warn: '#e0b23f',
+  bad: '#e97a6a',
+  cardRadius: 22,
+  tabBar: 'rgba(28,24,19,0.97)',
+  glowBorder: 'rgba(224,178,63,0.5)',
+  glowFill: '#2f2617',
+  glowShadow: '#e0b23f',
+};
 
-/** Every palette, so a picker can show what a choice looks like before it is made. */
-export const THEMES: Record<PaletteId, Theme> = { sandstone: light, ember, paper };
+const ThemeContext = createContext<Theme>(paperLight);
 
-/** The theme the whole app wears: the chosen palette, and the system's light/dark for sandstone. */
-export function ThemeProvider({ palette, children }: { palette: PaletteId; children: ReactNode }) {
+/** Both themes, so a picker can show what a choice looks like before it is made. */
+export const THEMES: Record<'light' | 'dark', Theme> = { light: paperLight, dark: paperDark };
+
+/** The theme the whole app wears: the chosen mode, and the phone's own scheme for System. */
+export function ThemeProvider({ mode, children }: { mode: ThemeMode; children: ReactNode }) {
   const scheme = useColorScheme();
-  const theme = palette === 'ember' ? ember : palette === 'paper' ? paper : scheme === 'dark' ? dark : light;
+  const theme = mode === 'system' ? (scheme === 'dark' ? paperDark : paperLight) : mode === 'dark' ? paperDark : paperLight;
   return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
 }
 
@@ -209,5 +169,5 @@ export function useTheme(): Theme {
 }
 
 /** Spacing/radius scale, so screens stay on the same grid. */
-export const radius = { card: 18, chip: 11, pill: 999, field: 12 } as const;
+export const radius = { card: 22, chip: 11, pill: 999, field: 12 } as const;
 export const space = { xs: 6, sm: 10, md: 14, lg: 20, xl: 28 } as const;

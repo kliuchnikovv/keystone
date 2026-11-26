@@ -1,0 +1,89 @@
+#!/bin/sh
+# Build the Keystone plugin examples into .wasm files.
+#
+# The toolchain is clang with the wasm32 target, WITHOUT libc and WITHOUT
+# WASI: a plugin is freestanding, it gets everything from the hub through
+# the host imports in the SDK header.
+#
+# Requirements:
+#   - clang >= 15 with the wasm32 target and wasm-ld
+#     (Debian/Ubuntu: apt install clang lld; on macOS: brew install llvm)
+#   - the plugin SDK header, plugins/sdk/keystone.h
+#
+# Usage:
+#   scripts/build-plugins.sh [output-dir]
+#
+# The output lands in output-dir/<name>.wasm. The firmware's bundled copy
+# is regenerated with scripts/wasm-to-header.py (see plugins/README.md).
+set -eu
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="${1:-$ROOT/plugins/build}"
+SDK="$ROOT/plugins/sdk"
+
+if ! command -v clang >/dev/null 2>&1; then
+  echo "clang not found; install clang + lld (wasm32 target)" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT"
+
+# The freestanding wasm flags:
+#   --target=wasm32   the wasm target
+#   -nostdlib         no libc, no compiler-rt — the plugin has nothing but
+#                     the SDK header
+#   -Wl,--no-entry    wasm-ld must not look for a _start
+#   -Wl,--export-dynamic  keep the plugin's own exports visible
+#   -Wl,--allow-undefined  the host imports are resolved by the hub at
+#                     runtime, not by the linker
+#   -Wl,--export=ks_plugin_abi_version  the hub refuses a plugin that does
+#                     not export it
+#   -Wl,--export=memory  the host reads the plugin's linear memory
+build_one() {
+  src="$1"
+  name="$2"
+  shift 2
+  echo "building $name.wasm from $(basename "$src")"
+  clang --target=wasm32 -nostdlib -O2 -I "$SDK" \
+        -Wl,--no-entry -Wl,--export-dynamic -Wl,--allow-undefined \
+        -Wl,--export=ks_plugin_abi_version -Wl,--export=memory \
+        "$@" \
+        -o "$OUT/$name.wasm" "$src"
+  ls -l "$OUT/$name.wasm"
+}
+
+# The well-behaved plugin: a Switch(on_off) that echoes COMMANDs as STATEs.
+build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch
+
+# The misbehaving one: the same shape, but on_command never returns. It
+# exists to prove the callback watchdog: the hub must survive it, fault
+# the plugin and withdraw its entity (design §10).
+build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-crash \
+  -DKS_PLUGIN_CRASH=1
+
+# The incompatible one: it reports a FOREIGN ABI version. The hub must
+# refuse to load it (design §3 — the export inside the binary is the ground
+# truth; a manifest's declaration is not).
+build_one "$ROOT/plugins/test-switch/test-switch.c" test-switch-abi2 \
+  -DKS_PLUGIN_ABI=2
+
+# A read-only sensor example: declares temperature + humidity + battery in
+# ONE DECLARE and heartbeats STATE every 10 s. No on_command — a sensor is
+# read-only, so the plugin never asks for the Command capability.
+build_one "$ROOT/plugins/climate-sensor/climate-sensor.c" climate-sensor
+
+# A metered outlet example: on_off (writable) + power_w + energy_wh in one
+# entity. on_command flips the switch, the heartbeat draws power while on
+# and accumulates energy in watt-seconds so the long-run Wh total stays
+# exact despite integer truncation.
+build_one "$ROOT/plugins/smart-plug/smart-plug.c" smart-plug
+
+# A LOGIC plugin (not a virtual device): projects a calendar as a Sensor
+# with in_minutes / busy / imminent attributes a rule can match. The event
+# fetch (HTTP) and the clock (ks_time_now) are stubbed with a static table
+# and a tick counter — the TODOs mark where the real implementation hooks
+# in once the SDK grows net_outbound + ks_time_now.
+build_one "$ROOT/plugins/calendar/calendar.c" calendar
+
+echo
+echo "built into $OUT"

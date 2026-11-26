@@ -2,7 +2,7 @@
 // what it measures, and the three things you do to a device you rarely do —
 // rename it, make it blink, take it off the network.
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from './kit';
 import { hsvToCss, xyToHsv } from '../model/color';
 import { MAX_NAME_CHARS, nameProblem } from '../model/names';
 import { allRooms, roomOf, stripRoomPrefix } from '../model/rooms';
@@ -245,18 +245,21 @@ export function DeviceSheet({
         <SheetRow
           label="Rename"
           a11y={`Rename ${title}`}
+          glyph={<Glyph name="pencil" size={18} color={t.muted} />}
           onPress={() => setRenaming(true)}
         />
         {onSetRoom !== undefined && (
           <SheetRow
             label="Move to another room"
             a11y={`Move ${title} to another room`}
+            glyph={<Glyph name="room" size={18} color={t.muted} />}
             onPress={() => setChangingRoom(true)}
           />
         )}        {onIdentify ? (
           <SheetRow
             label="Blink"
             a11y={`Identify ${title}`}
+            glyph={<Glyph name="signal" size={18} color={t.muted} />}
             onPress={async () => {
               onClose();
               if (await onIdentify()) notify?.('The device should blink for about 10 seconds.');
@@ -268,6 +271,7 @@ export function DeviceSheet({
             label="Update firmware"
             last={!onRemove}
             a11y={`Update firmware ${title}`}
+            glyph={<Glyph name="chip" size={18} color={t.muted} />}
             onPress={() => setUpdating(true)}
           />
         ) : null}
@@ -277,6 +281,7 @@ export function DeviceSheet({
             tone="danger"
             last
             a11y={`Remove ${title}`}
+            glyph={<Glyph name="trash" size={18} color={t.bad} />}
             onPress={() => {
               onClose();
               onRemove();

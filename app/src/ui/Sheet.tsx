@@ -1,7 +1,7 @@
 // Bottom sheets and modal dialogs: the app's way of asking for something that does not
 // fit on the screen — a colour, a confirmation, a form.
 import { type ReactNode } from 'react';
-import {
+import { 
   Modal,
   Platform,
   Pressable,
@@ -10,7 +10,7 @@ import {
   Text,
   View,
   useWindowDimensions,
-} from 'react-native';
+ } from './kit';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
 import { useTheme } from './theme';
 
@@ -63,12 +63,14 @@ export function Sheet({ visible, title, onCancel, children }: SheetProps) {
 }
 
 /** A row of a sheet: plain text, a hairline between the rows, the last one without. */
-export function SheetRow({ label, tone = 'normal', onPress, a11y, last }: {
+export function SheetRow({ label, tone = 'normal', onPress, a11y, last, glyph }: {
   label: string;
   tone?: 'normal' | 'danger';
   onPress(): void;
   a11y?: string;
   last?: boolean;
+  /** An icon in front of the name. */
+  glyph?: ReactNode;
 }) {
   const t = useTheme();
   return (
@@ -78,6 +80,7 @@ export function SheetRow({ label, tone = 'normal', onPress, a11y, last }: {
       onPress={onPress}
       style={[styles.sheetRow, { borderBottomColor: t.border, borderBottomWidth: last ? 0 : StyleSheet.hairlineWidth }]}
     >
+      {glyph ? <View style={styles.sheetRowIcon}>{glyph}</View> : null}
       <Text style={{ color: tone === 'danger' ? t.bad : t.text, fontSize: 15 }}>{label}</Text>
     </Pressable>
   );
@@ -109,9 +112,9 @@ export function ConfirmDialog({ visible, title, body, confirmLabel, danger, onCo
               accessibilityRole="button"
               accessibilityLabel={confirmLabel}
               onPress={onConfirm}
-              style={[styles.dialogButton, danger ? { borderColor: t.bad } : { backgroundColor: t.accent, borderColor: t.accent }]}
+              style={[styles.dialogButton, danger ? { borderColor: t.bad } : { backgroundColor: t.primary, borderColor: t.primary }]}
             >
-              <Text style={{ color: danger ? t.bad : t.onAccent, fontWeight: '600', fontSize: 15 }}>{confirmLabel}</Text>
+              <Text style={{ color: danger ? t.bad : t.onPrimary, fontWeight: '600', fontSize: 15 }}>{confirmLabel}</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -146,6 +149,7 @@ const styles = StyleSheet.create({
   body: { flexShrink: 1 },
   bodyInner: { paddingBottom: 8 },
   title: { fontSize: 17, fontWeight: '700' },
+  sheetRowIcon: { marginRight: 12 },
   sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13 },
   dialogWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   dialog: { width: '100%', maxWidth: 380, borderRadius: 20, borderWidth: 1, padding: 20 },

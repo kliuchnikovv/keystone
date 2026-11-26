@@ -1,0 +1,11 @@
+menu "Keystone brain"
+
+    config KS_STATUS_LED_GPIO
+        int "GPIO for the on-board status WS2812"
+        default 21
+        help
+            The on-board addressable (WS2812) status LED.
+            - 21 on the Waveshare ESP32-S3-Zero (the original brain board);
+            - 48 on the ESP32-S3-DevKitC-1 v1.1 / WeAct Core S3 (N16R8 boards).
+
+endmenu
