@@ -235,25 +235,8 @@ bool start(core::Bus& bus, Registry& reg) {
   g_start = [](const char* id) { return manager.start(id); };
   g_state = [](const char* id) { return manager.state(id); };
 
-  // The first bundled plugin: the well-behaved Switch.
-  const BundledPlugin& p = kBundled[0];
-  const InstallResult ir = g_install(p.manifest, p.wasm, p.len);
-  if (ir == InstallResult::kRefused) {
-    ESP_LOGE(kTag, "install of the bundled plugin failed");
-    return false;
-  }
-  log_heap("wasm_host::start: after install");
-
-  const char* id = kBundled[0].id;
-  const core::plugin::KsErr r = g_start(id);
-  if (r != core::plugin::KsErr::Ok) {
-    ESP_LOGE(kTag, "start %s: %d", id, (int)r);
-    return false;
-  }
-  log_heap("wasm_host::start: after start()");
-  ESP_LOGI(kTag, "plugin '%s' started", id);
-
-  std::strncpy(g_plugin_id, id, sizeof(g_plugin_id) - 1);
+  // The runtime is up, but no plugin is auto-loaded — put one in through the
+  // console with `plugin <name>` when needed.
   g_view.valid = true;
   return true;
 }

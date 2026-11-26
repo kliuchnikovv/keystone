@@ -82,3 +82,6 @@ app/android/
 # A plugin .wasm left next to its source by a manual build (the build script
 # puts its output in plugins/build/).
 plugins/*/*.wasm
+
+# Python bytecode cache.
+__pycache__/
