@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keystone — магазин плагинов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{--page:#f4efe4;--card:#fffdf8;--line:#e8e1d0;--ink:#1a1813;--muted:#746d5d;--gold:#cf9f33;--gold-ink:#9a7117;--gold-soft:rgba(207,159,51,0.16);--good:#2f7d4f;--good-soft:rgba(47,125,79,0.12);--shadow:0 1px 2px rgba(40,33,15,0.04),0 8px 24px rgba(40,33,15,0.05);}
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:'Geist',system-ui,sans-serif;background:radial-gradient(1500px 800px at 50% -5%,#faf6ec 0%,var(--page) 60%);color:var(--ink);-webkit-font-smoothing:antialiased;padding:30px 18px 60px;}
+  h1{text-align:center;font-size:22px;font-weight:700;margin:0 0 4px;} .lead{text-align:center;color:var(--muted);font-size:13px;margin:0 auto 26px;max-width:640px;}
+  .deck{display:flex;flex-wrap:wrap;gap:30px;justify-content:center;} .col{display:flex;flex-direction:column;align-items:center;gap:10px;} .caption{font-size:12.5px;font-weight:700;} .sub{font-size:11px;color:var(--muted);max-width:330px;text-align:center;}
+  .phone{width:330px;background:var(--page);border:9px solid #141210;border-radius:40px;box-shadow:0 22px 56px rgba(30,24,10,0.24);overflow:hidden;} .screen{height:720px;position:relative;display:flex;flex-direction:column;}
+  .sb{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:11.5px;font-weight:600;} .scroll{flex:1;overflow:hidden;padding:0 15px;}
+  .topbar{height:46px;display:flex;align-items:center;justify-content:center;position:relative;} .topbar .ttl{font-size:16px;font-weight:700;} .topbar .l{position:absolute;left:2px;color:var(--muted);font-size:13px;font-weight:600;}
+  .label{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:14px 2px 8px;}
+  .tabs2{display:flex;background:#efe9dc;border-radius:999px;padding:3px;margin-top:10px;} .tabs2 div{flex:1;text-align:center;font-size:13px;font-weight:600;padding:9px;border-radius:999px;color:var(--muted);} .tabs2 div.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  .search{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:11px 13px;box-shadow:var(--shadow);} .search svg{width:17px;height:17px;color:#b1a688;} .search .ph{font-size:14px;color:var(--muted);}
+  .tags{display:flex;gap:7px;margin-top:11px;overflow-x:auto;-webkit-mask-image:linear-gradient(90deg,#000 92%,transparent);mask-image:linear-gradient(90deg,#000 92%,transparent);} .tag{font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted);box-shadow:var(--shadow);white-space:nowrap;flex:0 0 auto;} .tag.on{background:var(--ink);color:#fdf7ea;border-color:var(--ink);}
+  .pl{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:var(--shadow);} .pl+.pl{margin-top:9px;}
+  .picon{width:48px;height:48px;border-radius:13px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;} .picon svg{width:24px;height:24px;}
+  .pbody{min-width:0;flex:1;} .pname{font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:6px;} .pdesc{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:16px;} .pmeta{font-size:10px;color:#a89d85;margin-top:5px;display:flex;gap:9px;}
+  .install{flex:0 0 auto;font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:999px;background:var(--ink);color:#fdf7ea;} .installed{flex:0 0 auto;font-size:12px;font-weight:600;color:var(--good);background:var(--good-soft);padding:7px 12px;border-radius:999px;display:flex;align-items:center;gap:5px;} .installed svg{width:13px;height:13px;}
+  .badge{font-size:9px;font-weight:700;text-transform:uppercase;color:var(--gold-ink);background:var(--gold-soft);padding:2px 7px;border-radius:999px;}
+  .hero{height:150px;border-radius:18px;margin-top:4px;display:flex;align-items:flex-end;padding:14px;color:#fff;} .hname{font-size:19px;font-weight:700;} .hby{font-size:11.5px;opacity:.85;margin-top:1px;}
+  .rowmeta{display:flex;gap:18px;margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:var(--shadow);} .rm{flex:1;text-align:center;} .rm .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;} .rm .v{font-size:14px;font-weight:700;margin-top:3px;}
+  .shots{display:flex;gap:9px;overflow:hidden;margin-top:12px;} .shot{width:118px;height:150px;border-radius:13px;flex:0 0 auto;border:1px solid var(--line);background:linear-gradient(160deg,#fffdf8,#f1ebdd);position:relative;overflow:hidden;} .shot .sbar{position:absolute;left:10px;right:10px;border-radius:5px;background:#e3dbc8;height:8px;} .shot .sacc{background:var(--gold-soft);}
+  .para{font-size:12.5px;line-height:19px;color:#3f3a30;margin-top:12px;} .foot{position:absolute;left:15px;right:15px;bottom:16px;} .btn{display:block;text-align:center;font-size:15px;font-weight:600;border-radius:14px;padding:14px;background:var(--ink);color:#fdf7ea;}
+</style>
+</head>
+<body>
+  <h1>Магазин плагинов (в Settings)</h1>
+  <p class="lead">Вкладки Browse / Installed · поиск · теги одной лентой с прокруткой вбок · иконки · страница плагина со скриншотами. Концепт на будущее — backend плагинов в прошивке пока нет.</p>
+
+  <div class="deck">
+
+    <!-- BROWSE -->
+    <div class="col">
+      <div class="phone"><div class="screen">
+        <div class="sb"><span>21:04</span><span>100%</span></div>
+        <div class="scroll">
+          <div class="topbar"><div class="l">‹ Settings</div><div class="ttl">Plugins</div></div>
+          <div class="tabs2"><div class="on">Browse</div><div>Installed · 2</div></div>
+          <div class="search" style="margin-top:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><span class="ph">Search plugins…</span></div>
+          <div class="tags"><span class="tag on">All</span><span class="tag">Devices</span><span class="tag">Energy</span><span class="tag">Voice</span><span class="tag">Dashboards</span><span class="tag">Automations</span><span class="tag">Security</span></div>
+          <div class="label">Popular</div>
+          <div class="pl"><div class="picon" style="background:#2f7d4f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2"/></svg></div><div class="pbody"><div class="pname">Weather &amp; sun <span class="badge">Free</span></div><div class="pdesc">Local forecast; drive rules by sunrise/clouds</div><div class="pmeta"><span>Keystone</span><span>★ 4.9</span><span>12k</span></div></div><div class="install">Install</div></div>
+          <div class="pl"><div class="picon" style="background:#5b43c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM5 11a7 7 0 0 0 14 0M12 18v4"/></svg></div><div class="pbody"><div class="pname">Voice (Alexa)</div><div class="pdesc">Control devices &amp; scenes by voice</div><div class="pmeta"><span>Community</span><span>★ 4.2</span><span>8k</span></div></div><div class="install">Install</div></div>
+          <div class="pl"><div class="picon" style="background:#c7416e"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div><div class="pbody"><div class="pname">Presence &amp; away</div><div class="pdesc">Smarter home/away from phones &amp; motion</div><div class="pmeta"><span>Keystone</span><span>★ 4.6</span></div></div><div class="install">Install</div></div>
+        </div>
+      </div></div>
+      <div class="caption">Browse</div>
+      <div class="sub">Поиск, теги одной лентой, каталог доступных (кнопка Install). Установленного тут нет.</div>
+    </div>
+
+    <!-- INSTALLED -->
+    <div class="col">
+      <div class="phone"><div class="screen">
+        <div class="sb"><span>21:04</span><span>100%</span></div>
+        <div class="scroll">
+          <div class="topbar"><div class="l">‹ Settings</div><div class="ttl">Plugins</div></div>
+          <div class="tabs2"><div>Browse</div><div class="on">Installed · 2</div></div>
+          <div class="label" style="margin-top:16px">Installed</div>
+          <div class="pl"><div class="picon" style="background:#1f6fd6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M9 16v4M15 16v4"/></svg></div><div class="pbody"><div class="pname">Energy dashboard</div><div class="pdesc">Live power &amp; daily kWh across sockets</div><div class="pmeta"><span>Keystone</span><span>v1.4 · up to date</span></div></div><div class="installed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Open</div></div>
+          <div class="pl"><div class="picon" style="background:#d6761f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2ZM9 21h6"/></svg></div><div class="pbody"><div class="pname">IKEA DIRIGERA import</div><div class="pdesc">Bring IKEA scenes &amp; names into Keystone</div><div class="pmeta"><span class="badge">Update → v2.0</span></div></div><div class="install" style="padding:8px 13px">Update</div></div>
+        </div>
+      </div></div>
+      <div class="caption">Installed</div>
+      <div class="sub">Отдельная вкладка: что стоит, версия, up to date / Update, действия Open / Update / Remove.</div>
+    </div>
+
+    <!-- DETAIL -->
+    <div class="col">
+      <div class="phone"><div class="screen">
+        <div class="sb"><span>21:04</span><span>100%</span></div>
+        <div class="scroll">
+          <div class="topbar"><div class="l">‹ Plugins</div><div class="ttl">Weather &amp; sun</div></div>
+          <div class="hero" style="background:linear-gradient(140deg,#2f7d4f,#1f5c7d)"><div><div class="hname">Weather &amp; sun</div><div class="hby">by Keystone · Free</div></div></div>
+          <div class="rowmeta"><div class="rm"><div class="k">Rating</div><div class="v">★ 4.9</div></div><div class="rm"><div class="k">Installs</div><div class="v">12k</div></div><div class="rm"><div class="k">Size</div><div class="v">0.3 MB</div></div></div>
+          <div class="label">Screenshots</div>
+          <div class="shots"><div class="shot"><div class="sbar sacc" style="top:14px;height:40px"></div><div class="sbar" style="top:66px"></div><div class="sbar" style="top:84px;width:70%"></div><div class="sbar" style="top:104px"></div></div><div class="shot"><div class="sbar" style="top:14px"></div><div class="sbar sacc" style="top:36px;height:30px"></div><div class="sbar" style="top:80px"></div><div class="sbar" style="top:98px;width:60%"></div></div><div class="shot"><div class="sbar" style="top:14px;width:50%"></div><div class="sbar sacc" style="top:40px;height:46px"></div><div class="sbar" style="top:100px"></div></div></div>
+          <div class="label">About</div>
+          <div class="para">Adds a local forecast and precise sunrise/sunset to your hub. Rules and schedules can react to “cloudy”, “before rain”, or sun-relative times. No cloud account needed.</div>
+          <div class="tags" style="margin-top:12px"><span class="tag">Energy</span><span class="tag">Automations</span><span class="tag">Free</span></div>
+          <div style="height:70px"></div>
+        </div>
+        <div class="foot"><div class="btn">Install</div></div>
+      </div></div>
+      <div class="caption">Страница плагина</div>
+      <div class="sub">Обложка, рейтинг/установки/размер, скриншоты, описание, теги, прилипшая Install (→ Open / Remove).</div>
+    </div>
+
+  </div>
+</body>
+</html>

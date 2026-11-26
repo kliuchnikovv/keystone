@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keystone — Дом</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --page:#f4efe4; --card:#fffdf8; --line:#e8e1d0;
+    --ink:#1a1813; --muted:#746d5d;
+    --gold:#cf9f33; --gold-ink:#9a7117; --gold-soft:rgba(207,159,51,0.16);
+    --good:#2f7d4f; --bad:#b5543b;
+    --shadow:0 1px 2px rgba(40,33,15,0.04), 0 8px 24px rgba(40,33,15,0.05);
+    --glow:0 0 0 1px rgba(207,159,51,.35), 0 8px 26px rgba(207,159,51,.22);
+  }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:'Geist',system-ui,sans-serif;
+    background:radial-gradient(1500px 800px at 50% -5%, #faf6ec 0%, var(--page) 60%);
+    color:var(--ink);-webkit-font-smoothing:antialiased;padding:30px 18px 60px;}
+  h1{text-align:center;font-size:22px;font-weight:700;margin:0 0 4px;}
+  .lead{text-align:center;color:var(--muted);font-size:13px;margin:0 auto 26px;max-width:640px;}
+  .deck{display:flex;flex-wrap:wrap;gap:30px;justify-content:center;}
+  .col{display:flex;flex-direction:column;align-items:center;gap:12px;}
+  .caption{font-size:12.5px;font-weight:700;} .sub{font-size:11.5px;color:var(--muted);max-width:330px;text-align:center;}
+
+  .phone{width:340px;background:var(--page);border:9px solid #141210;border-radius:42px;box-shadow:0 22px 56px rgba(30,24,10,0.24);overflow:hidden;}
+  .screen{height:720px;position:relative;display:flex;flex-direction:column;}
+  .sb{height:34px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;font-size:12px;font-weight:600;}
+  .scroll{flex:1;overflow:hidden;padding:0 16px;}
+  .hi{font-size:13px;color:var(--muted);margin-top:4px;} .ttl{font-size:26px;font-weight:700;letter-spacing:-.5px;}
+
+  .rooms{display:flex;gap:8px;overflow:hidden;margin:16px 0 6px;}
+  .rchip{font-size:13px;font-weight:600;padding:7px 14px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted);white-space:nowrap;}
+  .rchip.on{background:var(--ink);color:#fdf7ea;border-color:var(--ink);}
+
+  .rhead{display:flex;align-items:baseline;gap:8px;margin:16px 2px 9px;}
+  .rhead .n{font-size:14px;font-weight:700;} .rhead .s{font-size:11.5px;color:var(--muted);}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px;box-shadow:var(--shadow);min-height:112px;display:flex;flex-direction:column;gap:7px;position:relative;overflow:hidden;}
+  .tile.span2{grid-column:span 2;} .tile.span3{grid-column:span 3;}
+  .tile.on{box-shadow:var(--glow);background:linear-gradient(180deg,#fffdf6,#fcf4df);}
+  .ic{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#efe9dc;color:#a69c86;}
+  .ic.on{background:var(--gold);color:#fff;} .ic svg{width:20px;height:20px;}
+  .nm{font-size:13px;font-weight:600;line-height:15px;} .st{font-size:11px;color:var(--muted);margin-top:auto;}
+  .batchip{position:absolute;top:11px;right:12px;font-size:10px;font-weight:700;color:var(--muted);}
+
+  /* lamp dimmer variant 2 */
+  .lamp{grid-column:span 3;position:relative;border-radius:18px;border:1px solid var(--line);overflow:hidden;box-shadow:var(--glow);min-height:96px;display:flex;align-items:center;padding:14px;gap:12px;}
+  .lampfill{position:absolute;inset:0;background:linear-gradient(90deg,#f6d98a,#f3c35a 70%);width:70%;}
+  .lampfill::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.25),rgba(255,255,255,0));}
+  .lamp .z{position:relative;z-index:1;}
+  .lamp .ic{background:rgba(255,255,255,.55);color:#9a7117;}
+  .lamp .nm{font-size:14px;} .lamp .pc{font-size:12px;color:#7c5e12;font-weight:600;}
+  .dropk{position:relative;z-index:1;margin-left:auto;width:30px;height:30px;border-radius:999px;background:rgba(255,255,255,.65);display:flex;align-items:center;justify-content:center;}
+  .dropk span{width:14px;height:14px;border-radius:50%;background:conic-gradient(#f2b63a,#e0742a,#c23f6a,#5b43c7,#2f6fb8,#2f7d4f,#f2b63a);}
+
+  .dock{position:absolute;left:14px;right:14px;bottom:16px;display:flex;align-items:center;gap:10px;}
+  .pill{flex:1;height:60px;background:rgba(255,253,248,.95);border:1px solid var(--line);border-radius:999px;backdrop-filter:blur(12px);box-shadow:0 10px 26px rgba(30,24,10,.14);display:flex;align-items:center;padding:0 10px;}
+  .tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:600;color:var(--muted);} .tab.on{color:var(--gold-ink);} .tab svg{width:21px;height:21px;}
+  .fab{width:56px;height:56px;border-radius:50%;background:var(--ink);color:#fdf7ea;display:flex;align-items:center;justify-content:center;box-shadow:0 10px 24px rgba(30,24,10,.28);} .fab svg{width:25px;height:25px;}
+</style>
+</head>
+<body>
+  <h1>Экран «Дом»</h1>
+  <p class="lead">casanomi-paper: комнаты чипами, сетка плиток, включённое — золотое свечение, лампа — карточка-диммер (заливка = яркость), датчик офлайн — фейд. Снизу — док-пилюля из 3 вкладок и «+».</p>
+
+  <div class="deck">
+    <div class="col">
+      <div class="phone"><div class="screen">
+        <div class="sb"><span>9:41</span><span>100%</span></div>
+        <div class="scroll">
+          <div class="hi">Good evening</div>
+          <div class="ttl">Home</div>
+
+          <div class="rooms">
+            <span class="rchip on">All</span>
+            <span class="rchip">Living room</span>
+            <span class="rchip">Bedroom</span>
+            <span class="rchip">Kitchen</span>
+          </div>
+
+          <div class="rhead"><span class="n">Living room</span><span class="s">2 on · 38 W</span></div>
+          <!-- lamp dimmer variant 2 -->
+          <div class="lamp">
+            <div class="lampfill"></div>
+            <div class="ic z"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 2a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 2Z"/></svg></div>
+            <div class="z"><div class="nm">Floor lamp</div><div class="pc">On · 70%</div></div>
+            <div class="dropk"><span></span></div>
+          </div>
+          <div class="grid" style="margin-top:10px">
+            <div class="tile on">
+              <div class="ic on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v6"/></svg></div>
+              <div class="nm">TV socket</div><div class="st">On · 38 W</div>
+            </div>
+            <div class="tile span2" style="position:relative">
+              <div class="batchip">82%</div>
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div>
+              <div class="nm">Climate sensor</div><div class="st">22.1 °C · 45% · 4 s ago</div>
+            </div>
+          </div>
+
+          <div class="rhead"><span class="n">Bedroom</span><span class="s">all off</span></div>
+          <div class="grid">
+            <div class="tile">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 2a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 2Z"/></svg></div>
+              <div class="nm">Shelf light</div><div class="st">Off</div>
+            </div>
+            <div class="tile" style="opacity:.42">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div>
+              <div class="nm">Window sensor</div><div class="st">No connection</div>
+            </div>
+            <div class="tile">
+              <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+              <div class="nm">Door</div><div class="st">Closed</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dock">
+          <div class="pill">
+            <div class="tab on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5M5 9.5V20h14V9.5"/></svg>Home</div>
+            <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7V3M12 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 15v6M5 12H3M21 12h-2"/></svg>Automations</div>
+            <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4 12H2M22 12h-2M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Settings</div>
+          </div>
+          <div class="fab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        </div>
+      </div></div>
+      <div class="caption">Дом</div>
+      <div class="sub">Комнаты чипами (активная — тёмная), группы по комнатам со сводкой; включённое светится золотом; лампа-диммер с кружком цвета; офлайн-датчик блёкнет.</div>
+    </div>
+  </div>
+</body>
+</html>
