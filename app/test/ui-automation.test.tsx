@@ -33,10 +33,21 @@ async function openApp() {
 }
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
+/** Scroll a column of the duration wheel to a position. */
+const scrollWheel = (column: 'hours' | 'minutes', y: number) => {
+  const el = screen.getByTestId(`wheel-${column}`);
+  el.scrollTop = y;
+  fireEvent.scroll(el);
+};
+/** The automations tab folds: a section that is closed must be opened first. */
+const openSection = (title: string) => {
+  const expand = screen.queryByLabelText(`Expand ${title}`);
+  if (expand) fireEvent.click(expand);
+};
 const gotoAutomations = async () => {
   click('Automations');
   await screen.findByLabelText('Add scene'); // scenes are the first section
-  click('Schedules');
+  openSection('Schedules');
   await screen.findByLabelText('Add schedule');
 };
 
@@ -92,8 +103,8 @@ describe('Rooms', () => {
     await waitFor(() => expect(hub.entities.find((e) => e.id === 0x0101)!.room).toBe('Kitchen'));
     // The device is renamed nowhere: a room is not a name.
     expect(hub.entities.find((e) => e.id === 0x0101)!.name).toBe('lamp');
-    await waitFor(() => expect(screen.getByText('Kitchen')).toBeTruthy());
-    expect(screen.getByText('Unassigned')).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText('Room Kitchen')).toBeTruthy());
+    expect(screen.getByLabelText('Room Unassigned')).toBeTruthy();
   });
 
   it('takes a device out of its room', async () => {
@@ -138,7 +149,8 @@ describe('Schedules', () => {
     const item = await screen.findByLabelText('schedule 22:00 · Off lamp');
     expect(within(item).getByText('Weekdays')).toBeTruthy();
     expect(hub.schedules).toHaveLength(1);
-    expect(screen.getByLabelText('Schedules').textContent).toContain('(1)');
+    // The section header carries the count.
+    expect(screen.getByText('SCHEDULES').parentElement?.textContent ?? '').toContain('1');
 
     click('Delete schedule 22:00 · Off lamp');
     expect(hub.schedules).toHaveLength(1); // the first tap only arms it
@@ -191,12 +203,13 @@ describe('Timers', () => {
   it('starts a timer from a preset, shows the countdown and cancels it', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
+    openSection('Timers');
     click('Add timer');
     click('Device');
     click('Choose lamp');
     click('Action On');
-    click('Preset 15 minutes');
+    // The wheel: scroll the minutes to 15.
+    scrollWheel('minutes', 102); // 15 min
     click('Start timer');
     const item = await screen.findByLabelText('timer On lamp');
     expect(within(item).getByText('in 15 min')).toBeTruthy();
@@ -205,14 +218,15 @@ describe('Timers', () => {
     await screen.findByText('No timers running.');
   });
 
-  it('a typed number of minutes is checked', async () => {
+  it('a timer with no time is refused', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
+    openSection('Timers');
     click('Add timer');
     click('Device');
     click('Choose lamp');
-    type('Minutes', 'soon');
+    // The wheel says zero minutes: there is nothing to wait for.
+    scrollWheel('minutes', 0);
     click('Start timer');
     expect(await screen.findByText('Enter how many minutes')).toBeTruthy();
     expect(hub.timersCount()).toBe(0);
@@ -221,7 +235,7 @@ describe('Timers', () => {
   it('a timer that fires disappears from the list and switches the device', async () => {
     await openApp();
     await gotoAutomations();
-    click('Timers');
+    openSection('Timers');
     await act(async () => {
       // 1 s is below the form's smallest preset, so ask the hub directly, as another client would.
       const ws = new NodeWebSocket(hub.url);
@@ -234,7 +248,7 @@ describe('Timers', () => {
     });
     await screen.findByLabelText('timer On lamp');
     await waitFor(() => expect(screen.queryByLabelText('timer On lamp')).toBeNull(), { timeout: 3000 });
-    click('Devices');
+    click('Home');
     await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
   });
 });
@@ -252,7 +266,7 @@ describe('Rules', () => {
     });
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
 
     click('When: what to look at');
@@ -278,7 +292,7 @@ describe('Rules', () => {
   it('builds a rule with every option and reads it back as a sentence', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     expect(screen.getByText(/No rules/)).toBeTruthy();
     click('Add rule');
 
@@ -325,7 +339,7 @@ describe('Rules', () => {
   it('shows the rule as a sentence while it is being built', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
     // A half-built rule says what is missing rather than pretending to be complete.
     expect(screen.getByText('When … → then …')).toBeTruthy();
@@ -340,7 +354,7 @@ describe('Rules', () => {
   it('says what is missing, in the order the form reads', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
     click('Save rule');
     expect(await screen.findByText('When: pick what starts the rule')).toBeTruthy();
@@ -360,7 +374,7 @@ describe('Rules', () => {
   it('brightness is entered in percent', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
     click('When: what to look at');
     click('Choose Motion sensor 0x0102 · Presence');
@@ -376,7 +390,7 @@ describe('Rules', () => {
   it('only writable attributes are offered for the action', async () => {
     await openApp();
     await gotoAutomations();
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
     click('Then: what to set');
     expect(screen.getByLabelText('Choose lamp · Brightness')).toBeTruthy();
@@ -463,7 +477,8 @@ describe('Editing a scene', () => {
 describe('Wi-Fi', () => {
   it('scans, picks a network, asks for the password and sends it; the app reconnects by itself', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Wi-Fi');
     await screen.findByText(/home · -58 dBm · 192.168.0.202/);
     click('Change network');
     click('Scan for networks');
@@ -481,7 +496,8 @@ describe('Wi-Fi', () => {
 
   it('an open network needs no password, and a too-short password is explained without bothering the hub', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Wi-Fi');
     click('Change network');
     type('Network name', 'home');
     type('Wi-Fi password', 'short');
@@ -499,7 +515,8 @@ describe('Wi-Fi', () => {
 describe('The sun', () => {
   it('the Hub tab sets and clears the location; the sun times show up', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Location');
     // The hub's own facts arrive as a separate event: give it room on a loaded machine.
     await screen.findByText(/Not set/, undefined, { timeout: 5000 });
     click('Set location');
@@ -516,7 +533,8 @@ describe('The sun', () => {
   it('the phone can give the location in one tap', async () => {
     vi.mocked(locatePhone).mockResolvedValue({ ok: true, lat: 50.09, lon: 14.42 });
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Location');
     click('Use phone location');
     await screen.findByText(/50\.0900, 14\.4200/);
     expect(hub.location).toEqual({ lat: 50.09, lon: 14.42 });
@@ -525,7 +543,8 @@ describe('The sun', () => {
   it('a refused phone location says so and leaves the hub alone', async () => {
     vi.mocked(locatePhone).mockResolvedValue({ ok: false, error: 'Location access was not allowed. Type the coordinates instead.' });
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Location');
     click('Use phone location');
     expect(await screen.findByText(/not allowed/)).toBeTruthy();
     expect(hub.location).toBeNull();
@@ -533,7 +552,8 @@ describe('The sun', () => {
 
   it('a bad location is explained without asking the hub', async () => {
     await openApp();
-    click('Hub');
+    click('Settings');
+    click('Location');
     click('Set location');
     type('Latitude', '95');
     type('Longitude', '14');
@@ -558,14 +578,17 @@ describe('The sun', () => {
     expect(hub.schedules[0]).toMatchObject({ time: 'sunset+30', entity: 0x0100 });
     expect(screen.getByText(/waiting for the hub's location/)).toBeTruthy();
 
-    click('Hub');
+    click('Settings');
+    click('Location');
     click('Set location');
     type('Latitude', '50');
     type('Longitude', '14');
     click('Save location');
     await screen.findByText(/sunrise 06:00/);
+    // Back out of the Hub screen into the dock.
+    click('Back to Settings');
     click('Automations');
-    click('Schedules');
+    openSection('Schedules');
     await screen.findByLabelText('schedule 30 min after sunset · Off plug1');
     expect(screen.queryByText(/waiting for the hub's location/)).toBeNull();
   });
@@ -594,16 +617,16 @@ describe('Automations that apply a scene', () => {
     await screen.findByLabelText('schedule 22:00 · Scene night');
     expect(hub.schedules[0]).toMatchObject({ time: '22:00', scene: 'night' });
 
-    click('Timers');
+    openSection('Timers');
     click('Add timer');
     click('Target a scene');
     click('Scene night');
-    click('Preset 5 minutes');
+    scrollWheel('minutes', 34); // 5 min
     click('Start timer');
     await screen.findByLabelText('timer Scene night');
     expect(hub.timersCount()).toBe(1);
 
-    click('Rules');
+    openSection('Rules');
     click('Add rule');
     click('Apply a scene');
     click('Scene night');
@@ -647,7 +670,7 @@ describe('Scenes', () => {
         { entity: 0x0101, attr: 2, value: 128 },
       ] },
     ]);
-    expect(screen.getByLabelText('Scenes').textContent).toContain('(1)');
+    expect(screen.getByText('SCENES').parentElement?.textContent ?? '').toContain('1');
 
     click('Delete scene evening');
     expect(hub.scenes).toHaveLength(1); // the first tap only arms it

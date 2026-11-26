@@ -67,3 +67,4 @@ app/android/
 
 # Relay Go binary (built)
 /relay/relay
+.claude/

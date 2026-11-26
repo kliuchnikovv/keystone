@@ -17,7 +17,7 @@ describe('reduce', () => {
     const s = reduce(withStatus(initialState, 'authenticating', 'busy'), snapshot());
     expect(s.status).toBe('ready');
     expect(s.error).toBeNull();
-    expect(s.entities).toHaveLength(3);
+    expect(s.entities).toHaveLength(defaultEntities().length);
     expect(s.chips.map((c) => c.label)).toEqual(['zigbee', 'thread']);
   });
 
@@ -67,12 +67,12 @@ describe('reduce', () => {
     const a = reduce(initialState, snapshot());
     const renamed = { ...findEntity(a, 0x0100)!, name: 'kitchen' };
     const b = reduce(a, { type: 'entity', op: 'add', entity: renamed });
-    expect(b.entities).toHaveLength(3);
+    expect(b.entities).toHaveLength(defaultEntities().length);
     expect(findEntity(b, 0x0100)!.name).toBe('kitchen');
     const fresh: Entity = { id: 0x0200, name: null, room: null, chip: 2, device: 'switch', attrs: [] };
-    expect(reduce(b, { type: 'entity', op: 'add', entity: fresh }).entities).toHaveLength(4);
+    expect(reduce(b, { type: 'entity', op: 'add', entity: fresh }).entities).toHaveLength(defaultEntities().length + 1);
     const c = reduce(b, { type: 'entity', op: 'remove', id: 0x0100 });
-    expect(c.entities.map((e) => e.id)).toEqual([0x0101, 0x0102]);
+    expect(c.entities.map((e) => e.id)).toEqual([0x0101, 0x0102, 0x0103]);
     expect(reduce(c, { type: 'entity', op: 'remove', id: 0x0100 })).toBe(c); // already gone
   });
 
@@ -103,7 +103,7 @@ describe('reduce', () => {
   it('the state kept when the link drops is marked as not live', () => {
     const a = withStatus(reduce(initialState, snapshot()), 'reconnecting', 'busy');
     const c = markedStale(a, 1000);
-    expect(c.entities).toHaveLength(3); // the devices stay on screen
+    expect(c.entities).toHaveLength(defaultEntities().length); // the devices stay on screen
     expect(c.stale).toBe(true);
     expect(c.savedAt).toBe(1000);
     expect(c).toMatchObject({ status: 'reconnecting', error: 'busy' });

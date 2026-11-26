@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import {
   PRESENCE_PHONE_NAME,

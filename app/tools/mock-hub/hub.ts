@@ -120,6 +120,18 @@ export function defaultEntities(): Entity[] {
       device: 'occupancy',
       attrs: [attr(0x50, 'occupied', 'bool', ['r', 'rep'], false)],
     },
+    {
+      id: DEVICE_FIRST_ENTITY + 3,
+      name: 'Climate',
+      room: 'Bedroom',
+      chip: 1,
+      device: 'sensor',
+      attrs: [
+        attr(0x10, 'temperature', 'i16', ['r', 'rep'], 234),
+        attr(0x11, 'humidity', 'u16', ['r', 'rep'], 580),
+        attr(0x1f, 'battery', 'u8', ['r', 'rep'], 72),
+      ],
+    },
   ];
 }
 

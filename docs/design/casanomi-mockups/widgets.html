@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keystone — виджеты по типам</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --page:#f4efe4; --card:#fffdf8; --line:#e8e1d0;
+    --ink:#1a1813; --muted:#746d5d;
+    --gold:#cf9f33; --gold-ink:#9a7117; --gold-soft:rgba(207,159,51,0.16);
+    --good:#2f7d4f; --good-soft:rgba(47,125,79,0.12); --warn:#b7791f; --warn-soft:rgba(183,121,31,0.14); --bad:#b5543b;
+    --shadow:0 1px 2px rgba(40,33,15,0.04), 0 8px 24px rgba(40,33,15,0.05);
+    --glow:0 0 0 1px rgba(207,159,51,.35), 0 8px 26px rgba(207,159,51,.22);
+  }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:'Geist',system-ui,sans-serif;background:radial-gradient(1500px 800px at 50% -5%, #faf6ec 0%, var(--page) 60%);color:var(--ink);-webkit-font-smoothing:antialiased;padding:30px 18px 60px;}
+  h1{text-align:center;font-size:22px;font-weight:700;margin:0 0 4px;}
+  .lead{text-align:center;color:var(--muted);font-size:13px;margin:0 auto 22px;max-width:640px;}
+  .sect{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);text-align:center;margin:28px 0 14px;}
+  .board{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;max-width:1120px;margin:0 auto;}
+  .w{width:200px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:13px;box-shadow:var(--shadow);min-height:132px;display:flex;flex-direction:column;gap:8px;position:relative;overflow:hidden;}
+  .w.on{box-shadow:var(--glow);background:linear-gradient(180deg,#fffdf6,#fcf4df);}
+  .ic{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#efe9dc;color:#a69c86;} .ic.on{background:var(--gold);color:#fff;} .ic svg{width:20px;height:20px;}
+  .nm{font-size:13.5px;font-weight:600;} .st{font-size:11.5px;color:var(--muted);margin-top:auto;}
+  .cap{font-size:10.5px;color:#a89d85;text-align:center;margin-top:7px;}
+  .batchip{position:absolute;top:11px;right:12px;font-size:10px;font-weight:700;color:var(--muted);}
+  .big{font-size:24px;font-weight:700;letter-spacing:-.5px;} .big .u{font-size:12px;color:var(--muted);font-weight:600;}
+
+  /* dimmer fill */
+  .fillw{position:relative;color:#7c5e12;}
+  .fillw .bar{position:absolute;inset:0;background:linear-gradient(90deg,#f6d98a,#f3c35a 70%);} .fillw.pos70 .bar{width:70%;} .fillw.pos40 .bar{width:40%;}
+  .fillw .z{position:relative;z-index:1;display:flex;flex-direction:column;gap:8px;height:100%;}
+  .fillw .ic{background:rgba(255,255,255,.55);color:#9a7117;}
+
+  .ring{width:118px;height:118px;border-radius:50%;margin:2px auto 0;display:flex;align-items:center;justify-content:center;background:conic-gradient(var(--gold) 0 62%, #ece4d4 62% 100%);}
+  .ring .inner{width:92px;height:92px;border-radius:50%;background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center;}
+  .ring .cur{font-size:22px;font-weight:700;} .ring .tgt{font-size:10.5px;color:var(--muted);}
+  .modes{display:flex;gap:6px;justify-content:center;margin-top:8px;}
+  .mchip{font-size:10.5px;font-weight:600;padding:4px 9px;border-radius:999px;background:#f6f1e6;border:1px solid var(--line);color:var(--muted);} .mchip.on{background:var(--gold-soft);border-color:rgba(207,159,51,.4);color:var(--gold-ink);}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+  .cell{border-radius:11px;padding:8px 9px;background:#f6f1e6;border:1px solid var(--line);} .cell .k{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);} .cell .v{font-size:16px;font-weight:700;margin-top:2px;}
+  .cell.ok{background:var(--good-soft);border-color:rgba(47,125,79,.25);} .cell.ok .v{color:var(--good);} .cell.hi{background:var(--warn-soft);border-color:rgba(183,121,31,.3);} .cell.hi .v{color:var(--warn);}
+
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;}
+  .rbtn{font-size:11px;font-weight:600;padding:9px 0;border-radius:10px;text-align:center;background:#f6f1e6;border:1px solid var(--line);}
+  .rline{display:flex;gap:6px;margin-top:4px;} .rline .rbtn{flex:1;}
+</style>
+</head>
+<body>
+  <h1>Виджеты по типам устройств</h1>
+  <p class="lead">Каждый тип показывает своё главное прямо на плитке; «сложные» типы — свой идиом (кольцо, диммер, сетка). casanomi-paper.</p>
+
+  <div class="sect">Базовые типы</div>
+  <div class="board">
+    <div class="w on"><div class="ic on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v6"/></svg></div><div class="nm">Socket</div><div class="st">On · 38 W</div><div class="cap">тап = вкл/выкл · мощность</div></div>
+    <div class="w on fillw pos70"><div class="bar"></div><div class="z"><div class="ic on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 2a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 2Z"/></svg></div><div class="nm">Dimmable lamp</div><div class="st" style="color:#7c5e12">On · 70%</div></div><div class="cap" style="position:relative;z-index:1">тап=вкл · свайп=яркость</div></div>
+    <div class="w on fillw pos40"><div class="bar"></div><div class="z"><div class="ic on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2"/></svg></div><div class="nm">Colour lamp</div><div class="st" style="color:#7c5e12">On · 40% · warm</div></div><div class="cap" style="position:relative;z-index:1">кружок цвета в углу</div></div>
+    <div class="w" style="position:relative"><div class="batchip">82%</div><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div><div class="nm">Climate</div><div class="big">21.4<span class="u"> °C</span></div><div class="st">humidity 48% · 12 s ago</div></div>
+    <div class="w"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7 9 18l-5-5"/></svg></div><div class="nm">Motion</div><div class="st">Someone — just now</div><div class="cap">показываем событие + когда</div></div>
+    <div class="w"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1"/><path d="M14 12h.01"/></svg></div><div class="nm">Door / window</div><div class="st">Closed</div><div class="cap">открыто / закрыто</div></div>
+    <div class="w"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg></div><div class="nm">Button</div><div class="st">Last press 2 min ago</div><div class="cap">событие нажатия</div></div>
+  </div>
+
+  <div class="sect">Непростые типы</div>
+  <div class="board">
+    <div class="w" style="width:200px"><div class="nm" style="text-align:center">Thermostat</div><div class="ring"><div class="inner"><div class="cur">21.5°</div><div class="tgt">→ 22.0°</div></div></div><div class="modes"><span class="mchip on">Heat</span><span class="mchip">Eco</span><span class="mchip">Off</span></div><div class="cap">кольцо-регулятор, тянешь цель</div></div>
+    <div class="w on fillw pos40" style="width:200px"><div class="bar" style="background:linear-gradient(90deg,#d9cdb2,#c9b89a);width:40%"></div><div class="z"><div class="ic on" style="background:rgba(255,255,255,.6)"><svg viewBox="0 0 24 24" fill="none" stroke="#7c5e12" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18M5 4v16M19 4v16M5 20h14"/></svg></div><div class="nm">Curtains</div><div class="st" style="color:#5a4a1c">40% open</div></div><div class="cap" style="position:relative;z-index:1">диммер = позиция 0–100%</div></div>
+    <div class="w" style="width:200px"><div class="nm" style="margin-bottom:2px">Air quality</div><div class="grid2"><div class="cell ok"><div class="k">Temp</div><div class="v">22°</div></div><div class="cell ok"><div class="k">Hum</div><div class="v">45%</div></div><div class="cell hi"><div class="k">CO₂</div><div class="v">1180</div></div><div class="cell ok"><div class="k">Light</div><div class="v">320</div></div></div><div class="cap">сетка 2×2, норма/много цветом</div></div>
+    <div class="w" style="width:200px"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div><div class="nm">Presence</div><div class="st">Not sure — maybe home</div><div class="rline"><span class="rbtn">I'm home</span><span class="rbtn">I'm away</span></div><div class="cap" style="margin-top:6px">показываем только если «неизвестно»</div></div>
+    <div class="w" style="width:200px"><div class="nm" style="margin-bottom:2px">Remote</div><div class="btns"><span class="rbtn">▶</span><span class="rbtn">❚❚</span><span class="rbtn">◀◀</span><span class="rbtn">▶▶</span><span class="rbtn">−</span><span class="rbtn">+</span></div><div class="cap">мало кнопок — в линию, больше — сеткой</div></div>
+    <div class="w" style="width:200px;opacity:.42"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg></div><div class="nm">Any sensor — offline</div><div class="st">No connection · last seen 6 min ago</div><div class="cap">молчит → вся карточка фейдом</div></div>
+  </div>
+</body>
+</html>

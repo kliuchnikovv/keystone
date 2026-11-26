@@ -1,7 +1,7 @@
 // The bar at the top of a screen: the title in the middle, a round slot on each side.
 // Like the room mock: 52 px tall, the title centred, 17 px bold.
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from './kit';
 import { radius, useTheme } from './theme';
 
 export function ScreenHeader({ title, left, right }: { title: string; left?: ReactNode; right?: ReactNode }) {

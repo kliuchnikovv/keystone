@@ -52,6 +52,48 @@ still builds/flashes with PlatformIO (`pio run -t upload`, S3=usbmodem101).
 The Zigbee console only logs on events; to capture the boot log open the port
 with pyserial and pulse DTR=False+RTS=True→RTS=False to reset.
 
+## Сборка приложения под iPhone (как просит пользователь)
+
+Когда пользователь просит «собери приложение под iphone … release через xcode» — это
+**релизная сборка под физическое устройство на этом Mac** (не симулятор). Делать так:
+
+```bash
+cd app
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+./scripts/ios-release.sh device
+```
+
+- Запускать **с отключённой песочницей** (`dangerouslyDisableSandbox`): `xcodebuild` ходит
+  в build-service (XPC вне песочницы), в кучу, в keychain и к provisioning — под песочницей
+  падает `Operation not permitted`. На самом Mac с отключённой песочницей **сборка проходит**
+  (проверено 25.11.2026: `** ARCHIVE SUCCEEDED **`, подпись `Apple Development:
+  valeriy.v.klyuchnikov@gmail.com`, team `5H749MZFPN`, bundle `com.kliuchnikovv.keystone`;
+  профиль обновляется сам через `-allowProvisioningUpdates`).
+- **Ловушка локали:** `pod install` в фоновом/неинтерактивном шелле падает
+  `Encoding::CompatibilityError: … ASCII-8BIT` — CocoaPods требует UTF-8. Лечится
+  `export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` перед запуском скрипта.
+- Долгая (минуты) — вести в фоне (`run_in_background`), лог в scratchpad.
+- Артефакт: `build/ios-release/Keystone.xcarchive/Products/Applications/Keystone.app`.
+
+Установка на телефон (когда пользователь просит «установи»):
+
+```bash
+xcrun devicectl device install app --device <UDID> \
+  build/ios-release/Keystone.xcarchive/Products/Applications/Keystone.app
+```
+
+- Тоже с отключённой песочницей. UDID реального iPhone 15 Pro —
+  `00008130-0004250E0E62001C` (тот, под который профиль); узнавать актуальный список
+  `xcrun devicectl list devices` / `xcrun xctrace list devices`.
+- **Телефон должен быть разблокирован**, иначе `error 10003 … device is currently
+  locked` / не монтируется developer disk image — попросить пользователя разблокировать и
+  повторить.
+- Первый запуск: iOS может попросить доверить разработчика (Settings → General → VPN &
+  Device Management) и разрешить Local Network.
+
+Подробности и маршруты (EAS, симулятор, подпись, частые ошибки компиляции) —
+[docs/ios-build.md](docs/ios-build.md).
+
 ## Conventions
 
 - C++17, 2-space indent, `snake_case` files, warnings-as-signal (`-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion`).

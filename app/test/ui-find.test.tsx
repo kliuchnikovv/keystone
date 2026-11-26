@@ -123,20 +123,39 @@ async function openSearch() {
 
 /** What the countdown on the screen says, in seconds. */
 function secondsLeft(): number {
-  const text = screen.getByText(/^\d:\d\d$/).textContent ?? '0:00';
-  const [m, s] = text.split(':');
-  return Number(m) * 60 + Number(s);
+  // The countdown lives in the finder panel: «… 1:52 left».
+  const text = screen.getByLabelText('Looking for new devices').textContent ?? '';
+  const match = /(\d+):(\d\d)/.exec(text);
+  if (!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
 }
 
 describe('Find devices', () => {
+  it('never says which radio it uses', async () => {
+    radio.push(matterDevice('close', -50, 2222, 'manufacturer'));
+    await openSearch();
+    await screen.findByText(/Device · disc/);
+    // The transport is the hub's business, not the person's.
+    expect(screen.queryByText(/Zigbee/)).toBeNull();
+    expect(screen.queryByText(/Bluetooth/)).toBeNull();
+    expect(screen.queryByText(/Matter/)).toBeNull();
+  });
+
+  it('says it is looking, and for how long', async () => {
+    await openSearch();
+    expect(await screen.findByText('Looking for new devices…')).toBeTruthy();
+    // The QR path is still there, as the way in when nothing is nearby.
+    expect(screen.getByLabelText('Scan a QR code')).toBeTruthy();
+  });
+
   it('shows the devices around the phone, the closest first', async () => {
     radio.push(matterDevice('far', -90, 1111, 'manufacturer'));
     radio.push(matterDevice('close', -50, 2222, 'manufacturer'));
     await openSearch();
-    const rows = await screen.findAllByText(/Matter device · disc/);
+    const rows = await screen.findAllByText(/Device · disc/);
     expect(rows.map((r) => r.textContent)).toEqual([
-      'Matter device · disc 2222', // the stronger signal comes first
-      'Matter device · disc 1111',
+      'Device · disc 2222', // the stronger signal comes first
+      'Device · disc 1111',
     ]);
     expect(screen.getByText('very close')).toBeTruthy();
     expect(screen.getByText('far')).toBeTruthy();
@@ -207,9 +226,9 @@ describe('Find devices', () => {
 
   it('opens the Zigbee network, counts down, and shows what joined', async () => {
     await openSearch();
-    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
+    expect(await screen.findByText(/Put the device in pairing mode/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
-    expect(screen.getByText('2:00')).toBeTruthy();
+    expect(secondsLeft()).toBe(120);
     // The clock runs.
     await waitFor(() => expect(secondsLeft()).toBeLessThan(120), { timeout: 4000 });
     // A device joins: it shows up with the way to make sure it is the right one.
@@ -240,7 +259,7 @@ describe('Find devices', () => {
     });
     radio.push(matterDevice('close', -50, 2222, 'manufacturer'));
     await openSearch();
-    expect(await screen.findAllByText(/Matter device · disc/)).toHaveLength(1);
+    expect(await screen.findAllByText(/Device · disc/)).toHaveLength(1);
     expect(screen.queryByText('Some speaker')).toBeNull();
   });
 
@@ -256,7 +275,7 @@ describe('Find devices', () => {
       matter: null,
     });
     await openSearch();
-    expect(await screen.findByText(/Only devices that speak Matter can be added/)).toBeTruthy();
+    expect(await screen.findByText(/Nothing nearby yet/)).toBeTruthy();
     expect(screen.queryByText('Some speaker')).toBeNull();
   });
 

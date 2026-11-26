@@ -31,7 +31,8 @@ function renderHome() {
 const events = () => within(screen.getByLabelText('Events'));
 const openHistory = async () => {
   await screen.findByText('plug1');
-  fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  fireEvent.click(screen.getByLabelText('History'));
   await screen.findByLabelText('Events');
 };
 
@@ -53,7 +54,8 @@ describe('History tab', () => {
     await screen.findByText('lamp');
     fireEvent.click(screen.getByLabelText('Device lamp'));
     await waitFor(() => expect(screen.getByLabelText('lamp is on')).toBeTruthy());
-    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  fireEvent.click(screen.getByLabelText('History'));
     await events().findByText('Sent to lamp: turned on from the app');
     await events().findByText('lamp turned on');
   });
@@ -85,7 +87,8 @@ describe('History tab', () => {
     await screen.findByText('lamp');
     act(() => hub.setValue(0x0102, 0x50, true));
     act(() => hub.setChipStatus(1, 'silent'));
-    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  fireEvent.click(screen.getByLabelText('History'));
     const motion = await screen.findByLabelText(/Motion sensor 0x0102 detected someone/, undefined, { timeout: 6000 });
     await events().findByText(/The zigbee chip went silent/);
 
@@ -102,7 +105,8 @@ describe('History tab', () => {
     renderHome();
     await screen.findByText('plug1');
     for (let i = 0; i < 30; i++) act(() => hub.setValue(0x0102, 0x50, i % 2 === 0));
-    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  fireEvent.click(screen.getByLabelText('History'));
     await events().findByText('lamp ' + 'x', undefined).catch(() => undefined); // let the first page arrive
     const more = await screen.findByRole('button', { name: 'Load older' });
     expect(screen.queryByText(/Hub started/)).toBeNull(); // 24 newest events only
@@ -115,7 +119,8 @@ describe('History tab', () => {
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.setValue(0x0102, 0x50, true));
-    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+  fireEvent.click(screen.getByLabelText('History'));
     fireEvent.click(await screen.findByLabelText(/Motion sensor 0x0102 detected someone/, undefined, { timeout: 6000 }));
     await screen.findByText('Only Motion sensor 0x0102');
   }, 15000);

@@ -47,10 +47,10 @@ describe('Devices', () => {
     renderHome();
     await screen.findByText('plug1');
     expect(state('plug1')).toBe('on');
-    expect(within(card('plug1')).getByText('3 W')).toBeTruthy();
+    expect(within(card('plug1')).getByText('3 W now')).toBeTruthy();
     expect(state('lamp')).toBe('off');
     expect(screen.getByLabelText('Device Motion sensor 0x0102')).toBeTruthy();
-    expect(within(card('Motion sensor 0x0102')).getByText('Clear')).toBeTruthy();
+    expect(within(card('Motion sensor 0x0102')).getByText('Nobody')).toBeTruthy();
     // The rest of the device lives in its sheet.
     await longPress(card('plug1'));
     expect(await screen.findByText('1.28 kWh')).toBeTruthy();
@@ -69,9 +69,9 @@ describe('Devices', () => {
     renderHome();
     await screen.findByText('plug1');
     act(() => hub.setValue(0x0100, 0x13, 42));
-    await within(card('plug1')).findByText('42 W');
+    await within(card('plug1')).findByText('42 W now');
     act(() => hub.setValue(0x0102, 0x50, true));
-    await within(card('Motion sensor 0x0102')).findByText('Occupied');
+    await within(card('Motion sensor 0x0102')).findByText('Someone');
   });
 
   it('brightness is a slider in percent, dark while the lamp is off', async () => {
@@ -119,9 +119,10 @@ describe('Adding, finding and removing devices', () => {
     // The search is a screen of its own.
     expect(await screen.findByText('Find devices')).toBeTruthy();
     // Opening it opens the Zigbee network for two minutes.
-    expect(await screen.findByText(/Press the pair button/)).toBeTruthy();
+    expect(await screen.findByText(/Put the device in pairing mode/)).toBeTruthy();
     expect(hub.pairCalls).toEqual([120]);
-    expect(screen.getByText(/^\d:\d\d$/)).toBeTruthy();
+    // The countdown lives in the finder panel.
+    expect(screen.getByLabelText('Looking for new devices').textContent ?? '').toMatch(/\d:\d\d/);
     act(() => hub.simulateJoin(0x0200, 'new_plug'));
     await screen.findByText('new_plug');
     expect(screen.getByText(/joined/)).toBeTruthy();
@@ -178,7 +179,8 @@ describe('Hub tab', () => {
   it('lists the chips with their health', async () => {
     renderHome();
     await screen.findByText('plug1');
-    fireEvent.click(screen.getByLabelText('Hub'));
+    fireEvent.click(screen.getByLabelText('Settings'));
+    fireEvent.click(screen.getByLabelText('Hub & health'));
     await screen.findByText('mock-home');
     const zigbee = screen.getByLabelText('Chip Zigbee');
     expect(within(zigbee).getByText(/Online/)).toBeTruthy();
@@ -195,7 +197,8 @@ describe('Hub tab', () => {
     const onChangeHub = vi.fn();
     renderHome({ onChangeHub });
     await screen.findByText('plug1');
-    fireEvent.click(screen.getByLabelText('Hub'));
+    fireEvent.click(screen.getByLabelText('Settings'));
+    fireEvent.click(screen.getByLabelText('Hub & health'));
     fireEvent.click(await screen.findByLabelText('Change hub'));
     expect(onChangeHub).toHaveBeenCalled();
   });

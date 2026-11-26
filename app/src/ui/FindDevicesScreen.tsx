@@ -5,7 +5,7 @@
 // device without Bluetooth never shows up here. The hub's own network says what can
 // join the home.
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import type { Commands } from '../hooks/useCommands';
 import { useBleScan } from '../hooks/useBleScan';
 import { useJoinWindow } from '../hooks/useJoinWindow';
@@ -122,19 +122,58 @@ export function FindDevicesScreen({
           </View>
         ) : null}
 
-        <Text style={[styles.section, { color: t.muted }]}>NEAR YOU</Text>
+        <FinderPanel join={join} />
+
+        <Text style={[styles.section, { color: t.muted }]}>FOUND</Text>
         <NearbySection
           scan={scan}
           onAdd={addMatter}
           busy={busy}
           hubCannot={hubCannot}
-          onScanQr={() => setScanning(true)}
           scanned={scanned}
         />
 
-        <Text style={[styles.section, { color: t.muted }]}>ON YOUR HUB</Text>
-        <HubSection join={join} commands={commands} />
+        <JoinedSection join={join} commands={commands} />
+
+        <Button kind="secondary" label="Scan a QR code" onPress={() => setScanning(true)} />
       </ScrollView>
+    </View>
+  );
+}
+
+/** The dark panel at the top: the app is looking, and for how long. */
+function FinderPanel({ join }: { join: ReturnType<typeof useJoinWindow> }) {
+  const t = useTheme();
+  const looking = join.open && !join.expired;
+  return (
+    <View style={styles.finder} accessibilityLabel="Looking for new devices">
+      <View style={styles.finderHead}>
+        <Glyph name={looking ? 'signal' : 'chip'} size={20} color={t.accent} />
+        <Text style={styles.finderTitle}>Looking for new devices…</Text>
+      </View>
+      <Text style={styles.finderText}>
+        {looking
+          ? `Put the device in pairing mode and keep it close. ${clock(join.left)} left`
+          : 'Put the device in pairing mode and keep it close.'}
+      </Text>
+    </View>
+  );
+}
+
+/** The devices that joined while the hub was looking. */
+function JoinedSection({ join, commands }: { join: ReturnType<typeof useJoinWindow>; commands: Commands }) {
+  if (join.joined.length === 0) return null;
+  return (
+    <View style={styles.gap}>
+      {join.joined.map((entity) => (
+        <JoinedRow
+          key={entity.id}
+          entity={entity}
+          joinedAt={join.joinedAt.get(entity.id) ?? join.now}
+          now={join.now}
+          commands={commands}
+        />
+      ))}
     </View>
   );
 }
@@ -169,20 +208,16 @@ function NearbySection({
   onAdd,
   busy,
   hubCannot,
-  onScanQr,
   scanned,
 }: {
   scan: ReturnType<typeof useBleScan>;
   onAdd(matter: MatterIdentity): Promise<void>;
   busy: boolean;
   hubCannot: boolean;
-  onScanQr(): void;
   scanned: MatterIdentity | null;
 }) {
   return (
     <View style={styles.gap}>
-      {/* The code is printed on the device, so this works without any radio at all. */}
-      <Button kind="secondary" size="compact" label="Scan a QR code" onPress={onScanQr} />
       {scanned ? (
         <ScannedRow matter={scanned} busy={busy} hubCannot={hubCannot} onAdd={() => void onAdd(scanned)} />
       ) : null}
@@ -213,7 +248,7 @@ function ScannedRow({
         <Glyph name="chip" size={16} color={t.accent} />
         <View style={styles.rowText}>
           <Text style={{ color: t.text, fontSize: 15, fontWeight: '600' }} numberOfLines={1}>
-            Matter device
+            Device
           </Text>
           <Text style={{ color: t.muted, fontSize: 12 }} numberOfLines={1}>
             From the QR code{matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}
@@ -254,8 +289,8 @@ function NearbyList({
     return (
       <Note
         tone="quiet"
-        title="No Bluetooth here."
-        text="Finding devices needs the app on a phone. In the browser, and in Expo Go, there is nothing to listen with."
+        title="No radio here."
+        text="Finding nearby devices needs the app on a phone. In the browser, and in Expo Go, there is nothing to listen with."
       />
     );
   }
@@ -263,16 +298,16 @@ function NearbyList({
     return (
       <Note
         tone="quiet"
-        title="Bluetooth is not allowed."
-        text="Keystone needs the Bluetooth permission to see what is around you. Turn it on in the settings of the phone."
+        title="The radio is not allowed."
+        text="Keystone needs permission to see what is around you. Turn it on in the settings of the phone."
       />
     );
   }
   if (scan.status.state === 'poweredOff') {
-    return <Note tone="quiet" title="Bluetooth is off." text="Turn Bluetooth on to see the devices around you." />;
+    return <Note tone="quiet" title="The radio is off." text="Turn it on to see the devices around you." />;
   }
   if (scan.status.state === 'unsupported') {
-    return <Note tone="quiet" title="No Bluetooth here." text="This device cannot look for Bluetooth devices." />;
+    return <Note tone="quiet" title="No radio here." text="This device cannot look for nearby devices." />;
   }
   if (scan.status.state !== 'ready') {
     return <Note tone="quiet" text="Getting the radio ready…" />;
@@ -285,14 +320,14 @@ function NearbyList({
       <Note
         tone="quiet"
         title="Nothing nearby yet."
-        text="Wake the device up (press its button) and it will show up here. Only devices that speak Matter can be added."
+        text="Wake the device up (press its button) and it will show up here."
       />
     );
   }
   return (
     <View style={styles.gap}>
       <Text style={{ color: t.muted, fontSize: 12.5, lineHeight: 18 }}>
-        A Matter device is added by the hub — the hub has to reach the device over the network.
+        The hub adds the device — it has to reach it over the network.
       </Text>
       {devices.map((device) => (
         <NearbyRow
@@ -322,8 +357,8 @@ function NearbyRow({
   const t = useTheme();
   const matter = device.matter;
   const far = tooFar(device.proximity);
-  const title = device.name ?? 'Matter device';
-  const subtitle = `Matter device${matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}`;
+  const title = device.name ?? 'Device';
+  const subtitle = `Device${matter.discriminator !== null ? ` · disc ${matter.discriminator}` : ''}`;
 
   return (
     <View style={[styles.row, { borderColor: t.border, backgroundColor: t.card }]}>
@@ -401,15 +436,15 @@ function HubSection({
     );
   }
   if (join.opening) {
-    return <Text style={{ color: t.muted, fontSize: 13.5 }}>Opening the Zigbee network for 2 minutes…</Text>;
+    return <Text style={{ color: t.muted, fontSize: 13.5 }}>Looking for devices for 2 minutes…</Text>;
   }
   if (!join.open) {
     return (
       <View style={styles.gap}>
         <Text style={{ color: t.muted, fontSize: 13.5, lineHeight: 19 }}>
-          The Zigbee network is closed. Open it when you want to add a Zigbee device.
+          The hub is not looking for devices yet. Open it when you want to add one.
         </Text>
-        <Button kind="secondary" size="compact" label="Open the network" onPress={join.reopen} />
+        <Button kind="secondary" size="compact" label="Start looking" onPress={join.reopen} />
       </View>
     );
   }
@@ -424,7 +459,7 @@ function HubSection({
               : 'The window is over. No devices joined.'
           }
         />
-        <Button kind="secondary" size="compact" label="Open the network again" onPress={join.reopen} />
+        <Button kind="secondary" size="compact" label="Look again" onPress={join.reopen} />
       </View>
     );
   }
@@ -434,7 +469,7 @@ function HubSection({
         <Glyph name="plus" size={14} color={t.accent} />
         <Text style={{ color: t.text, fontSize: 15, fontWeight: '600' }}>{clock(join.left)}</Text>
         <Text style={{ color: t.muted, fontSize: 13, flex: 1 }}>
-          Press the pair button on your Zigbee device (or power-cycle it).
+          Put the device in pairing mode and keep it close.
         </Text>
       </View>
       {join.joined.map((entity) => (
@@ -513,6 +548,10 @@ function JoinedRow({
 }
 
 const styles = StyleSheet.create({
+  finder: { backgroundColor: '#201a12', borderRadius: 18, padding: 18, gap: 8, marginBottom: 4 },
+  finderHead: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  finderTitle: { color: '#f4efe4', fontSize: 14, fontWeight: '600' },
+  finderText: { color: '#bdb49f', fontSize: 11.5, lineHeight: 16 },
   screen: { flex: 1 },
   page: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 40 : 32, gap: 8 },
   section: { fontSize: 12, fontWeight: '700', letterSpacing: 1, marginTop: 14, marginBottom: 2 },

@@ -1,15 +1,17 @@
 import { StatusBar } from 'expo-status-bar';
+import { useFonts } from 'expo-font';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useDiscovery, type Discovery } from './src/hooks/useDiscovery';
 import { useHome, useHubClient, type HubConnection } from './src/hooks/useHub';
-import { createPaletteStore } from './src/palette';
+import { createThemeStore } from './src/palette';
 import { createSettingsStore, type Settings } from './src/settings';
 import { defaultStore } from './src/storage';
 import { ConnectScreen, type ConnectFailure } from './src/ui/ConnectScreen';
+import { GEIST_FONTS } from './src/ui/fonts';
 import { Home, HomeBody } from './src/ui/Home';
 import { SetupScreen } from './src/ui/SetupScreen';
-import { ThemeProvider, type PaletteId } from './src/ui/theme';
+import { ThemeProvider, type ThemeMode } from './src/ui/theme';
 
 /** A connection that is being tried right now: the form stays up, the button spins. */
 function Trying({
@@ -96,27 +98,30 @@ function ConnectFlow({
 
 export default function App() {
   const store = useMemo(() => createSettingsStore(defaultStore), []);
-  const palettes = useMemo(() => createPaletteStore(defaultStore), []);
+  const themes = useMemo(() => createThemeStore(defaultStore), []);
   // undefined = still reading the saved settings, null = none (ask for them).
   const [settings, setSettings] = useState<Settings | null | undefined>(undefined);
   const [session, setSession] = useState<{ settings: Settings; client: HubConnection } | null>(null);
   const [pending, setPending] = useState<Settings | null>(null);
   const [editing, setEditing] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
-  // The palette is the app's own look — a setting of the phone.
-  const [palette, setPaletteState] = useState<PaletteId>('sandstone');
+  // The theme mode is the app's own look — a setting of the phone.
+  const [mode, setModeState] = useState<ThemeMode>('system');
+  // Geist: while it loads the app waits; if it fails, the app renders anyway
+  // (with the system font) — a missing font must never leave a blank screen.
+  const [fontsLoaded, fontsError] = useFonts(GEIST_FONTS);
 
   useEffect(() => {
     void store.load().then(setSettings);
-    void palettes.load().then(setPaletteState);
-  }, [store, palettes]);
+    void themes.load().then(setModeState);
+  }, [store, themes]);
 
-  const setPalette = useCallback(
-    (id: PaletteId) => {
-      setPaletteState(id);
-      void palettes.save(id);
+  const setMode = useCallback(
+    (m: ThemeMode) => {
+      setModeState(m);
+      void themes.save(m);
     },
-    [palettes],
+    [themes],
   );
 
   const onConnected = useCallback(
@@ -184,7 +189,7 @@ export default function App() {
         onCancel={editing ? () => setEditing(false) : undefined}
       />
     ) : session ? (
-      <HomeBody settings={session.settings} client={session.client} onChangeHub={onChangeHub} onTokenChange={onTokenChange} onUseRelay={onUseRelay} palette={palette} onPalette={setPalette} />
+      <HomeBody settings={session.settings} client={session.client} onChangeHub={onChangeHub} onTokenChange={onTokenChange} onUseRelay={onUseRelay} mode={mode} onMode={setMode} />
     ) : (
       <Home
         key={`${settings.url}|${settings.token}|${settings.fingerprint ?? ''}`}
@@ -192,14 +197,16 @@ export default function App() {
         onChangeHub={onChangeHub}
         onTokenChange={onTokenChange}
         onUseRelay={onUseRelay}
-        palette={palette}
-        onPalette={setPalette}
+        mode={mode}
+        onMode={setMode}
       />
     );
 
   return (
-    <ThemeProvider palette={palette}>
-      {content}
+    <ThemeProvider mode={mode}>
+      {/* Geist is the app's type: wait for it, but never forever — if it fails,
+          the app renders with the system font. */}
+      {fontsLoaded || fontsError ? content : null}
       <StatusBar style="auto" />
     </ThemeProvider>
   );

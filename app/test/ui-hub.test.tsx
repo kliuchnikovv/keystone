@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket as NodeWebSocket } from 'ws';
 import type { SocketLike } from '../src/protocol/client';
 import { Home } from '../src/ui/Home';
+import type { ThemeMode } from '../src/ui/theme';
 import { MockHub } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
@@ -21,7 +22,10 @@ afterEach(async () => {
 const click = (label: string) => fireEvent.click(screen.getByLabelText(label));
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
-async function openHub(props: { onUseRelay?(url: string): void } = {}) {
+/** The screens behind the Settings rows. */
+type Door = 'Hub & health' | 'Wi-Fi' | 'Remote access' | 'Firmware updates' | 'Location' | 'History';
+
+async function openHub(props: { onUseRelay?(url: string): void; mode?: ThemeMode; onMode?(m: ThemeMode): void } = {}, door: Door = 'Hub & health') {
   render(
     <Home
       settings={{ url: hub.url, token: hub.token }}
@@ -31,19 +35,21 @@ async function openHub(props: { onUseRelay?(url: string): void } = {}) {
     />,
   );
   await screen.findByText('plug1');
-  click('Hub');
-  await screen.findByLabelText('Firmware');
+  click('Settings');
+  click(door);
+  await waitFor(() => expect(screen.getByLabelText('Back to Settings')).toBeTruthy());
 }
 
 describe('the hub tab', () => {
   it('shows the firmware and the co-processors', async () => {
-    await openHub();
+    await openHub({}, 'Firmware updates');
     expect(screen.getByLabelText('Firmware')).toBeTruthy();
-    expect(screen.getByText('mock-home')).toBeTruthy();
+    // The hub's name is on the Hub & health screen, not here.
+    expect(screen.queryByText('mock-home')).toBeNull();
   });
 
   it('the token is hidden until it is asked for', async () => {
-    await openHub();
+    await openHub({}, 'Remote access');
     await screen.findByLabelText('Show the token');
     expect(screen.queryByText(hub.token)).toBeNull();
     click('Show the token');
@@ -53,7 +59,7 @@ describe('the hub tab', () => {
   });
 
   it('sets up a relay and takes it away again', async () => {
-    await openHub();
+    await openHub({}, 'Remote access');
     click('Set up relay');
     await screen.findByLabelText('Relay server');
     type('Relay server', 'relay.example.com');
@@ -69,7 +75,7 @@ describe('the hub tab', () => {
 
   it('shows the address the app uses through the relay', async () => {
     const used: string[] = [];
-    await openHub({ onUseRelay: (u) => used.push(u) });
+    await openHub({ onUseRelay: (u) => used.push(u) }, 'Remote access');
     click('Set up relay');
     await screen.findByLabelText('Relay server');
     type('Relay server', 'relay.example.com');
@@ -82,7 +88,7 @@ describe('the hub tab', () => {
   });
 
   it('sets up a relay without a secret — the hub uses the one in its firmware', async () => {
-    await openHub();
+    await openHub({}, 'Remote access');
     click('Set up relay');
     await screen.findByLabelText('Relay server');
     type('Relay server', 'relay.example.com');
@@ -93,7 +99,7 @@ describe('the hub tab', () => {
   });
 
   it('starts an update and follows it', async () => {
-    await openHub();
+    await openHub({}, 'Firmware updates');
     click('Update from URL');
     await screen.findByLabelText('Image URL');
     type('Image URL', 'https://example.com/firmware.bin');
@@ -103,7 +109,7 @@ describe('the hub tab', () => {
   });
 
   it('refuses an update without a proper image', async () => {
-    await openHub();
+    await openHub({}, 'Firmware updates');
     click('Update from URL');
     await screen.findByLabelText('Image URL');
     type('Image URL', 'not-a-url');
@@ -113,7 +119,7 @@ describe('the hub tab', () => {
   });
 
   it('reboots only after a second tap', async () => {
-    await openHub();
+    await openHub({}, 'Hub & health');
     click('Reboot the hub');
     expect(screen.getByText('Tap again to reboot')).toBeTruthy();
     expect(hub.rebootCalls).toBe(0);
@@ -122,7 +128,7 @@ describe('the hub tab', () => {
   });
 
   it('a factory reset asks first and says what it does', async () => {
-    await openHub();
+    await openHub({}, 'Hub & health');
     click('Factory reset the hub');
     click('Tap again to erase everything');
     expect(await screen.findByText('Factory reset the hub?')).toBeTruthy();
@@ -136,7 +142,7 @@ describe('the hub tab', () => {
   });
 
   it('forgetting the Wi-Fi asks first', async () => {
-    await openHub();
+    await openHub({}, 'Hub & health');
     click('Forget the Wi-Fi network');
     expect(await screen.findByText('Forget the Wi-Fi network?')).toBeTruthy();
     click('Forget Wi-Fi');
@@ -144,9 +150,23 @@ describe('the hub tab', () => {
   });
 });
 
+describe('appearance', () => {
+  it('the theme is chosen in Settings, not on the Hub tab', async () => {
+    await openHub({ mode: 'system' }, 'Hub & health');
+    // The Hub screen no longer carries the theme picker.
+    expect(screen.queryByLabelText('Theme System')).toBeNull();
+    // It lives under Display.
+    click('Back to Settings');
+    click('Display');
+    expect(screen.getByLabelText('System')).toBeTruthy();
+    expect(screen.getByLabelText('Light')).toBeTruthy();
+    expect(screen.getByLabelText('Dark')).toBeTruthy();
+  });
+});
+
 describe('presence', () => {
   it('says the phone has not reported yet, and takes a manual answer', async () => {
-    await openHub();
+    await openHub({}, 'Hub & health');
     expect(screen.getByLabelText('Presence')).toBeTruthy();
     // Nothing has reported: the phone's presence is unknown, not "away".
     expect(screen.getByText(/Not known yet/)).toBeTruthy();
@@ -162,7 +182,7 @@ describe('presence', () => {
   });
 
   it('forgets the phone when asked', async () => {
-    await openHub();
+    await openHub({}, 'Hub & health');
     click('I am home');
     await waitFor(() => expect(hub.phones).toHaveLength(1));
     click('Forget this phone');
