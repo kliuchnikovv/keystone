@@ -5,7 +5,7 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { Glyph } from './Glyph';
 import { ScreenHeader } from './ScreenHeader';
-import { THEMES, useTheme, type ThemeMode } from './theme';
+import { MODES, THEMES, useTheme, type ThemeMode } from './theme';
 
 export interface DisplayScreenProps {
   mode: ThemeMode;
@@ -87,6 +87,31 @@ function ThemePreview({ which }: { which: 'light' | 'dark' }) {
   );
 }
 
+/** System: half paper, half night — it follows the phone, so show both. */
+function SystemPreview() {
+  const halves: ('light' | 'dark')[] = ['light', 'dark'];
+  return (
+    <View style={[styles.preview, styles.previewSplit]}>
+      {halves.map((which) => {
+        const theme = THEMES[which];
+        return (
+          <View key={which} style={[styles.previewHalf, { backgroundColor: theme.bg }]}>
+            <View style={[styles.previewGold, { backgroundColor: theme.accent }]} />
+            <View style={[styles.previewCard, { backgroundColor: theme.card, borderColor: theme.border }]} />
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/** The long name under each theme card. */
+const THEME_NAME: Record<ThemeMode, string> = {
+  system: 'System · auto',
+  light: 'Light · paper',
+  dark: 'Dark · warm',
+};
+
 export function DisplayScreen({
   mode,
   onMode,
@@ -111,25 +136,36 @@ export function DisplayScreen({
       />
 
       <Text style={[styles.label, { color: t.muted }]}>THEME</Text>
-      <Segmented
-        a11y="Theme"
-        options={[
-          { id: 'system' as ThemeMode, label: 'System' },
-          { id: 'light' as ThemeMode, label: 'Light' },
-          { id: 'dark' as ThemeMode, label: 'Dark' },
-        ]}
-        value={mode}
-        onChange={onMode}
-      />
       <View style={styles.previews}>
-        <View style={[styles.previewCardBox, { borderColor: t.border, backgroundColor: t.card }]}>
-          <ThemePreview which="light" />
-          <Text style={[styles.previewName, { color: t.text }]}>Light · paper</Text>
-        </View>
-        <View style={[styles.previewCardBox, { borderColor: t.border, backgroundColor: t.card }]}>
-          <ThemePreview which="dark" />
-          <Text style={[styles.previewName, { color: t.text }]}>Dark · warm</Text>
-        </View>
+        {MODES.map((m) => {
+          const on = m.id === mode;
+          return (
+            <Pressable
+              key={m.id}
+              accessibilityRole="button"
+              accessibilityLabel={m.name}
+              accessibilityState={{ selected: on }}
+              onPress={() => onMode(m.id)}
+              style={[
+                styles.previewCardBox,
+                {
+                  borderColor: on ? t.accent : t.border,
+                  borderWidth: on ? 2 : 1,
+                  backgroundColor: on ? t.accentSoft : t.card,
+                  padding: on ? 9 : 10,
+                },
+              ]}
+            >
+              {m.id === 'system' ? <SystemPreview /> : <ThemePreview which={m.id} />}
+              <View style={styles.previewHead}>
+                <Text style={[styles.previewName, { color: t.text }]} numberOfLines={1}>
+                  {THEME_NAME[m.id]}
+                </Text>
+                {on ? <Glyph name="check" size={14} color={t.accent} /> : null}
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
 
       <Text style={[styles.label, { color: t.muted }]}>TEMPERATURE</Text>
@@ -168,12 +204,15 @@ const styles = StyleSheet.create({
   label: { fontSize: 10.5, fontWeight: '700', letterSpacing: 1.4, marginTop: 14, marginBottom: 2 },
   seg: { flexDirection: 'row', borderRadius: 999, padding: 3 },
   segItem: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 999 },
-  previews: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  previews: { flexDirection: 'row', gap: 10, marginTop: 4 },
   previewCardBox: { flex: 1, borderWidth: 1, borderRadius: 14, padding: 10 },
   preview: { height: 52, borderRadius: 10, padding: 9, justifyContent: 'center', gap: 5 },
+  previewSplit: { flexDirection: 'row', padding: 0, gap: 0, overflow: 'hidden' },
+  previewHalf: { flex: 1, padding: 6, justifyContent: 'center', gap: 5 },
   previewGold: { width: '62%', height: 7, borderRadius: 4 },
   previewCard: { width: '84%', height: 7, borderRadius: 4, borderWidth: 1 },
-  previewName: { fontSize: 11, fontWeight: '600', marginTop: 8 },
+  previewHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 8 },
+  previewName: { flex: 1, fontSize: 11, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderWidth: 1 },
   rowText: { flex: 1, gap: 2, minWidth: 0 },
   rowName: { fontSize: 14, fontWeight: '600' },

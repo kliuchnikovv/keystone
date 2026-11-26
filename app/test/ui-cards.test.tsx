@@ -55,7 +55,7 @@ describe('the device card', () => {
 });
 
 describe('the climate sensor card', () => {
-  it('shows the temperature and the humidity on one line', () => {
+  it('shows the temperature big, the humidity on the quiet line below', () => {
     const sensor: Entity = {
       id: 0x300,
       name: 'Climate',
@@ -70,13 +70,45 @@ describe('the climate sensor card', () => {
     };
     render(
       <ThemeProvider mode="light">
-        <DeviceWidget entity={sensor} status="online" reachable onOpen={() => {}} />
+        <DeviceWidget
+          entity={sensor}
+          status="online"
+          reachable
+          onOpen={() => {}}
+          updatedText="12 s ago"
+        />
       </ThemeProvider>,
     );
     const card = screen.getByLabelText('Device Climate');
-    expect(within(card).getByText('23.4 °C · 58 %')).toBeTruthy();
-    // The battery is under it.
+    // The degrees read big, the unit small beside them.
+    expect(within(card).getByText('23.4')).toBeTruthy();
+    expect(within(card).getByText('°C')).toBeTruthy();
+    // Humidity and freshness sit on the quiet line underneath.
+    expect(within(card).getByText('Humidity 58% · updated 12 s ago')).toBeTruthy();
+    // The battery is up in the header.
     expect(within(card).getByText('72 %')).toBeTruthy();
+  });
+});
+
+describe('a lone sensor in a room', () => {
+  it('drops its name but keeps its reading', () => {
+    const sensor: Entity = {
+      id: 0x300,
+      name: 'Climate',
+      room: 'Bedroom',
+      chip: 1,
+      device: 'sensor',
+      attrs: [attr(0x10, 'temperature', 'i16', 234), attr(0x11, 'humidity', 'u16', 580)],
+    };
+    render(
+      <ThemeProvider mode="light">
+        <DeviceWidget entity={sensor} status="online" reachable onOpen={() => {}} hideName />
+      </ThemeProvider>,
+    );
+    // The card is still reachable by its a11y label, but the name is not drawn.
+    const card = screen.getByLabelText('Device Climate');
+    expect(within(card).queryByText('Climate')).toBeNull();
+    expect(within(card).getByText('23.4')).toBeTruthy();
   });
 });
 
@@ -101,7 +133,8 @@ describe('a Matter temperature sensor', () => {
       </ThemeProvider>,
     );
     expect(screen.getByLabelText('Device Climate')).toBeTruthy();
-    expect(screen.getByText('21.5 °C')).toBeTruthy();
+    expect(screen.getByText('21.5')).toBeTruthy();
+    expect(screen.getByText('°C')).toBeTruthy();
     expect(screen.getByText('11 %')).toBeTruthy();
   });
 });

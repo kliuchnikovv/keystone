@@ -7,10 +7,9 @@
 // While the finger is down the card says so: it dims at once, and if the
 // finger stays, it lights up — that is the app counting the long press.
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from './kit';
+import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from './kit';
 import { attrOf, deviceIcon, deviceTitle, primarySwitch } from '../model/devices';
-import { formatValue } from '../model/format';
-import { formatTemperature } from '../model/temperature';
+import { cToF } from '../model/temperature';
 import { stripRoomPrefix } from '../model/rooms';
 import type { Entity } from '../protocol/messages';
 import { Dimmer } from './Dimmer';
@@ -18,7 +17,7 @@ import { ReadingsGrid, gridReadings } from './ReadingsGrid';
 import { ThermostatRing } from './ThermostatRing';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
-import { Extras, batteryOf, climateReading, colorOf, headlineOf, subtitleOf } from './widgets';
+import { batteryOf, colorOf, headlineOf, subtitleOf } from './widgets';
 
 export interface DeviceWidgetProps {
   entity: Entity;
@@ -36,6 +35,11 @@ export interface DeviceWidgetProps {
   onBrightness?(percent: number): void;
   /** The temperature unit the app speaks. */
   temperatureUnit?: 'C' | 'F';
+  /** The card's size in the grid — a full row, or half of one. */
+  cardStyle?: StyleProp<ViewStyle>;
+  /** Drop the name — the room has only one device of this kind, so it is clear
+   *  which one this is from the room it sits in. */
+  hideName?: boolean;
 }
 
 /** How long the finger has to rest before the card says "I am counting". */
@@ -78,6 +82,8 @@ export function DeviceWidget({
   updatedText,
   onBrightness,
   temperatureUnit = 'C',
+  cardStyle,
+  hideName = false,
 }: DeviceWidgetProps) {
   const t = useTheme();
   const title = deviceTitle(entity);
@@ -112,6 +118,7 @@ export function DeviceWidget({
       borderRadius: t.cardRadius,
       opacity: reachable ? (down ? 0.88 : 1) : 0.4,
     },
+    cardStyle,
   ];
 
   const note = status === 'offline' ? 'offline' : status === 'unreachable' ? 'unreachable' : null;
@@ -127,14 +134,38 @@ export function DeviceWidget({
     </View>
   );
 
-  // A sensor has no switch: it shows its reading big, and the rest small.
+  // A sensor has no switch: it shows its reading big, and the rest small, the
+  // way the mockup does — the icon and the battery on top, the name, the
+  // reading in big figures, then humidity and "updated …" on a quiet line.
   if (sw === undefined) {
-    // A sensor only reads. The card shows what it reads, the way the mockup
-    // does: the icon on top, the name, then the reading in big figures.
-    const climate = climateReading(entity, temperatureUnit);
-    const headline = climate ?? headlineOf(entity);
-    const humidity = attrOf(entity, 'humidity');
     const battery = batteryOf(entity);
+    const temp = attrOf(entity, 'temperature');
+    const humid = attrOf(entity, 'humidity');
+    const updated = updatedText ? `updated ${updatedText}` : null;
+    // The header: the icon, and the battery off to the right.
+    const head = (
+      <View style={styles.sensorHead}>
+        {tile}
+        {battery !== null && (
+          <View style={styles.battery}>
+            <Glyph name="battery" size={13} color={t.muted} />
+            <Text style={[styles.batteryText, { color: t.muted }]}>{battery} %</Text>
+          </View>
+        )}
+      </View>
+    );
+    // A temperature sensor: the degrees big, the unit small beside them, and
+    // humidity + freshness on the quiet line underneath.
+    const footer =
+      temp !== undefined
+        ? [humid !== undefined ? `Humidity ${Math.round(Number(humid.value) / 10)}%` : null, updated]
+            .filter((p): p is string => p !== null)
+            .join(' · ')
+        : (updated ?? '');
+    const headline = temp === undefined ? headlineOf(entity) : null;
+    const degrees = temp !== undefined ? Number(temp.value) / 10 : 0;
+    const bigNumber = temp !== undefined ? (temperatureUnit === 'F' ? cToF(degrees) : degrees).toFixed(1) : null;
+    const unit = temperatureUnit === 'F' ? '°F' : '°C';
     return (
       <View style={card}>
         <Pressable
@@ -148,31 +179,30 @@ export function DeviceWidget({
           onPressOut={press.onPressOut}
           style={[styles.inner, styles.sensor, down && styles.pressed, held && styles.pressedHeld]}
         >
-          {tile}
-          <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
-            {displayName}
-          </Text>
-          {headline !== null && (
+          {head}
+          {!hideName && (
+            <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
+              {displayName}
+            </Text>
+          )}
+          {bigNumber !== null ? (
+            <View style={styles.bigRow}>
+              <Text style={[styles.bigReading, { color: t.text }]} numberOfLines={1}>
+                {bigNumber}
+              </Text>
+              <Text style={[styles.bigUnit, { color: t.muted }]}>{unit}</Text>
+            </View>
+          ) : headline !== null ? (
             <Text style={[styles.bigReading, { color: t.text }]} numberOfLines={1}>
               {headline}
             </Text>
-          )}
-          {battery !== null && (
-            <View style={styles.battery}>
-              <Glyph name="battery" size={12} color={t.muted} />
-              <Text style={[styles.batteryText, { color: t.muted }]}>{battery} %</Text>
-            </View>
-          )}
-          {climate === null && gridReadings(entity).length > 1 ? (
-            <ReadingsGrid entity={entity} />
           ) : null}
-          {climate === null && battery === null ? <Extras entity={entity} /> : null}
-          {humidity !== undefined && climate === null ? (
-            <View style={styles.battery}>
-              <Glyph name="humidity" size={12} color={t.muted} />
-              <Text style={[styles.batteryText, { color: t.muted }]}>{formatValue(humidity)}</Text>
-            </View>
-          ) : null}
+          {temp === undefined && gridReadings(entity).length > 1 ? <ReadingsGrid entity={entity} /> : null}
+          {footer !== '' && (
+            <Text style={[styles.footer, { color: t.muted }]} numberOfLines={1}>
+              {footer}
+            </Text>
+          )}
           {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
         </Pressable>
       </View>
@@ -192,6 +222,7 @@ export function DeviceWidget({
         color={colorOf(entity)}
         spoken={`${title} is ${spoken}`}
         note={note}
+        cardStyle={cardStyle}
         onChange={(v) => onBrightness?.(v)}
         onToggle={onToggle}
         onOpen={onOpen}
@@ -243,6 +274,9 @@ export function DeviceWidget({
   const brightness =
     percent !== undefined && typeof percent.value === 'number' ? Math.round((percent.value / 254) * 100) : null;
 
+  // A switchable device — a plug, a lock, a plain lamp — as a tile: the icon
+  // on top (with the colour or the level off to the right), the name, and what
+  // it is doing right now, the way the room mockup lays its buttons out.
   return (
     <View style={card}>
       <Pressable
@@ -254,32 +288,31 @@ export function DeviceWidget({
         onLongPress={onOpen}
         onPressIn={press.onPressIn}
         onPressOut={press.onPressOut}
-        style={[styles.inner, styles.row, down && styles.pressed, held && styles.pressedHeld]}
+        style={[styles.inner, styles.sensor, down && styles.pressed, held && styles.pressedHeld]}
       >
-        {tile}
-        <View style={styles.text}>
-          <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
-            {displayName}
-          </Text>
-          {subtitle !== null && (
-            <Text style={[styles.sub, { color: on ? t.accentInk : t.muted }]} numberOfLines={1}>
-              {subtitle}
-            </Text>
-          )}
-          {battery !== null && (
-            <View style={styles.battery}>
-              <Glyph name="battery" size={12} color={t.muted} />
-              <Text style={[styles.batteryText, { color: t.muted }]}>{battery} %</Text>
-            </View>
-          )}
-          {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
+        <View style={styles.sensorHead}>
+          {tile}
+          {colour !== null ? (
+            <View style={[styles.colorDot, { backgroundColor: colour, borderColor: t.card }]} />
+          ) : brightness !== null && on ? (
+            <Text style={[styles.grip, { color: t.accentInk }]}>{brightness}%</Text>
+          ) : null}
         </View>
-        {brightness !== null && on && (
-          <Text style={[styles.grip, { color: t.accentInk }]}>{brightness}%</Text>
+        <Text style={[styles.name, { color: t.text }]} numberOfLines={1}>
+          {displayName}
+        </Text>
+        {subtitle !== null && (
+          <Text style={[styles.sub, { color: on ? t.accentInk : t.muted }]} numberOfLines={1}>
+            {subtitle}
+          </Text>
         )}
-        {colour !== null && (
-          <View style={[styles.colorDot, { backgroundColor: colour, borderColor: t.card }]} />
+        {battery !== null && (
+          <View style={styles.battery}>
+            <Glyph name="battery" size={12} color={t.muted} />
+            <Text style={[styles.batteryText, { color: t.muted }]}>{battery} %</Text>
+          </View>
         )}
+        {note !== null && <Text style={[styles.note, { color: status === 'unreachable' ? t.bad : t.muted }]}>{note}</Text>}
       </Pressable>
     </View>
   );
@@ -292,13 +325,17 @@ const styles = StyleSheet.create({
   pressedHeld: { transform: [{ scale: 0.95 }] },
   row: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   sensor: { alignItems: 'flex-start', gap: 6, justifyContent: 'flex-start' },
+  sensorHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch' },
   thermoHead: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   tile: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, minWidth: 0, gap: 2 },
   name: { fontSize: 14.5, fontWeight: '600' },
   sub: { fontSize: 12.5, fontWeight: '500' },
-  bigReading: { fontSize: 21, fontWeight: '700', letterSpacing: -0.5 },
-  battery: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  bigRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  bigReading: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
+  bigUnit: { fontSize: 13, fontWeight: '600' },
+  footer: { fontSize: 11.5, fontWeight: '500', marginTop: 2 },
+  battery: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   batteryText: { fontSize: 11, fontWeight: '500' },
   grip: { fontSize: 15, fontWeight: '700' },
   colorDot: { width: 26, height: 26, borderRadius: 13, borderWidth: 2 },

@@ -8,7 +8,7 @@
 // A drag of more than the threshold cancels the tap, so a swipe never
 // switches the lamp by accident.
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type GestureResponderEvent } from './kit';
+import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type StyleProp, type ViewStyle } from './kit';
 import { Glyph } from './Glyph';
 import { useTheme } from './theme';
 
@@ -41,9 +41,11 @@ export interface DimmerProps {
   spoken?: string;
   /** "offline" — the lamp cannot be reached right now. */
   note?: string | null;
+  /** The card's size in the grid. */
+  cardStyle?: StyleProp<ViewStyle>;
 }
 
-export function Dimmer({ value, on, onChange, onToggle, onOpen, color = null, title, spoken, note = null }: DimmerProps) {
+export function Dimmer({ value, on, onChange, onToggle, onOpen, color = null, title, spoken, note = null, cardStyle }: DimmerProps) {
   const t = useTheme();
   const [width, setWidth] = useState(0);
   // Where the drag started, and where the level was then.
@@ -91,7 +93,7 @@ export function Dimmer({ value, on, onChange, onToggle, onOpen, color = null, ti
       onResponderRelease={release}
       onResponderTerminate={release}
       onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-      style={[styles.card, { borderColor: on ? t.glowBorder : t.border, borderRadius: t.cardRadius }]}
+      style={[styles.card, { borderColor: on ? t.glowBorder : t.border, borderRadius: t.cardRadius }, cardStyle]}
     >
       {/* The fill: the level, as a warm wash with a gold edge. */}
       <View pointerEvents="none" style={styles.fillLayer}>

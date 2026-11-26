@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from './kit';
 import { Platform } from 'react-native';
-import { canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
+import { attrOf, canIdentifyDevice, canRemoveDevice, canUpdateFirmware, deviceStatus, deviceTitle, isReachable, primarySwitch, sortedDevices, agoText, roomSummary, summaryText, type DeviceStatus } from '../model/devices';
 import { groupByRoom, roomChoices, roomCount } from '../model/rooms';
 import { useEntityActivity } from '../hooks/useEntityActivity';
 import { useNow } from '../hooks/useNow';
@@ -252,24 +252,43 @@ function DeviceList({
   temperatureUnit: 'C' | 'F';
   onBrightness?(e: Entity, percent: number): void;
 }) {
+  // How many of each kind the room holds — a lone sensor of its kind needs no
+  // name, the room already says which one it is.
+  const typeCount = new Map<Entity['device'], number>();
+  for (const e of devices) typeCount.set(e.device, (typeCount.get(e.device) ?? 0) + 1);
   return (
     <View style={styles.cards}>
-      {devices.map((entity) => (
-        <DeviceWidget
-          key={entity.id}
-          entity={entity}
-          status={statusOf(entity)}
-          reachable={reachableOf(entity)}
-          onToggle={() => onToggle(entity)}
-          onOpen={() => onOpen(entity)}
-          onUnreachable={onUnreachable}
-          updatedText={updatedOf(entity)}
-          temperatureUnit={temperatureUnit}
-          {...(onBrightness ? { onBrightness: (v: number) => onBrightness(entity, v) } : {})}
-        />
-      ))}
+      {devices.map((entity) => {
+        const wide = isWideCard(entity);
+        const lone = primarySwitch(entity) === undefined && (typeCount.get(entity.device) ?? 0) === 1;
+        return (
+          <DeviceWidget
+            key={entity.id}
+            entity={entity}
+            status={statusOf(entity)}
+            reachable={reachableOf(entity)}
+            onToggle={() => onToggle(entity)}
+            onOpen={() => onOpen(entity)}
+            onUnreachable={onUnreachable}
+            updatedText={updatedOf(entity)}
+            temperatureUnit={temperatureUnit}
+            cardStyle={wide ? styles.cardFull : styles.cardHalf}
+            hideName={lone}
+            {...(onBrightness ? { onBrightness: (v: number) => onBrightness(entity, v) } : {})}
+          />
+        );
+      })}
     </View>
   );
+}
+
+/** A card that needs the whole row: a lamp with a dimmer across it, a
+ *  thermostat with its ring. Everything else — a plug, a sensor, a lock — is
+ *  happy at half the width, two to a row. */
+function isWideCard(e: Entity): boolean {
+  if (e.device === 'climate') return true;
+  const bright = attrOf(e, 'brightness');
+  return bright !== undefined && primarySwitch(e) !== undefined;
 }
 
 /** Who and where: the hub's name, the time of day, and how much home there is. */
@@ -316,7 +335,9 @@ function greeting(home: HomeState): string {
 }
 
 const styles = StyleSheet.create({
-  cards: { gap: 8, marginTop: 10 },
+  cards: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  cardFull: { flexBasis: '100%' },
+  cardHalf: { flexBasis: '48%', flexGrow: 1 },
   roomChips: { marginBottom: 4 },
   roomChipsInner: { gap: 8, paddingRight: 8 },
   roomChip: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 999, borderWidth: 1 },
