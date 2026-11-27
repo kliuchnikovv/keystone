@@ -15,6 +15,8 @@ import { MockHub, defaultEntities } from '../tools/mock-hub/hub';
 
 const wsFactory = (url: string) => new NodeWebSocket(url) as unknown as SocketLike;
 vi.mock('../src/native/position', () => ({ locatePhone: vi.fn() }));
+// Stub for skipped tests that reference the old collapsible-section UI.
+const openSection = (_name: string) => {};
 let hub: MockHub;
 
 beforeEach(async () => {
