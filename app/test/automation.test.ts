@@ -7,6 +7,11 @@ import {
   // the draft model (the rule being edited)
   emptyDraft, draftToSentence, draftRequest, opsFor, presenceValueText, isPresenceAttr, MAX_EXTRA_CONDITIONS,
   type RuleDraft,
+  // the unified automation draft (when → do)
+  emptyAutomationDraft, automationRequest, automationToSentence,
+  type AutomationDraft,
+  // the examples a person starts from
+  PRESET_AUTOMATIONS,
 } from '../src/model/automation';
 import { nameProblem, sceneNameProblem } from '../src/model/names';
 import { defaultEntities } from '../tools/mock-hub/hub';
@@ -527,5 +532,235 @@ describe('the draft of a rule', () => {
     expect(opsFor(brightness)).toContain('>');
     expect(opsFor(brightness)).not.toContain('any');
     expect(opsFor(null)).toContain('any');
+  });
+});
+
+// ---- one draft for every kind of automation ------------------------------------------------
+
+describe('the unified automation draft', () => {
+  const presence = opt('Motion sensor 0x0102 · Presence');   // occupied, entity 258
+  const lampPower = opt('lamp · Power');                       // on_off, entity 257
+  const lampBrightness = opt('lamp · Brightness');
+
+  const device = (): AutomationDraft => ({
+    ...emptyAutomationDraft('device'),
+    trigger: { option: presence, op: '==', value: 'on' },
+    action: { option: lampPower, value: 'on', scene: null },
+  });
+  const timeOfDay = (): AutomationDraft => ({
+    ...emptyAutomationDraft('timeOfDay'),
+    time: '22:00',
+    days: 'daily',
+    action: { option: lampPower, value: 'off', scene: null },
+  });
+  const onDate = (): AutomationDraft => ({
+    ...emptyAutomationDraft('date'),
+    time: '19:00',
+    date: '2099-12-31',
+    action: { option: lampPower, value: 'off', scene: null },
+  });
+  const delay = (): AutomationDraft => ({
+    ...emptyAutomationDraft('delay'),
+    minutes: '10',
+    action: { option: lampPower, value: 'off', scene: null },
+  });
+
+  it('a device trigger is a rule', () => {
+    expect(automationRequest(device())).toEqual({
+      ok: true,
+      value: {
+        op: 'rule.add',
+        args: { when: { entity: 258, attr: 0x50, op: '==', value: true }, then: { entity: 257, attr: 1, value: true } },
+      },
+    });
+  });
+
+  it('a time of day is a schedule', () => {
+    expect(automationRequest(timeOfDay())).toEqual({
+      ok: true,
+      value: { op: 'schedule.add', args: { time: '22:00', days: 'daily', entity: 257, action: 'off' } },
+    });
+  });
+
+  it('a date is a one-off schedule', () => {
+    expect(automationRequest(onDate())).toEqual({
+      ok: true,
+      value: { op: 'schedule.add', args: { time: '19:00', date: '2099-12-31', entity: 257, action: 'off' } },
+    });
+  });
+
+  it('a delay is a timer', () => {
+    expect(automationRequest(delay())).toEqual({
+      ok: true,
+      value: { op: 'timer.add', args: { entity: 257, action: 'off', delay_s: 600 } },
+    });
+  });
+
+  it('a scene can be what happens, for every kind', () => {
+    const scene = { option: null, value: '', scene: 'night' };
+    expect(automationRequest({ ...device(), action: scene })).toEqual({
+      ok: true,
+      value: { op: 'rule.add', args: { when: { entity: 258, attr: 0x50, op: '==', value: true }, then: { scene: 'night' } } },
+    });
+    expect(automationRequest({ ...timeOfDay(), action: scene })).toEqual({
+      ok: true,
+      value: { op: 'schedule.add', args: { time: '22:00', days: 'daily', scene: 'night' } },
+    });
+    expect(automationRequest({ ...onDate(), action: scene })).toEqual({
+      ok: true,
+      value: { op: 'schedule.add', args: { time: '19:00', date: '2099-12-31', scene: 'night' } },
+    });
+    expect(automationRequest({ ...delay(), action: scene })).toEqual({
+      ok: true,
+      value: { op: 'timer.add', args: { scene: 'night', delay_s: 600 } },
+    });
+  });
+
+  it('what is left over from another kind never reaches the hub', () => {
+    // A person switched from "a device does something" to "a time of day"; the rule's
+    // condition and window must not travel with the schedule.
+    const d = {
+      ...timeOfDay(),
+      conditions: [{ option: presence, op: '==' as const, value: 'on' }],
+      window: { from: '18:00', to: '23:00' },
+      cooldown_s: 300,
+    };
+    const r = automationRequest(d);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect('and' in r.value.args).toBe(false);
+    expect('between' in r.value.args).toBe(false);
+    expect('cooldown_s' in r.value.args).toBe(false);
+  });
+
+  it('a date in the past is refused with a message, not a crash', () => {
+    const r = automationRequest({ ...onDate(), date: '2001-01-01' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/passed/);
+  });
+
+  it('a broken date is refused too', () => {
+    expect(automationRequest({ ...onDate(), date: '2099-02-30' }).ok).toBe(false);
+    expect(automationRequest({ ...onDate(), date: null }).ok).toBe(false);
+  });
+
+  it('a rule with more conditions than the hub keeps is refused', () => {
+    const d = device();
+    d.conditions = [
+      { option: lampBrightness, op: '>', value: '10' },
+      { option: lampBrightness, op: '<', value: '200' },
+    ];
+    expect(automationRequest(d)).toMatchObject({ ok: false, error: expect.stringMatching(/extra condition/) });
+  });
+
+  it('a schedule can only switch a device on or off, and says so', () => {
+    const d = timeOfDay();
+    d.action = { option: lampBrightness, value: '50', scene: null };
+    const r = automationRequest(d);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/on or off/);
+  });
+
+  it('an unfinished draft says what is missing', () => {
+    expect(automationRequest(emptyAutomationDraft('device'))).toMatchObject({ ok: false });
+    expect(automationRequest(emptyAutomationDraft('timeOfDay'))).toMatchObject({ ok: false });
+    expect(automationRequest(emptyAutomationDraft('delay'))).toMatchObject({ ok: false });
+  });
+
+  it('reads as one sentence, whatever the kind', () => {
+    expect(automationToSentence(device())).toMatch(/^When /);
+    expect(automationToSentence(timeOfDay())).toContain('22:00');
+    expect(automationToSentence(onDate())).toContain('2099');
+    expect(automationToSentence(delay())).toMatch(/10 min/);
+  });
+
+  it('says what is missing while the draft is half-built', () => {
+    expect(automationToSentence(emptyAutomationDraft('device'))).toContain('…');
+    expect(automationToSentence(emptyAutomationDraft('timeOfDay'))).toContain('…');
+    expect(automationToSentence(emptyAutomationDraft('date'))).toContain('…');
+    expect(automationToSentence(emptyAutomationDraft('delay'))).toContain('…');
+  });
+});
+
+// ---- the examples a person starts from ----------------------------------------------------
+
+describe('the example automations', () => {
+  const preset = (id: string) => PRESET_AUTOMATIONS.find((p) => p.id === id)!;
+
+  it('every example is one of the four kinds, with something to read', () => {
+    expect(PRESET_AUTOMATIONS.length).toBeGreaterThan(0);
+    for (const p of PRESET_AUTOMATIONS) {
+      expect(['device', 'timeOfDay', 'date', 'delay']).toContain(p.make().kind);
+      expect(p.label.length).toBeGreaterThan(0);
+      expect(p.icon.length).toBeGreaterThan(0);
+      expect(p.id.length).toBeGreaterThan(0);
+    }
+    // The ids are unique: the list keys them.
+    expect(new Set(PRESET_AUTOMATIONS.map((p) => p.id)).size).toBe(PRESET_AUTOMATIONS.length);
+  });
+
+  it('"off at night" prefills the time and the action, and leaves the device to the person', () => {
+    const d = preset('night-off').make();
+    expect(d.kind).toBe('timeOfDay');
+    expect(d.time).toBe('23:00');
+    expect(d.days).toBe('daily');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('off');
+  });
+
+  it('"the light on when I arrive" hints at a presence, but names no device', () => {
+    const d = preset('light-on-arrive').make();
+    expect(d.kind).toBe('device');
+    expect(d.trigger?.option).toBeNull();
+    expect(d.trigger?.value).toBe('on');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('on');
+  });
+
+  it('"off after a while" waits for a device and for the minutes', () => {
+    const d = preset('off-after-delay').make();
+    expect(d.kind).toBe('delay');
+    expect(d.minutes).toBe('');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.value).toBe('off');
+  });
+
+  it('"apply a scene at a time" asks for a scene, not for a device', () => {
+    const d = preset('scene-on-time').make();
+    expect(d.kind).toBe('timeOfDay');
+    expect(d.action?.option).toBeNull();
+    expect(d.action?.scene).toBe('');        // a scene is wanted, none is chosen yet
+  });
+
+  it('an example that still needs a device is refused with a clear message, not a crash', () => {
+    const d = preset('off-after-delay').make();
+    const r = automationRequest({ ...d, minutes: '5' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/device/i);
+  });
+
+  it('an example that needs a scene says which one is missing', () => {
+    const r = automationRequest({ ...preset('scene-on-time').make(), time: '22:00' });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).toMatch(/scene/i);
+  });
+});
+
+describe('the unified automation draft, the other way round', () => {
+  it('a time switched to a device leaves no time behind', () => {
+    const d: AutomationDraft = {
+      ...emptyAutomationDraft('device'),
+      trigger: { option: opt('Motion sensor 0x0102 · Presence'), op: '==', value: 'on' },
+      action: { option: opt('lamp · Power'), value: 'on', scene: null },
+      // left over from the kind the person came from
+      time: '22:00',
+      days: 'daily',
+      date: '2099-12-31',
+      minutes: '10',
+    };
+    const r = automationRequest(d);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(Object.keys(r.value.args).sort()).toEqual(['then', 'when']);
   });
 });

@@ -391,15 +391,15 @@ mDNS и предлагает его тапнуть, либо человек вв
 
 ## 7. Вкладка Automations
 
-Четыре подраздела на одной странице (sticky-header-табы или collapsible-блоки
+Два подраздела на одной странице (sticky-header-табы или collapsible-блоки
 — на усмотрение дизайнера):
 
-1. Scenes
-2. Schedules
-3. Timers
-4. Rules
+1. **Automations** — все автоматизации в одном списке (правила, расписания и
+   таймеры рядом; хаб хранит их тремя разными вещами, человек — одной).
+2. **Scenes** — сцены отдельно: сцена это переиспользуемый блок «сделать», а не
+   «когда → что».
 
-Каждый — список карточек с кнопкой «+ Add» в заголовке.
+Создание автоматизации одно: «Create automation» → примеры → конструктор.
 
 ### 7.1 Scenes
 
@@ -413,7 +413,7 @@ mDNS и предлагает его тапнуть, либо человек вв
 - Secondary action: Edit (pencil).
 - Overflow menu: Delete.
 
-**Форма «Add scene» (bottom sheet, 2 шага):**
+**Форма «Add scene» (bottom sheet, 2 шапа):**
 1. **Выбор устройств и их значений.** Чеклист всех устройств (кроме read-only
    и чипов). Для выбранных — редактор значения в его единицах.
 2. **Save as.** Поле «Name» (`[a-z][a-z0-9_]{0,22}`), подсказка валидации
@@ -423,7 +423,7 @@ mDNS и предлагает его тапнуть, либо человек вв
 **Edit scene:**
 - Открывается вместо выбора — сразу форма редактирования с заполненными
   значениями.
-- Можно: изменить значение, удалить настройку, добавить ещё одно устройство,
+- Может: изменить значение, удалить настройку, добавить ещё одно устройство,
   или одним нажатием «Refresh from devices» (взять текущие значения).
 - Если устройство из сцены удалено с хаба — показать с пометкой «No longer
   available, will be removed on save» и дропнуть при save.
@@ -434,69 +434,61 @@ mDNS и предлагает его тапнуть, либо человек вв
 - Если сцена используется в расписании/таймере/правиле — отказ с объяснением,
   какая именно автоматизация её держит, и ссылкой на неё.
 
-### 7.2 Schedules
+### 7.2 Список автоматизаций
 
-Расписание — одно действие в определённое время дня.
+Все автоматизации — в одном списке, и каждая строка говорит словами, когда она
+срабатывает и что делает (формулировки те же, что были у правил, расписаний и
+таймеров по отдельности):
 
-**Карточка расписания:**
-- Одной фразой: «22:00 · every day · Turn off plug1»
-- Или: «30 min after sunset · weekdays · Scene Night»
-- Или: «Once · 20 Oct 2026 · 19:00 · Turn on lamp1»
-- Иконка: часы / закат / солнце.
-- Overflow menu: Delete (двойной тап).
+- Правило: «When plug1 power > 1500 W, turn off plug1», ниже — «between 09:00
+  and 23:00 · only while … · at most once per 2 min».
+- Расписание: «22:00 · Turn off plug1», ниже — «every day» (или «Once · 20 Oct
+  2026»).
+- Таймер: «Turn off plug1», ниже — живой отсчёт «in 42 min».
 
-**Форма «Add schedule»:**
-1. **Time:** либо HH:MM, либо «sunrise ± N min», либо «sunset ± N min».
-   N от 0 до 180.
-2. **Days:** chip-row: `daily / weekdays / weekends / custom (Mon Tue …)` /
-   `once on a date` (date picker).
-   Если локация не задана — chip «sunrise»/«sunset» деактивирован с tooltip
-   «Set your location on the Hub tab first».
-3. **Action:** two chips: «A device» / «A scene».
-   - A device: выбор устройства + атрибута + значения (например, plug1 →
-     on/off → off).
-   - A scene: выпадашка со списком сцен.
-4. Кнопка **Save**.
+Удаление — двойной тап (см. 7.5). Кнопка «Create automation» — одна на весь
+список.
+
+### 7.3 Создание: примеры
+
+Первый экран создания — не пустая форма, а список примеров словами:
+
+- 🌙 «Turn something off at night» (время 23:00, каждый день, действие off);
+- 🚶 «Turn the light on when I arrive» (триггер — присутствие, действие on);
+- ⏱️ «Turn something off after a while» (действие off; минуты и устройство — свои);
+- 📈 «React to a sensor» (пусто: триггер и действие свои);
+- 🎬 «Apply a scene at a time» (каждый день, действие — сцена; предлагается,
+  только если на хабе есть сцены);
+- ✎ «From scratch» — спросить вид триггера и открыть пустой конструктор.
+
+Пример заполняет только то, что не зависит от дома (вид, время, куда переключить);
+устройства подставляет человек.
+
+### 7.4 Конструктор «когда → сделать»
+
+Один экран. Блоки сверху вниз, между ними — стрелка.
+
+**WHEN** — вид триггера (chip, открывает список из четырёх):
+- «A device changes» → слоты: устройство + атрибут, сравнение, значение.
+- «A time of day» → слоты: время (`HH:MM` либо `sunrise/sunset ± N`, N ≤ 180) и
+  дни (`every day / weekdays / weekends / свои Mon Tue …`).
+- «A date, once» → слоты: дата (`YYYY-MM-DD`) и время.
+- «After a delay» → слот: минуты.
+
+**DO** — что произойдёт: устройство (только то, что можно записать) либо сцена
+(chip «A scene» есть, только если на хабе есть сцены). Для расписаний и
+таймеров — только переключатель on/off: хаб умеет лишь это.
+
+**ПОЛУЧИТСЯ** — живая фраза целиком: «Every day at 23:00 → turn plug1 off».
+
+**More options** — только у вида «A device changes» (у остальных хаб не хранит
+ни условия, ни окна, ни cooldown — показывать нечего):
+- «Only while» — одно доп. условие (устройство + атрибут + сравнение + значение);
+- «Only between» — `HH:MM–HH:MM` (может пересекать полночь; концы могут быть
+  `sunrise/sunset ± N`);
+- «At most once per» — секунды (на проводе `cooldown_s`).
 
 **Edge: once-on-date в прошлом** — Save выдаёт inline-ошибку.
-
-### 7.3 Timers
-
-Одноразовый отложенный запуск. Как расписание, только относительно «сейчас».
-
-**Карточка таймера:**
-- Live countdown: «in 42 min · Turn off plug1» (обновляется каждую секунду).
-- Если истёк — автоматически исчезает (хаб сам удалит).
-
-**Форма «Add timer»:**
-1. **Delay:** stepper в формате Hh/Mm/Ss (например, 1h 30m). Валидация:
-   минимум 1 с, максимум 24 ч.
-2. **Action:** как в schedule.
-3. Save.
-
-### 7.4 Rules
-
-If-this-then-that с временным окном, доп. условием, cooldown.
-
-**Карточка правила:**
-- Одной фразой: «When plug1 power > 1500 W, between 09:00 and 23:00, cooldown 2 min — turn off plug1»
-- Или: «When occupancy becomes true — scene Evening»
-- Если правило в cooldown — мелкий тег «cooling down · 42 s left».
-
-**Форма «Add rule»:**
-1. **Trigger:**
-   - Entity + attribute: селектор устройства, потом его атрибута.
-   - Operator: `changes` (= `always` на проводе) / `is` / `is not` / `is above` /
-     `is at least` / `is below` / `is at most`.
-   - Value: в единицах атрибута (bool chips для on/off, числовое поле с
-     подписью единиц для чисел).
-2. **Then:** two chips: «A device» / «A scene» → как в schedule.
-3. **Advanced (collapsible):**
-   - **Only between:** HH:MM–HH:MM, может пересекать полночь. Концы могут
-     быть sunrise/sunset ±N (как в расписании).
-   - **And only when:** одно доп. условие (другой entity + attr + op + value).
-   - **Cooldown:** число секунд (форма вводит секунды; на проводе `cooldown_s`).
-4. Save.
 
 ### 7.5 Удаление
 
@@ -506,8 +498,10 @@ If-this-then-that с временным окном, доп. условием, co
 
 ### 7.6 Пустые состояния
 
-- «No scenes yet. Create a scene to switch many devices at once.» + CTA.
-- Аналогично для schedules / timers / rules.
+- «No automations yet. One of them says when something happens and what happens
+  then.» + CTA.
+- «No scenes. A scene sets several devices at once: "evening" = lamp on, plug
+  off.» + CTA.
 
 ---
 

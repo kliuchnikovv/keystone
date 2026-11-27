@@ -304,19 +304,7 @@ export function draftToSentence(d: RuleDraft): string {
     const middle = presence ? '' : ` ${opText(c.op)}`;
     parts.push(`only while ${subject}${middle} ${conditionValueText(c.option, c.value)}`.replace(/\s+/g, ' ').trim());
   }
-  if (d.action) {
-    if (d.action.scene) parts.push(`apply scene ${d.action.scene}`);
-    else if (d.action.option) {
-      const who = d.action.option.label.split(' · ')[0];
-      const what = d.action.option.label.split(' · ')[1] ?? '';
-      const val = d.action.option.vt === 'bool'
-        ? (d.action.value.trim().toLowerCase() === 'on' ? 'on' : 'off')
-        : d.action.value;
-      parts.push(`set ${who} ${what} to ${val}`.replace(/\s+/g, ' ').trim());
-    }
-  } else {
-    parts.push('then …');
-  }
+  parts.push(actionTail(d.action));
   if (d.window) parts.push(`between ${describeTimePoint(d.window.from)} and ${describeTimePoint(d.window.to)}`);
   if (d.cooldown_s) parts.push(`at most once per ${formatCountdown(d.cooldown_s)}`);
   return parts.join(' → ');
@@ -383,6 +371,256 @@ function draftCondition(c: ConditionDraft, label: string, allowAny: boolean): Bu
   if (!v.ok) return { ok: false, error: `${label}: ${v.error}` };
   return { ok: true, value: { entity: c.option.entity, attr: c.option.attr, op: c.op, value: v.value } };
 }
+
+// ---- one draft for every kind of automation ------------------------------------------------
+//
+// A person wants one thing: "when this, do that". The hub keeps that in three places (a
+// rule, a schedule, a timer), so the draft carries the "when" as a kind, and the request
+// builder routes it to the right call. Nothing here talks to the hub — it is the same
+// model a future assistant would fill in.
+
+/** What starts an automation, named the way a person names it. */
+export type TriggerKind = 'device' | 'timeOfDay' | 'date' | 'delay';
+
+export interface AutomationDraft {
+  kind: TriggerKind;
+
+  /** WHEN — what starts it (kind 'device'). */
+  trigger: ConditionDraft | null;
+  /** AND — extra conditions that must hold too (kind 'device' only). */
+  conditions: ConditionDraft[];
+  /** Only between these times (kind 'device' only). */
+  window: { from: string; to: string } | null;
+  /** At most once per this many seconds (kind 'device' only). */
+  cooldown_s: number | null;
+
+  /** When it happens: "22:00" or "sunset+30" (kinds 'timeOfDay' and 'date'). */
+  time: string;
+  /** Which days it happens on (kind 'timeOfDay'). */
+  days: Days;
+  /** The one day it happens on, YYYY-MM-DD (kind 'date'). */
+  date: string | null;
+  /** How long it waits, as typed (kind 'delay'). */
+  minutes: string;
+
+  /** WHAT — what happens: a device, or a scene. */
+  action: ActionDraft | null;
+}
+
+/** An empty draft of one kind: the fields every kind has, and nothing filled in. */
+export function emptyAutomationDraft(kind: TriggerKind): AutomationDraft {
+  return {
+    kind,
+    trigger: null,
+    conditions: [],
+    window: null,
+    cooldown_s: null,
+    time: '',
+    days: 'daily',
+    date: null,
+    minutes: '',
+    action: null,
+  };
+}
+
+/** What happens, in words: "turn plug1 off", "set lamp Brightness to 80", "apply scene evening". */
+export function actionTail(action: ActionDraft | null): string {
+  if (!action) return 'then …';
+  if (action.scene) return `apply scene ${action.scene}`;
+  if (!action.option) return 'then …';
+  const who = action.option.label.split(' · ')[0];
+  const what = action.option.label.split(' · ')[1] ?? '';
+  if (action.option.vt === 'bool') {
+    const v = action.value.trim().toLowerCase();
+    // An unset value is not "off" — say that it is still missing.
+    if (v !== 'on' && v !== 'off') return `set ${who} ${what} to …`;
+    return `turn ${who} ${v}`;
+  }
+  const val = action.value.trim();
+  return `set ${who} ${what} to ${val || '…'}`.replace(/\s+/g, ' ').trim();
+}
+
+export type AutomationOp = 'rule.add' | 'schedule.add' | 'timer.add';
+export type AutomationRequest = Parsed<{ op: AutomationOp; args: Record<string, unknown> }>;
+
+/**
+ * The "what happens" as a schedule or a timer need it: a device and an on/off, or a
+ * scene by name. A schedule cannot set a brightness — the hub has no such call, so the
+ * draft must not pretend otherwise.
+ */
+function automationTarget(action: ActionDraft | null): Parsed<{ entity: number | null; action: Action; scene: string | null }> {
+  if (!action) return { ok: false, error: 'Pick a device' };
+  if (action.scene !== undefined && action.scene !== null) {
+    // An empty name means a scene is wanted, but none is chosen yet.
+    if (action.scene === '') return { ok: false, error: 'Pick a scene' };
+    return { ok: true, value: { entity: null, action: 'toggle', scene: action.scene } };
+  }
+  if (!action.option) return { ok: false, error: 'Pick a device' };
+  // The hub switches the device's on/off attribute — not just any yes/no.
+  if (action.option.name !== 'on_off' || action.option.vt !== 'bool') {
+    return { ok: false, error: 'A schedule or a timer can only switch a device on or off' };
+  }
+  const v = parseInput(action.option.name, action.option.vt, action.value);
+  if (!v.ok) return { ok: false, error: v.error };
+  return { ok: true, value: { entity: action.option.entity, action: v.value === true ? 'on' : 'off', scene: null } };
+}
+
+/**
+ * The trigger's own fields, checked before the "what happens": a wrong time is worth
+ * saying before a missing device. The dummy device makes the check about the time, the
+ * date and the days only.
+ */
+function automationWhen(d: AutomationDraft): Parsed<{ time: string; days: Days; date: string | null }> {
+  const date = d.kind === 'date' ? d.date : null;
+  const probe = scheduleRequest({ time: d.time, days: d.days, date, entity: 1, action: 'toggle', scene: null });
+  if (!probe.ok) return { ok: false, error: probe.error };
+  return { ok: true, value: { time: d.time, days: d.days, date } };
+}
+
+/**
+ * The draft as the hub wants it. The kind picks the call, and the arguments are built
+ * only from the fields that kind owns — so a rule's condition or window can never
+ * travel with a schedule, where the hub has no place for it.
+ */
+export function automationRequest(d: AutomationDraft): AutomationRequest {
+  // A scene is wanted, but nobody picked which one.
+  if (d.action && d.action.scene === '') return { ok: false, error: 'Pick a scene' };
+
+  if (d.kind === 'device') {
+    const r = draftRequest({
+      trigger: d.trigger,
+      conditions: d.conditions,
+      action: d.action,
+      window: d.window,
+      cooldown_s: d.cooldown_s,
+    });
+    return r.ok ? { ok: true, value: { op: 'rule.add', args: r.value } } : { ok: false, error: r.error };
+  }
+
+  if (d.kind === 'delay') {
+    const target = automationTarget(d.action);
+    if (!target.ok) return { ok: false, error: target.error };
+    const r = timerRequest({
+      entity: target.value.entity,
+      action: target.value.action,
+      minutes: d.minutes,
+      scene: target.value.scene,
+    });
+    return r.ok ? { ok: true, value: { op: 'timer.add', args: r.value } } : { ok: false, error: r.error };
+  }
+
+  // 'timeOfDay' and 'date' are both schedules; the date is the one that runs once.
+  if (d.kind === 'date' && !d.date) return { ok: false, error: 'Pick a date' };
+  const when = automationWhen(d);
+  if (!when.ok) return { ok: false, error: when.error };
+  const target = automationTarget(d.action);
+  if (!target.ok) return { ok: false, error: target.error };
+  const r = scheduleRequest({
+    time: when.value.time,
+    days: when.value.days,
+    date: when.value.date,
+    entity: target.value.entity,
+    action: target.value.action,
+    scene: target.value.scene,
+  });
+  return r.ok ? { ok: true, value: { op: 'schedule.add', args: r.value } } : { ok: false, error: r.error };
+}
+
+/** The whole automation as one sentence: what starts it, and what happens. */
+export function automationToSentence(d: AutomationDraft): string {
+  if (d.kind === 'device') {
+    return draftToSentence({
+      trigger: d.trigger,
+      conditions: d.conditions,
+      action: d.action,
+      window: d.window,
+      cooldown_s: d.cooldown_s,
+    });
+  }
+  const tail = actionTail(d.action);
+  if (d.kind === 'delay') {
+    const m = Number(d.minutes.trim());
+    const when = d.minutes.trim() !== '' && Number.isFinite(m) && m > 0 ? `In ${formatCountdown(Math.round(m * 60))}` : 'In … min';
+    return `${when} → ${tail}`;
+  }
+  if (d.kind === 'date') {
+    const when = d.date && validDate(d.date) ? `Once, ${describeDate(d.date)} at ${d.time || '…'}` : 'Once, … at …';
+    return `${when} → ${tail}`;
+  }
+  const days = Array.isArray(d.days) && d.days.length === 0 ? 'On … days' : describeDays(d.days);
+  const time = d.time ? (isSunPoint(d.time) ? describeTimePoint(d.time) : d.time) : '…';
+  const when = isSunPoint(d.time) ? `${days} ${time}` : `${days} at ${time}`;
+  return `${when} → ${tail}`;
+}
+
+// ---- the examples a person starts from ----------------------------------------------------
+//
+// An empty screen is frightening, so the flow starts from examples: a ready-made
+// automation, described in words. An example fills in only what does not depend on this
+// home — the kind, the time, which way the switch goes — and leaves the devices to the
+// person, because only they know which lamp is in the hallway.
+
+/** A ready-made automation: the parts that do not depend on this home, and a label. */
+export interface PresetAutomation {
+  id: string;
+  icon: string;
+  label: string;
+  /** The example needs the hub to have a scene; without one there is nothing to apply. */
+  needsScenes?: boolean;
+  /** The draft the example opens, with only the device-independent parts filled in. */
+  make(): AutomationDraft;
+}
+
+export const PRESET_AUTOMATIONS: PresetAutomation[] = [
+  {
+    id: 'night-off',
+    icon: '🌙',
+    label: 'Turn something off at night',
+    make: () => ({
+      ...emptyAutomationDraft('timeOfDay'),
+      time: '23:00',
+      days: 'daily',
+      action: { option: null, value: 'off', scene: null },
+    }),
+  },
+  {
+    id: 'light-on-arrive',
+    icon: '🚶',
+    label: 'Turn the light on when I arrive',
+    make: () => ({
+      ...emptyAutomationDraft('device'),
+      // "someone is there" — but which sensor is the person's to say.
+      trigger: { option: null, op: '==', value: 'on' },
+      action: { option: null, value: 'on', scene: null },
+    }),
+  },
+  {
+    id: 'off-after-delay',
+    icon: '⏱️',
+    label: 'Turn something off after a while',
+    make: () => ({
+      ...emptyAutomationDraft('delay'),
+      action: { option: null, value: 'off', scene: null },
+    }),
+  },
+  {
+    id: 'react-to-sensor',
+    icon: '📈',
+    label: 'React to a sensor',
+    make: () => emptyAutomationDraft('device'),
+  },
+  {
+    id: 'scene-on-time',
+    icon: '🎬',
+    label: 'Apply a scene at a time',
+    needsScenes: true,
+    make: () => ({
+      ...emptyAutomationDraft('timeOfDay'),
+      days: 'daily',
+      action: { option: null, value: '', scene: '' }, // a scene is wanted, none is chosen yet
+    }),
+  },
+];
 
 // ---- what can be picked ------------------------------------------------------------
 
